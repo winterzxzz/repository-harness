@@ -24,6 +24,7 @@ pub struct RunRecord {
     pub story_id: String,
     pub branch: Option<String>,
     pub worktree: PathBuf,
+    pub lightweight: bool,
     pub status: String,
     pub result_path: Option<PathBuf>,
     pub pr_url: Option<String>,
@@ -38,6 +39,7 @@ pub struct NewRunRecord {
     pub story_id: String,
     pub branch: Option<String>,
     pub worktree: PathBuf,
+    pub lightweight: bool,
     pub status: String,
     pub result_path: Option<PathBuf>,
     pub sync_status: String,
@@ -64,6 +66,7 @@ impl RunStateStore {
                 story_id TEXT NOT NULL,
                 branch TEXT,
                 worktree TEXT NOT NULL,
+                lightweight INTEGER NOT NULL DEFAULT 0,
                 status TEXT NOT NULL,
                 result_path TEXT,
                 pr_url TEXT,
@@ -79,6 +82,12 @@ impl RunStateStore {
                 synced_at TEXT NOT NULL DEFAULT (datetime('now'))
             );",
         )?;
+        ensure_column(
+            &connection,
+            "run_state",
+            "lightweight",
+            "ALTER TABLE run_state ADD COLUMN lightweight INTEGER NOT NULL DEFAULT 0;",
+        )?;
         Ok(())
     }
 
@@ -92,14 +101,15 @@ impl RunStateStore {
         }
         transaction.execute(
             "INSERT INTO run_state (
-                run_id, story_id, branch, worktree, status, result_path,
+                run_id, story_id, branch, worktree, lightweight, status, result_path,
                 sync_status, next_action
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9);",
             params![
                 input.run_id,
                 input.story_id,
                 input.branch,
                 input.worktree.display().to_string(),
+                i64::from(input.lightweight),
                 input.status,
                 input.result_path.map(|path| path.display().to_string()),
                 input.sync_status,
@@ -135,7 +145,7 @@ impl RunStateStore {
         self.init()?;
         let connection = Connection::open(&self.path)?;
         let mut statement = connection.prepare(
-            "SELECT run_id, story_id, branch, worktree, status, result_path,
+            "SELECT run_id, story_id, branch, worktree, lightweight, status, result_path,
                     pr_url, sync_status, next_action
              FROM run_state
              ORDER BY created_at DESC, run_id DESC;",
@@ -150,7 +160,7 @@ impl RunStateStore {
         let connection = Connection::open(&self.path)?;
         connection
             .query_row(
-                "SELECT run_id, story_id, branch, worktree, status, result_path,
+                "SELECT run_id, story_id, branch, worktree, lightweight, status, result_path,
                         pr_url, sync_status, next_action
                  FROM run_state
                  WHERE run_id=?1;",
@@ -166,7 +176,7 @@ impl RunStateStore {
         let connection = Connection::open(&self.path)?;
         connection
             .query_row(
-                "SELECT run_id, story_id, branch, worktree, status, result_path,
+                "SELECT run_id, story_id, branch, worktree, lightweight, status, result_path,
                         pr_url, sync_status, next_action
                  FROM run_state
                  WHERE status IN ('prepared', 'running')
@@ -243,17 +253,34 @@ fn active_run_id(connection: &Connection) -> Result<Option<String>, StateError> 
         .map_err(StateError::from)
 }
 
+fn ensure_column(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+    statement: &str,
+) -> Result<(), StateError> {
+    let mut columns = connection.prepare(&format!("PRAGMA table_info({table});"))?;
+    let names = columns
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    if !names.iter().any(|name| name == column) {
+        connection.execute_batch(statement)?;
+    }
+    Ok(())
+}
+
 fn run_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunRecord> {
     Ok(RunRecord {
         run_id: row.get(0)?,
         story_id: row.get(1)?,
         branch: row.get(2)?,
         worktree: PathBuf::from(row.get::<_, String>(3)?),
-        status: row.get(4)?,
-        result_path: row.get::<_, Option<String>>(5)?.map(PathBuf::from),
-        pr_url: row.get(6)?,
-        sync_status: row.get(7)?,
-        next_action: row.get(8)?,
+        lightweight: row.get::<_, i64>(4)? != 0,
+        status: row.get(5)?,
+        result_path: row.get::<_, Option<String>>(6)?.map(PathBuf::from),
+        pr_url: row.get(7)?,
+        sync_status: row.get(8)?,
+        next_action: row.get(9)?,
     })
 }
 
@@ -267,6 +294,7 @@ mod tests {
             story_id: "US-STATE".to_owned(),
             branch: Some(format!("symphony/{run_id}")),
             worktree: PathBuf::from(format!(".symphony/worktrees/{run_id}")),
+            lightweight: false,
             status: status.to_owned(),
             result_path: Some(PathBuf::from(format!(".harness/runs/{run_id}/RESULT.json"))),
             sync_status: "not_applicable".to_owned(),

@@ -8,7 +8,10 @@ use crate::config::{ConfigError, ResolvedConfig, SymphonyConfig};
 use crate::doctor::{print_report, run_doctor, DoctorError};
 use crate::pr::{create_pr, PrCreateResult, PrError};
 use crate::retention::{compact_runs, CompactResult, RetentionError};
-use crate::run::{execute_run, prepare_run, CompletedRun, PreparedRun, RunError};
+use crate::run::{
+    execute_here_run, execute_run, prepare_here_run, prepare_run, CompletedRun, PreparedRun,
+    RunError,
+};
 use crate::state::{RunRecord, RunStateStore, StateError};
 use crate::sync::{sync_changesets, unapplied_changesets, SyncError, SyncResult};
 use crate::work::{list_work, WorkError, WorkItem};
@@ -63,6 +66,9 @@ struct RunArgs {
     /// Prepare the isolated workspace and contract without launching an agent.
     #[arg(long)]
     prepare_only: bool,
+    /// Run a tiny-lane story in the current checkout with copied database isolation.
+    #[arg(long)]
+    here: bool,
 }
 
 #[derive(Args, Debug)]
@@ -168,7 +174,14 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
         },
         Command::Run(args) => {
             if args.prepare_only {
-                print_prepared_run(&prepare_run(&resolved, &args.story_id)?);
+                let prepared = if args.here {
+                    prepare_here_run(&resolved, &args.story_id)?
+                } else {
+                    prepare_run(&resolved, &args.story_id)?
+                };
+                print_prepared_run(&prepared);
+            } else if args.here {
+                print_completed_run(&execute_here_run(&resolved, &args.story_id)?);
             } else {
                 print_completed_run(&execute_run(&resolved, &args.story_id)?);
             }
@@ -254,7 +267,15 @@ fn print_config(config: &ResolvedConfig) {
 fn print_prepared_run(run: &PreparedRun) {
     println!("Prepared run {}", run.run_id);
     println!("Story: {}", run.story_id);
-    println!("Branch: {}", run.branch);
+    println!(
+        "Mode: {}",
+        if run.lightweight {
+            "lightweight"
+        } else {
+            "isolated"
+        }
+    );
+    println!("Branch: {}", run.branch.clone().unwrap_or_default());
     println!("Worktree: {}", run.worktree.display());
     println!("Harness DB: {}", run.harness_db_path.display());
     println!("Contract: {}", run.contract_path.display());
@@ -267,6 +288,14 @@ fn print_prepared_run(run: &PreparedRun) {
 fn print_completed_run(run: &CompletedRun) {
     println!("Completed run {}", run.prepared.run_id);
     println!("Story: {}", run.prepared.story_id);
+    println!(
+        "Mode: {}",
+        if run.prepared.lightweight {
+            "lightweight"
+        } else {
+            "isolated"
+        }
+    );
     println!("Outcome: {}", run.outcome);
     println!("Summary: {}", run.summary_path.display());
     println!("Result: {}", run.result_path.display());
@@ -281,6 +310,11 @@ fn print_runs(runs: &[RunRecord]) {
                 run.story_id.clone(),
                 run.branch.clone().unwrap_or_default(),
                 run.worktree.display().to_string(),
+                if run.lightweight {
+                    "yes".to_owned()
+                } else {
+                    "no".to_owned()
+                },
                 run.status.clone(),
                 run.result_path
                     .as_ref()
@@ -294,7 +328,7 @@ fn print_runs(runs: &[RunRecord]) {
         .collect::<Vec<_>>();
     print_table(
         &[
-            "Run", "Story", "Branch", "Worktree", "Status", "Result", "PR", "Sync", "Next",
+            "Run", "Story", "Branch", "Worktree", "Light", "Status", "Result", "PR", "Sync", "Next",
         ],
         &rows,
     );
@@ -305,6 +339,7 @@ fn print_run_detail(run: &RunRecord) {
     println!("story_id: {}", run.story_id);
     println!("branch: {}", run.branch.clone().unwrap_or_default());
     println!("worktree: {}", run.worktree.display());
+    println!("lightweight: {}", run.lightweight);
     println!("status: {}", run.status);
     println!(
         "result_path: {}",

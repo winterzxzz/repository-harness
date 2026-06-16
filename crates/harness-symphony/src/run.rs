@@ -17,6 +17,10 @@ pub enum RunError {
     StoryNotFound(String),
     #[error("story {id} is not runnable because status is {status}; only planned or in_progress can be prepared")]
     StoryNotRunnable { id: String, status: String },
+    #[error("story {id} cannot use --here because lane is {lane}; only tiny stories may run in the current checkout")]
+    StoryNotTiny { id: String, lane: String },
+    #[error("--here is disabled by config. Set runs.allow_here_for_tiny: true in .harness/symphony.yml.")]
+    HereRunDisabled,
     #[error("harness database not found at {0}. Run: scripts/bin/harness-cli init")]
     MissingDatabase(String),
     #[error("git worktree failed: {0}")]
@@ -43,10 +47,11 @@ pub enum RunError {
 pub struct PreparedRun {
     pub run_id: String,
     pub story_id: String,
-    pub branch: String,
+    pub branch: Option<String>,
     pub worktree: PathBuf,
     pub contract_path: PathBuf,
     pub harness_db_path: PathBuf,
+    pub lightweight: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,6 +68,7 @@ pub struct RunContract {
     pub run_id: String,
     pub mode: String,
     pub story_id: String,
+    pub lightweight: bool,
     pub worktree: String,
     pub harness_db_path: String,
     pub env: RunEnvironment,
@@ -101,13 +107,7 @@ struct ValidationCommand {
 }
 
 pub fn prepare_run(config: &ResolvedConfig, story_id: &str) -> Result<PreparedRun, RunError> {
-    let story = load_story(&config.harness_db, story_id)?;
-    if !matches!(story.status.as_str(), "planned" | "in_progress") {
-        return Err(RunError::StoryNotRunnable {
-            id: story.id,
-            status: story.status,
-        });
-    }
+    let story = load_runnable_story(&config.harness_db, story_id)?;
 
     let run_id = generate_run_id();
     let branch = format!("symphony/{run_id}");
@@ -121,15 +121,23 @@ pub fn prepare_run(config: &ResolvedConfig, story_id: &str) -> Result<PreparedRu
     create_worktree(&config.repo_root, &branch, &worktree)?;
     fs::copy(&config.harness_db, &harness_db_path)?;
 
-    let contract = build_contract(config, &run_id, story_id, &worktree, &harness_db_path);
+    let contract = build_contract(
+        config,
+        &run_id,
+        story_id,
+        false,
+        &worktree,
+        &harness_db_path,
+    );
     write_contract(&contract_path, &contract)?;
     write_agents_shim(&worktree.join("AGENTS.md"), &contract_path, &contract)?;
 
     RunStateStore::new(config.state_db.clone()).add_run(NewRunRecord {
         run_id: run_id.clone(),
-        story_id: story_id.to_owned(),
+        story_id: story.id,
         branch: Some(branch.clone()),
         worktree: worktree.clone(),
+        lightweight: false,
         status: "prepared".to_owned(),
         result_path: Some(PathBuf::from(format!(".harness/runs/{run_id}/RESULT.json"))),
         sync_status: "not_applied".to_owned(),
@@ -139,25 +147,85 @@ pub fn prepare_run(config: &ResolvedConfig, story_id: &str) -> Result<PreparedRu
     Ok(PreparedRun {
         run_id,
         story_id: story_id.to_owned(),
-        branch,
+        branch: Some(branch),
         worktree,
         contract_path,
         harness_db_path,
+        lightweight: false,
+    })
+}
+
+pub fn prepare_here_run(config: &ResolvedConfig, story_id: &str) -> Result<PreparedRun, RunError> {
+    if !config.allow_here_for_tiny {
+        return Err(RunError::HereRunDisabled);
+    }
+    let story = load_runnable_story(&config.harness_db, story_id)?;
+    if story.lane != "tiny" {
+        return Err(RunError::StoryNotTiny {
+            id: story.id,
+            lane: story.lane,
+        });
+    }
+
+    let run_id = generate_run_id();
+    let run_dir = config.runs_dir.join(&run_id);
+    let contract_path = run_dir.join("RUN_CONTRACT.json");
+    let local_run_dir = config.repo_root.join(".symphony/runs").join(&run_id);
+    let harness_db_path = local_run_dir.join("harness.db");
+
+    fs::create_dir_all(&run_dir)?;
+    fs::create_dir_all(&local_run_dir)?;
+    fs::copy(&config.harness_db, &harness_db_path)?;
+
+    let contract = build_contract(
+        config,
+        &run_id,
+        story_id,
+        true,
+        &config.repo_root,
+        &harness_db_path,
+    );
+    write_contract(&contract_path, &contract)?;
+
+    RunStateStore::new(config.state_db.clone()).add_run(NewRunRecord {
+        run_id: run_id.clone(),
+        story_id: story_id.to_owned(),
+        branch: None,
+        worktree: config.repo_root.clone(),
+        lightweight: true,
+        status: "prepared".to_owned(),
+        result_path: Some(PathBuf::from(format!(".harness/runs/{run_id}/RESULT.json"))),
+        sync_status: "not_applied".to_owned(),
+        next_action: format!("Launch lightweight run for {story_id} or inspect {contract_path:?}"),
+    })?;
+
+    Ok(PreparedRun {
+        run_id,
+        story_id: story_id.to_owned(),
+        branch: None,
+        worktree: config.repo_root.clone(),
+        contract_path,
+        harness_db_path,
+        lightweight: true,
     })
 }
 
 pub fn execute_run(config: &ResolvedConfig, story_id: &str) -> Result<CompletedRun, RunError> {
-    if config.agent_adapter != "custom" {
-        return Err(RunError::InvalidResult(format!(
-            "unsupported agent adapter '{}'",
-            config.agent_adapter
-        )));
-    }
-    if config.agent_command.is_empty() {
-        return Err(RunError::MissingAgentCommand);
-    }
+    ensure_agent_configured(config)?;
+    execute_prepared_run(config, prepare_run(config, story_id)?)
+}
 
-    let prepared = prepare_run(config, story_id)?;
+pub fn execute_here_run(config: &ResolvedConfig, story_id: &str) -> Result<CompletedRun, RunError> {
+    ensure_agent_configured(config)?;
+    execute_prepared_run(config, prepare_here_run(config, story_id)?)
+}
+
+fn execute_prepared_run(
+    config: &ResolvedConfig,
+    prepared: PreparedRun,
+) -> Result<CompletedRun, RunError> {
+    ensure_agent_configured(config)?;
+
     let output = Command::new(&config.agent_command[0])
         .args(&config.agent_command[1..])
         .current_dir(&prepared.worktree)
@@ -186,6 +254,30 @@ pub fn execute_run(config: &ResolvedConfig, story_id: &str) -> Result<CompletedR
     Ok(completed)
 }
 
+fn ensure_agent_configured(config: &ResolvedConfig) -> Result<(), RunError> {
+    if config.agent_adapter != "custom" {
+        return Err(RunError::InvalidResult(format!(
+            "unsupported agent adapter '{}'",
+            config.agent_adapter
+        )));
+    }
+    if config.agent_command.is_empty() {
+        return Err(RunError::MissingAgentCommand);
+    }
+    Ok(())
+}
+
+fn load_runnable_story(db_path: &Path, story_id: &str) -> Result<Story, RunError> {
+    let story = load_story(db_path, story_id)?;
+    if !matches!(story.status.as_str(), "planned" | "in_progress") {
+        return Err(RunError::StoryNotRunnable {
+            id: story.id,
+            status: story.status,
+        });
+    }
+    Ok(story)
+}
+
 fn load_story(db_path: &Path, story_id: &str) -> Result<Story, RunError> {
     if !db_path.exists() {
         return Err(RunError::MissingDatabase(db_path.display().to_string()));
@@ -193,12 +285,13 @@ fn load_story(db_path: &Path, story_id: &str) -> Result<Story, RunError> {
     let connection = Connection::open(db_path)?;
     connection
         .query_row(
-            "SELECT id, status FROM story WHERE id=?1;",
+            "SELECT id, status, risk_lane FROM story WHERE id=?1;",
             params![story_id],
             |row| {
                 Ok(Story {
                     id: row.get(0)?,
                     status: row.get(1)?,
+                    lane: row.get(2)?,
                 })
             },
         )
@@ -226,6 +319,7 @@ fn build_contract(
     config: &ResolvedConfig,
     run_id: &str,
     story_id: &str,
+    lightweight: bool,
     worktree: &Path,
     harness_db_path: &Path,
 ) -> RunContract {
@@ -236,6 +330,7 @@ fn build_contract(
     let forbidden_paths = vec![
         "harness.db".to_owned(),
         ".symphony/state.db".to_owned(),
+        ".symphony/runs/**".to_owned(),
         ".symphony/worktrees/**".to_owned(),
     ];
     RunContract {
@@ -243,6 +338,7 @@ fn build_contract(
         run_id: run_id.to_owned(),
         mode: "execute".to_owned(),
         story_id: story_id.to_owned(),
+        lightweight,
         worktree: display_path(config, worktree),
         harness_db_path: display_path(config, harness_db_path),
         env: RunEnvironment {
@@ -337,6 +433,19 @@ fn validate_finished_run(
         }
     }
     ensure_forbidden_paths_not_staged(config, &prepared.worktree)?;
+    if prepared.lightweight {
+        let changeset_path = prepared.worktree.join(format!(
+            ".harness/changesets/{}.changeset.jsonl",
+            prepared.run_id
+        ));
+        if !changeset_path.exists() {
+            return Err(RunError::InvalidResult(format!(
+                "operation log missing at {}",
+                changeset_path.display()
+            )));
+        }
+        append_lightweight_summary_marker(&summary_path)?;
+    }
     if config.changeset_render_in_summary {
         let changeset_path = prepared.worktree.join(format!(
             ".harness/changesets/{}.changeset.jsonl",
@@ -357,6 +466,14 @@ fn validate_finished_run(
         summary_path,
         result_path,
     })
+}
+
+fn append_lightweight_summary_marker(summary_path: &Path) -> Result<(), RunError> {
+    use std::io::Write;
+
+    let mut file = fs::OpenOptions::new().append(true).open(summary_path)?;
+    writeln!(file, "\n## Run Mode\n\nlightweight: true")?;
+    Ok(())
 }
 
 fn parse_result_file(path: &Path) -> Result<ResultFile, RunError> {
@@ -414,7 +531,10 @@ fn ensure_forbidden_paths_not_staged(
         .map(str::trim)
         .filter(|line| !line.is_empty())
     {
-        if forbidden.contains(&path) || path.starts_with(".symphony/worktrees/") {
+        if forbidden.contains(&path)
+            || path.starts_with(".symphony/runs/")
+            || path.starts_with(".symphony/worktrees/")
+        {
             return Err(RunError::InvalidResult(format!(
                 "forbidden path staged for commit: {path}"
             )));
@@ -447,10 +567,16 @@ Use `HARNESS_DB_PATH={}`, `HARNESS_RUN_ID={}`, and `HARNESS_RUN_MODE=execute` fo
 }
 
 fn display_path(config: &ResolvedConfig, path: &Path) -> String {
-    path.strip_prefix(&config.repo_root)
+    let relative = path
+        .strip_prefix(&config.repo_root)
         .unwrap_or(path)
         .display()
-        .to_string()
+        .to_string();
+    if relative.is_empty() {
+        ".".to_owned()
+    } else {
+        relative
+    }
 }
 
 fn generate_run_id() -> String {
@@ -465,6 +591,7 @@ fn generate_run_id() -> String {
 struct Story {
     id: String,
     status: String,
+    lane: String,
 }
 
 #[cfg(test)]
@@ -496,6 +623,38 @@ mod tests {
         }
     }
 
+    fn config_for_root(root: &Path) -> ResolvedConfig {
+        let mut config = config();
+        config.repo_root = root.to_path_buf();
+        config.harness_db = root.join("harness.db");
+        config.state_db = root.join(".symphony/state.db");
+        config.runs_dir = root.join(".harness/runs");
+        config.worktrees_dir = root.join(".symphony/worktrees");
+        config.changeset_directory = root.join(".harness/changesets");
+        config
+    }
+
+    fn write_story_db(path: &Path, id: &str, status: &str, lane: &str) {
+        let connection = Connection::open(path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE story (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL,
+                    risk_lane TEXT NOT NULL,
+                    verify_command TEXT
+                );",
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO story (id, title, status, risk_lane) VALUES (?1, ?2, ?3, ?4);",
+                params![id, "fixture", status, lane],
+            )
+            .unwrap();
+    }
+
     #[test]
     fn contract_contains_required_run_fields() {
         let config = config();
@@ -503,6 +662,7 @@ mod tests {
             &config,
             "run_1",
             "US-036",
+            false,
             Path::new("/repo/.symphony/worktrees/run_1"),
             Path::new("/repo/.symphony/worktrees/run_1/harness.db"),
         );
@@ -521,6 +681,27 @@ mod tests {
             .required_outputs
             .contains(&".harness/runs/run_1/RESULT.json".to_owned()));
         assert!(contract.forbidden_paths.contains(&"harness.db".to_owned()));
+        assert!(!contract.lightweight);
+    }
+
+    #[test]
+    fn here_contract_marks_lightweight_and_repo_root() {
+        let config = config();
+        let contract = build_contract(
+            &config,
+            "run_1",
+            "US-TINY",
+            true,
+            Path::new("/repo"),
+            Path::new("/repo/.symphony/runs/run_1/harness.db"),
+        );
+
+        assert!(contract.lightweight);
+        assert_eq!(contract.worktree, ".");
+        assert_eq!(contract.harness_db_path, ".symphony/runs/run_1/harness.db");
+        assert!(contract
+            .forbidden_paths
+            .contains(&".symphony/runs/**".to_owned()));
     }
 
     #[test]
@@ -530,6 +711,7 @@ mod tests {
             &config,
             "run_1",
             "US-037",
+            false,
             Path::new("/repo/.symphony/worktrees/run_1"),
             Path::new("/repo/.symphony/worktrees/run_1/harness.db"),
         );
@@ -584,5 +766,100 @@ mod tests {
         fs::write(&result_path, "{").unwrap();
 
         assert!(parse_result_file(&result_path).is_err());
+    }
+
+    #[test]
+    fn prepare_here_run_requires_tiny_lane() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = config_for_root(temp_dir.path());
+        write_story_db(&config.harness_db, "US-NORMAL", "planned", "normal");
+
+        let error = prepare_here_run(&config, "US-NORMAL").unwrap_err();
+
+        assert!(matches!(
+            error,
+            RunError::StoryNotTiny { id, lane }
+                if id == "US-NORMAL" && lane == "normal"
+        ));
+        assert!(!config.worktrees_dir.exists());
+    }
+
+    #[test]
+    fn prepare_here_run_copies_db_to_run_dir_and_records_lightweight_state() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = config_for_root(temp_dir.path());
+        write_story_db(&config.harness_db, "US-TINY", "planned", "tiny");
+
+        let prepared = prepare_here_run(&config, "US-TINY").unwrap();
+
+        assert!(prepared.lightweight);
+        assert_eq!(prepared.branch, None);
+        assert_eq!(prepared.worktree, config.repo_root);
+        assert!(prepared.harness_db_path.exists());
+        assert!(prepared
+            .harness_db_path
+            .starts_with(temp_dir.path().join(".symphony/runs")));
+        assert!(!config.worktrees_dir.exists());
+
+        let run = RunStateStore::new(config.state_db.clone())
+            .show_run(&prepared.run_id)
+            .unwrap();
+        assert!(run.lightweight);
+        assert_eq!(run.branch, None);
+    }
+
+    #[test]
+    fn lightweight_finished_run_appends_summary_marker() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = config_for_root(temp_dir.path());
+        Command::new("git")
+            .arg("init")
+            .current_dir(temp_dir.path())
+            .output()
+            .unwrap();
+        let run_id = "run_light";
+        let run_dir = temp_dir.path().join(".harness/runs").join(run_id);
+        let changeset_dir = temp_dir.path().join(".harness/changesets");
+        fs::create_dir_all(&run_dir).unwrap();
+        fs::create_dir_all(&changeset_dir).unwrap();
+        let summary_path = run_dir.join("SUMMARY.md");
+        fs::write(&summary_path, "# Summary\n").unwrap();
+        fs::write(
+            changeset_dir.join("run_light.changeset.jsonl"),
+            r#"{"op":"changeset.header","version":1,"run_id":"run_light"}"#,
+        )
+        .unwrap();
+        fs::write(
+            run_dir.join("RESULT.json"),
+            r#"{
+                "version": 1,
+                "run_id": "run_light",
+                "story_id": "US-TINY",
+                "outcome": "completed",
+                "validation": {
+                    "commands": [
+                        { "command": "cargo test", "result": "pass" }
+                    ]
+                },
+                "summary_path": ".harness/runs/run_light/SUMMARY.md"
+            }"#,
+        )
+        .unwrap();
+
+        let prepared = PreparedRun {
+            run_id: run_id.to_owned(),
+            story_id: "US-TINY".to_owned(),
+            branch: None,
+            worktree: temp_dir.path().to_path_buf(),
+            contract_path: run_dir.join("RUN_CONTRACT.json"),
+            harness_db_path: run_dir.join("harness.db"),
+            lightweight: true,
+        };
+
+        let completed = validate_finished_run(&config, prepared).unwrap();
+
+        assert_eq!(completed.outcome, "completed");
+        let summary = fs::read_to_string(summary_path).unwrap();
+        assert!(summary.contains("lightweight: true"));
     }
 }

@@ -173,6 +173,7 @@ mod tests {
             story_id: "US-041".to_owned(),
             branch: Some("symphony/run_1".to_owned()),
             worktree: root.join(".symphony/worktrees/run_1"),
+            lightweight: false,
             status: status.to_owned(),
             result_path: Some(PathBuf::from(".harness/runs/run_1/RESULT.json")),
             pr_url: None,

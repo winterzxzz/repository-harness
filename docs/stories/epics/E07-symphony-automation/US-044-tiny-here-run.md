@@ -2,7 +2,7 @@
 
 ## Status
 
-planned
+implemented
 
 ## Lane
 
@@ -52,5 +52,12 @@ Keeps Symphony usable for tiny work without weakening isolation guarantees.
 
 ## Evidence
 
-Add validation output after implementation.
-
+- Implemented `harness-symphony run <story-id> --here` for tiny-lane stories.
+- Added lightweight run state and CLI output, copied DB isolation under
+  `.symphony/runs/<run-id>/harness.db`, and summary marking with
+  `lightweight: true`.
+- Normal-lane `--here` smoke refused with:
+  `story US-NORMAL cannot use --here because lane is normal; only tiny stories may run in the current checkout`.
+- Validation passed: `cargo test -p harness-symphony`, `cargo test --workspace`,
+  `cargo fmt --check`, `cargo clippy --workspace -- -D warnings`, and temp-repo
+  CLI smoke for tiny success plus normal refusal.
