@@ -21,6 +21,8 @@ of truth.
 
 - Use simple user-facing labels. Avoid exposing Harness terms unless a detail
   panel needs them.
+- Present run communication as readable conversation and progress summaries
+  first, while keeping raw artifacts available for technical review.
 - Keep all tasks visible, but block unsafe actions when dependencies or active
   run rules prevent work from starting.
 - Make hierarchy explicit so users can understand how feature intake breaks a
@@ -78,18 +80,20 @@ The primary board states are:
 
 1. User opens the local Web UI.
 2. UI shows task hierarchy and board states.
-3. User clicks a `Ready` task.
-4. The task moves to `In Progress`.
-5. Entering `In Progress` starts execution like `harness-symphony run`.
-6. UI shows live Codex App Server events for the active run.
-7. When Codex emits `turn/completed` with completed status and required
+3. User clicks a task and inspects the floating task detail popup without
+   losing the board context.
+4. User starts a `Ready` task from the popup.
+5. The task moves to `In Progress`.
+6. Entering `In Progress` starts execution like `harness-symphony run`.
+7. UI shows live Codex App Server events for the active run.
+8. When Codex emits `turn/completed` with completed status and required
    artifacts validate, Symphony creates a PR.
-8. The task moves to `Review`.
-9. User reviews summary, result, changeset, validation evidence, PR status, and
+9. The task moves to `Review`.
+10. User reviews summary, result, changeset, validation evidence, PR status, and
    logs.
-10. After the PR is merged, the user approves sync from the UI.
-11. UI runs Symphony sync.
-12. The task moves to `Done`.
+11. After the PR is merged, the user approves sync from the UI.
+12. UI runs Symphony sync.
+13. The task moves to `Done`.
 
 ## Failure Workflow
 
@@ -118,6 +122,7 @@ It should include:
 - Human-readable changeset preview.
 - PR link and merge status.
 - Codex event log.
+- Human-readable chat and progress log derived from Codex events.
 - Run summary.
 - Approve/sync action after the PR is merged.
 - Retry or mark-needs-attention actions when review artifacts are incomplete.
@@ -161,6 +166,17 @@ event streaming, review state, PR status, and sync.
 
 The frontend should use Vite, React, and shadcn components.
 
+## Desktop Boundary
+
+The desktop app is a packaged shell around the same local Web UI controller. It
+starts a loopback `harness-symphony web` backend, loads the existing React UI,
+and keeps the existing `/api/*` routes as the contract between renderer and
+backend.
+
+The desktop shell must not fork task execution, durable state, review behavior,
+or sync behavior. Rebuilding the desktop app should include the latest Web UI
+build output and the current `harness-symphony` backend binary.
+
 ## Non-Goals
 
 - User authentication.
@@ -170,6 +186,8 @@ The frontend should use Vite, React, and shadcn components.
 - External issue tracker adapters.
 - Replacing Harness feature intake.
 - Replacing Symphony run isolation.
+- Desktop signing, notarization, auto-update, and installer distribution for
+  the first desktop MVP.
 
 ## MVP Implementation Decisions
 
@@ -178,6 +196,8 @@ The frontend should use Vite, React, and shadcn components.
 - PR merge status is entered manually for the MVP through the local Web UI.
 - Codex events are exposed as a polling tail snapshot from
   `APP_SERVER_EVENTS.jsonl` through the local Web API.
+- The primary UI should summarize Codex events into readable chat/progress
+  entries; raw `APP_SERVER_EVENTS.jsonl` remains available for debugging.
 
 ## Validation Expectations
 

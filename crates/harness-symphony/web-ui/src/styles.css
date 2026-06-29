@@ -45,3 +45,56 @@ body {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
+.task-close-confetti-host {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.task-close-confetti-burst {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+}
+
+.task-close-confetti-piece {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 6px;
+  height: 10px;
+  border-radius: 2px;
+  opacity: 0;
+  transform: translate(-50%, -50%) rotate(var(--confetti-r));
+  animation: task-close-confetti 720ms cubic-bezier(0.18, 0.8, 0.28, 1) forwards;
+}
+
+@keyframes task-close-confetti {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.6) rotate(var(--confetti-r));
+  }
+
+  18% {
+    opacity: 0.96;
+  }
+
+  72% {
+    opacity: 0.92;
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate(calc(-50% + var(--confetti-x)), calc(-50% + var(--confetti-y))) scale(1)
+      rotate(calc(var(--confetti-r) + 190deg));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-close-confetti-host {
+    display: none;
+  }
+}

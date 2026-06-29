@@ -3,11 +3,17 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "main": "electron/main.cjs",
   "scripts": {
     "build": "tsc -b && vite build",
-    "dev": "vite --host 127.0.0.1",
+    "desktop:build": "npm run build && cd ../../.. && cargo build -p harness-symphony --release && cd crates/harness-symphony/web-ui && electron-builder --dir",
+    "desktop:dev": "node electron/dev.cjs",
+    "desktop:package": "npm run build && cd ../../.. && cargo build -p harness-symphony --release && cd crates/harness-symphony/web-ui && electron-builder",
+    "desktop:smoke": "npm run build && node electron/smoke.cjs",
+    "dev": "node electron/browser-dev.cjs",
     "e2e": "playwright test",
-    "preview": "vite preview --host 127.0.0.1"
+    "preview": "vite preview --host 127.0.0.1",
+    "vite:dev": "vite --host 127.0.0.1"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^5.0.0",
@@ -23,9 +29,38 @@
     "@types/react": "^19.0.1",
     "@types/react-dom": "^19.0.2",
     "autoprefixer": "^10.4.20",
+    "electron": "^42.5.0",
+    "electron-builder": "^26.15.3",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.2",
     "vite": "^6.0.3"
+  },
+  "build": {
+    "appId": "dev.repository-harness.symphony",
+    "productName": "Harness Symphony",
+    "asar": true,
+    "directories": {
+      "output": "desktop-dist"
+    },
+    "files": [
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "dist",
+        "to": "web-ui-dist"
+      },
+      {
+        "from": "../../../target/release/harness-symphony",
+        "to": "bin/harness-symphony"
+      }
+    ],
+    "mac": {
+      "target": [
+        "dir"
+      ]
+    }
   }
 }

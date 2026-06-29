@@ -1,7 +1,10 @@
 # Harness durable layer — each project instance generates its own data.
-# harness.db
+harness.db
 harness.db-wal
 harness.db-shm
+
+# macOS Finder metadata.
+.DS_Store
 
 # Rust build output for harness tooling.
 target/
@@ -10,6 +13,11 @@ dist/
 # JavaScript dependencies for local web UI packages.
 node_modules/
 *.tsbuildinfo
+
+# Local web UI build and test output.
+desktop-dist/
+test-results/
+tsconfig.tsbuildinfo
 
 # Downloaded Harness CLI binary for installed project instances.
 scripts/bin/harness-cli

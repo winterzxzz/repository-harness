@@ -30,7 +30,7 @@ of increasing the whole page height.
 - Desktop keeps horizontal board scrolling across the six columns when needed.
 - Mobile remains usable with stacked columns and internal scrolling that does
   not hide task cards or controls.
-- Existing filtering, task selection, detail rail, and start/review/sync
+- Existing filtering, task selection, detail popup, and start/review/sync
   controls continue to work.
 
 ## Design Notes

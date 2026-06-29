@@ -15,6 +15,8 @@ use crate::state::{RunStateStore, StateError};
 use crate::sync::{sync_changesets, SyncChange, SyncError};
 use crate::work::{list_board, BoardItem, WorkError};
 
+const WEB_DIST_DIR_ENV: &str = "HARNESS_SYMPHONY_WEB_DIST_DIR";
+
 #[derive(Debug, Error)]
 pub enum WebError {
     #[error("{0}")]
@@ -139,7 +141,15 @@ fn handle_stream(config: &ResolvedConfig, stream: &mut TcpStream) -> Result<Stri
     let mut buffer = [0_u8; 8192];
     let bytes = stream.read(&mut buffer)?;
     let request = String::from_utf8_lossy(&buffer[..bytes]);
-    handle_request(config, &request)
+    match handle_request(config, &request) {
+        Ok(response) => Ok(response),
+        Err(error) => json_response(
+            500,
+            &ErrorResponse {
+                error: error.to_string(),
+            },
+        ),
+    }
 }
 
 fn handle_request(config: &ResolvedConfig, request: &str) -> Result<String, WebError> {
@@ -616,6 +626,18 @@ fn static_response(config: &ResolvedConfig, request_path: &str) -> Result<String
 }
 
 fn web_dist_dir(config: &ResolvedConfig) -> PathBuf {
+    web_dist_dir_with_override(config, std::env::var_os(WEB_DIST_DIR_ENV))
+}
+
+fn web_dist_dir_with_override(
+    config: &ResolvedConfig,
+    override_path: Option<std::ffi::OsString>,
+) -> PathBuf {
+    if let Some(path) = override_path {
+        if !path.is_empty() {
+            return PathBuf::from(path);
+        }
+    }
     config
         .repo_root
         .join("crates")
@@ -1049,6 +1071,17 @@ mod tests {
         assert!(response.starts_with("HTTP/1.1 200 OK"));
         assert!(response.contains("text/html"));
         assert!(response.ends_with("<div id=\"root\"></div>"));
+    }
+
+    #[test]
+    fn web_dist_dir_supports_packaged_desktop_override() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = test_config(&temp_dir);
+        let override_dir = temp_dir.path().join("packaged-web-ui-dist");
+
+        let dist = web_dist_dir_with_override(&config, Some(override_dir.clone().into_os_string()));
+
+        assert_eq!(dist, override_dir);
     }
 
     #[test]

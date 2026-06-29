@@ -36,14 +36,63 @@ test("board renders task columns and detail controls", async ({ page }) => {
   await expect(page.getByRole("button", { name: /US-052/ })).toBeVisible();
   await page.getByRole("button", { name: /US-052/ }).click();
 
-  const detail = page.getByRole("complementary", { name: "Selected work detail" });
+  const detail = page.getByRole("dialog", { name: "Selected work detail" });
+  await expect(page.getByTestId("task-detail-overlay")).toHaveCSS("position", "fixed");
   await expect(
     detail.getByRole("heading", { name: "Sync Approval And Done Transition" })
   ).toBeVisible();
   await expect(page.getByText("Blocked by")).toBeVisible();
   await expect(page.getByText("Unblocks")).toBeVisible();
   await expect(detail.getByText("Hierarchy")).toBeVisible();
-  await expect(detail.getByRole("button", { name: "Start" })).toBeVisible();
+  await expect(detail.getByRole("button", { name: /Start/ })).toBeVisible();
+});
+
+test("task detail close button closes popup and plays bounded confetti", async ({ page }) => {
+  await page.route("**/api/board", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        items: [boardItem("US-062", "Task Detail Close Confetti", "Ready")]
+      })
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /US-062/ }).click();
+
+  const detail = page.getByRole("dialog", { name: "Selected work detail" });
+  await expect(detail.getByRole("heading", { name: "Task Detail Close Confetti" })).toBeVisible();
+  await detail.getByRole("button", { name: "Close selected work detail" }).click();
+
+  await expect(detail).toBeHidden();
+  await expect(page.getByTestId("task-close-confetti")).toBeVisible();
+  await expect(page.getByRole("button", { name: /US-062/ })).toBeVisible();
+  await expect(page.getByTestId("task-close-confetti-host")).toHaveCount(0, { timeout: 2000 });
+
+  await page.getByRole("button", { name: /US-062/ }).click();
+  await expect(page.getByRole("dialog", { name: "Selected work detail" })).toBeVisible();
+});
+
+test("task detail close keeps working with reduced motion confetti suppressed", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.route("**/api/board", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        items: [boardItem("US-062", "Task Detail Close Confetti", "Ready")]
+      })
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /US-062/ }).click();
+
+  const detail = page.getByRole("dialog", { name: "Selected work detail" });
+  await expect(detail).toBeVisible();
+  await detail.getByRole("button", { name: "Close selected work detail" }).click();
+
+  await expect(detail).toBeHidden();
+  await expect(page.getByTestId("task-close-confetti-host")).toHaveCount(0);
 });
 
 test("sidebar renders dependency graph edges and selects tasks", async ({ page }) => {
@@ -114,7 +163,7 @@ test("sidebar renders dependency graph edges and selects tasks", async ({ page }
   await expect(graph.getByLabel("Dependency edges")).toContainText("US-059");
 
   await graph.getByRole("button", { name: /US-057 Ready Dependency Graph Sidebar View/ }).click();
-  const detail = page.getByRole("complementary", { name: "Selected work detail" });
+  const detail = page.getByRole("dialog", { name: "Selected work detail" });
   await expect(detail.getByRole("heading", { name: "Dependency Graph Sidebar View" })).toBeVisible();
   await expect(detail.getByText("US-056")).toBeVisible();
   await expect(detail.getByText("US-059")).toBeVisible();
@@ -173,5 +222,76 @@ test("board columns stay bounded and scroll dense task lists internally", async 
   }));
   expect(mobileReadyMetrics.scrollHeight).toBeGreaterThan(mobileReadyMetrics.clientHeight);
   await readyColumn.getByRole("button", { name: /US-900/ }).click();
-  await expect(page.getByRole("complementary", { name: "Selected work detail" })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Selected work detail" })).toBeVisible();
+});
+
+test("review logs render readable chat and progress entries while preserving raw artifacts", async ({ page }) => {
+  await page.route("**/api/board", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        items: [
+          {
+            id: "US-060",
+            title: "Human-Readable Chat Logs",
+            board_state: "Review",
+            story_status: "implemented",
+            lane: "normal",
+            verify: "configured",
+            blockers: [],
+            unblocks: [],
+            parent_id: null,
+            children: [],
+            hierarchy_depth: 0,
+            run_id: "run_chat",
+            active_run: null,
+            reason: "review run communication"
+          }
+        ]
+      })
+    });
+  });
+  await page.route("**/api/runs/run_chat/review", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        run_id: "run_chat",
+        story_id: "US-060",
+        status: "completed",
+        outcome: "completed",
+        summary: "Readable logs implemented.",
+        result: null,
+        validation: { commands: [{ command: "npm --prefix crates/harness-symphony/web-ui run build", result: "pass" }] },
+        changed_files: ["crates/harness-symphony/web-ui/src/main.tsx"],
+        changeset_preview: null,
+        pr_url: "https://example.test/pr/60",
+        pr_status: "created",
+        artifact_paths: [".harness/runs/run_chat/APP_SERVER_EVENTS.jsonl"],
+        suggested_next_action: "Review the readable log.",
+        events: [
+          { method: "thread/started", params: { thread: { id: "thr_chat" }, timestamp: "2026-06-27T10:00:00Z" } },
+          { method: "turn/started", params: { turn: { status: "inProgress" } } },
+          { method: "item/agentMessage/delta", params: { itemId: "msg_1", delta: "Implemented " } },
+          { method: "item/agentMessage/delta", params: { itemId: "msg_1", delta: "readable logs." } },
+          { method: "turn/diff/updated", params: {} },
+          { method: "turn/completed", params: { turn: { status: "completed" } } },
+          { unsupported: true, note: "kept as fallback" }
+        ]
+      })
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /US-060/ }).click();
+  const detail = page.getByRole("dialog", { name: "Selected work detail" });
+
+  await expect(detail.getByRole("heading", { name: "Run communication" })).toBeVisible();
+  await expect(detail.getByText("Assistant", { exact: true })).toBeVisible();
+  await expect(detail.getByText("Implemented readable logs.")).toBeVisible();
+  await expect(detail.getByText("Run started")).toBeVisible();
+  await expect(detail.getByText("Workspace diff updated")).toBeVisible();
+  await expect(detail.getByText("Run finished")).toBeVisible();
+  await expect(detail.getByText("Unsupported event payload with keys: unsupported, note.")).toBeVisible();
+  await expect(detail.getByText("Raw artifact: APP_SERVER_EVENTS.jsonl")).toBeVisible();
+  await expect(detail.getByText(".harness/runs/run_chat/APP_SERVER_EVENTS.jsonl")).toBeVisible();
 });
