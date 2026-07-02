@@ -23,14 +23,16 @@ Symphony records.
    logs.
 6. `US-052` - Sync approval flow and Done transition.
 7. `US-053` - Browser E2E validation for the MVP workflow.
-8. `US-056` - Simplified Kanban-first controller reference revamp.
-9. `US-057` - Dependency graph sidebar view.
-10. `US-058` - Scrollable board columns.
-11. `US-059` - Electron desktop shell.
-12. `US-060` - Human-readable chat logs.
-13. `US-061` - FrankenTUI app server log TUI.
-14. `US-062` - Confetti close effect for the task detail popup.
-15. `US-063` - Small completion alert when an active task finishes.
+8. `US-054` - Task hierarchy rendering.
+9. `US-055` - PR merged gate before sync.
+10. `US-056` - Simplified Kanban-first controller reference revamp.
+11. `US-057` - Dependency graph sidebar view.
+12. `US-058` - Scrollable board columns.
+13. `US-059` - Electron desktop shell.
+14. `US-060` - Human-readable chat logs.
+15. `US-061` - FrankenTUI app server log TUI.
+16. `US-062` - Confetti close effect for the task detail popup.
+17. `US-063` - Small completion alert when an active task finishes.
 
 ## Exit Criteria
 
