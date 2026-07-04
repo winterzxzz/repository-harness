@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-07-04 - PR #32
+
+- US-065: completed (@hoangnb24)
+- Merge commit: `67c1c64b1d479f6c04e509f363ae749017ce70a9`
+- Harness CLI release: not required
+- Changed files:
+  - `.harness/changesets/run_1783163412740491000_6614_1.changeset.jsonl`
+  - `crates/harness-symphony/src/agent.rs`
+  - `crates/harness-symphony/src/interface.rs`
+  - `docs/SYMPHONY_SCOPE.md`
+
 ## 2026-07-04 - PR #31
 
 - Add Harness Symphony runner and Web UI controller (@hoangnb24)
