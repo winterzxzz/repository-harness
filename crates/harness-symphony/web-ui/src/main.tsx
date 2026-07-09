@@ -322,14 +322,14 @@ function App() {
                 <p className="mt-1 max-w-3xl text-sm font-medium leading-6 text-muted-foreground">
                   Start safe work, watch the active run, review evidence, and sync accepted changes from one local controller.
                 </p>
-                <div role="tablist" aria-label="Command Center views" className="mt-3 inline-flex h-9 items-center justify-center rounded-lg bg-muted p-1 text-muted-foreground">
+                <div role="tablist" aria-label="Command Center views" className="mt-4 inline-flex h-10 items-center justify-center rounded-xl bg-muted/40 border border-border/50 p-1 text-muted-foreground">
                   <button
                     type="button"
                     role="tab"
                     aria-selected={view === "board"}
                     className={cn(
-                      "inline-flex h-7 items-center justify-center whitespace-nowrap rounded-md px-3 text-sm font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
-                      view === "board" ? "bg-background text-foreground shadow-sm" : "hover:text-foreground"
+                      "inline-flex h-8 items-center justify-center whitespace-nowrap rounded-lg px-4 text-xs font-bold transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
+                      view === "board" ? "bg-background text-foreground shadow-sm border border-border/40 font-bold" : "hover:text-foreground/80 hover:bg-muted/30"
                     )}
                     onClick={() => switchView("board")}
                   >
@@ -340,8 +340,8 @@ function App() {
                     role="tab"
                     aria-selected={view === "intake"}
                     className={cn(
-                      "inline-flex h-7 items-center justify-center whitespace-nowrap rounded-md px-3 text-sm font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
-                      view === "intake" ? "bg-background text-foreground shadow-sm" : "hover:text-foreground"
+                      "inline-flex h-8 items-center justify-center whitespace-nowrap rounded-lg px-4 text-xs font-bold transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
+                      view === "intake" ? "bg-background text-foreground shadow-sm border border-border/40 font-bold" : "hover:text-foreground/80 hover:bg-muted/30"
                     )}
                     onClick={() => switchView("intake")}
                   >

@@ -1117,3 +1117,10 @@ test("main layout is split-pane on desktop", async ({ page }) => {
   const layout = page.locator("main > div");
   await expect(layout).toHaveClass(/lg:grid-cols-\[240px_minmax\(0,1fr\)\]/);
 });
+
+test("view tabs contain Kanban and Table options", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByRole("tab", { name: "Work Board" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Guided Intake" })).toBeVisible();
+});
+
