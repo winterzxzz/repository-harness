@@ -260,6 +260,7 @@ Review these local files before opening a PR:
 `SUMMARY.md` is the human review surface. It should include a readable Harness
 changes table so reviewers do not have to inspect raw JSONL first. PR creation
 uses the summary as the PR body and commits only the durable changeset artifact.
+If PR creation is disabled, review these artifacts locally before syncing.
 
 ## Optional PR Flow
 
@@ -277,6 +278,10 @@ target/debug/harness-symphony pr retry <run_id>
 
 PRs should include the run summary, result file, changeset, and any product or
 docs changes made by the agent.
+
+When `pull_request.create` is `disabled`, completed runs stay in Review as a
+local artifact-review step instead of becoming Needs Attention for missing PR
+creation.
 
 ## After Merge
 

@@ -90,7 +90,7 @@ export function BoardGrid({
 }) {
   return (
     <div className="min-h-0 min-w-0 overflow-x-auto">
-      <div className="grid h-[calc(100dvh-244px)] min-h-[410px] min-w-[1120px] grid-cols-[repeat(6,minmax(176px,1fr))] items-stretch gap-2.5 max-sm:h-auto max-sm:min-h-0 max-sm:min-w-0 max-sm:grid-cols-1">
+      <div className="grid h-[calc(100dvh-244px)] min-h-[410px] min-w-[1500px] grid-cols-[repeat(6,minmax(240px,1fr))] items-stretch gap-2.5 max-sm:h-auto max-sm:min-h-0 max-sm:min-w-0 max-sm:grid-cols-1">
         {states.map((state) => {
           const stateItems = items.filter((item) => item.board_state === state);
           const Icon = stateIcon[state];
@@ -202,14 +202,14 @@ function TaskCard({
       {item.board_state === "Ready" ? (
         <Button
           type="button"
-          className="mt-3 h-8 w-full"
+          className="mt-3 h-9 w-full justify-start overflow-hidden px-2.5 text-left"
           disabled={runDisabled}
           aria-label="Run with Codex"
           title={canRun ? "Start this Ready story with Codex" : "Cannot start while another run is active or proof is missing"}
           onClick={() => void onRun(item)}
         >
-          <Play />
-          {startingId === item.id ? "Starting" : "Run with Codex"}
+          <Play className="shrink-0" />
+          <span className="min-w-0 truncate">{startingId === item.id ? "Starting" : "Run with Codex"}</span>
         </Button>
       ) : null}
     </div>

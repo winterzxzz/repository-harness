@@ -241,6 +241,8 @@ impl RunStateStore {
             "approve sync"
         } else if pr_status == "failed" {
             "retry pull request creation"
+        } else if pr_status == "not_applicable" {
+            "review local run artifacts"
         } else {
             "review pull request"
         };

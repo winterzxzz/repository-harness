@@ -497,7 +497,7 @@ fn sync_run_response(config: &ResolvedConfig, run_id: &str) -> Result<HttpRespon
         }
         Err(error) => return Err(error.into()),
     };
-    if run.pr_status != "merged" {
+    if run.pr_status != "merged" && !local_review_without_pr(config, &run) {
         return json_response(
             409,
             &ErrorResponse {
@@ -672,6 +672,10 @@ fn spawn_run(config: ResolvedConfig, prepared: PreparedRun) {
 }
 
 fn create_review_pr(config: &ResolvedConfig, run_id: &str) -> Result<(), WebError> {
+    if pr_creation_disabled(config) {
+        RunStateStore::new(config.state_db.clone()).update_pr_status(run_id, "not_applicable")?;
+        return Ok(());
+    }
     if let Err(error) = create_pr(config, run_id, false) {
         RunStateStore::new(config.state_db.clone())
             .record_pr_failure(run_id, &error.to_string())?;
@@ -774,11 +778,21 @@ fn review_response(config: &ResolvedConfig, run_id: &str) -> Result<HttpResponse
         .filter(|path| path.exists())
         .map(|path| changeset_display_path(&config.repo_root, path))
         .collect::<Vec<_>>();
-    let pr_status = run.pr_status.clone();
-    let suggested_next_action = review_next_action(&run, summary.is_some(), result.is_some());
+    let local_review = local_review_without_pr(config, &run);
+    let pr_status = if local_review {
+        "not_applicable".to_owned()
+    } else {
+        run.pr_status.clone()
+    };
+    let suggested_next_action =
+        review_next_action(config, &run, summary.is_some(), result.is_some());
     let events = read_events(&event_path)?;
     let failure_summary = failure_summary_for_run(config, &run);
-    let recovery_action = recovery_action_for_review(config, &run)?;
+    let recovery_action = if local_review {
+        None
+    } else {
+        recovery_action_for_review(config, &run)?
+    };
 
     json_response(
         200,
@@ -929,7 +943,7 @@ fn failure_summary_for_run(
     config: &ResolvedConfig,
     run: &crate::state::RunRecord,
 ) -> Option<FailureSummary> {
-    if !run_needs_attention(run) {
+    if !run_needs_attention(config, run) {
         return None;
     }
     let paths = run_artifact_paths(config, &run.run_id);
@@ -938,6 +952,7 @@ fn failure_summary_for_run(
     let result = result_artifact.value.as_ref();
     let latest_event = latest_event_message(&events_artifact.events);
     let event_error = latest_event_error(&events_artifact.events);
+    let result_contract_mismatch = result_contract_mismatch(result, run);
     let validation_failure = result.and_then(validation_failure_message);
     let evidence_artifacts = available_artifacts(config, &paths);
 
@@ -949,6 +964,14 @@ fn failure_summary_for_run(
             compact_sentence(&run.next_action),
             Some(run.next_action.clone()),
             "Retry pull request creation after fixing the reported PR error.".to_owned(),
+        )
+    } else if let Some(message) = result_contract_mismatch {
+        (
+            "Invalid result artifact".to_owned(),
+            compact_sentence(&message),
+            Some(message),
+            "Inspect RESULT.json and rerun the task after the result contract mismatch is understood."
+                .to_owned(),
         )
     } else if let Some(message) = validation_failure {
         (
@@ -1034,7 +1057,34 @@ fn failure_summary_for_run(
     })
 }
 
-fn run_needs_attention(run: &crate::state::RunRecord) -> bool {
+fn result_contract_mismatch(
+    result: Option<&Value>,
+    run: &crate::state::RunRecord,
+) -> Option<String> {
+    let result = result?;
+    if let Some(actual) = result.get("run_id").and_then(Value::as_str) {
+        if actual != run.run_id {
+            return Some(format!(
+                "RESULT.json run_id mismatch: expected {}, got {}",
+                run.run_id, actual
+            ));
+        }
+    }
+    if let Some(actual) = result.get("story_id").and_then(Value::as_str) {
+        if actual != run.story_id {
+            return Some(format!(
+                "RESULT.json story_id mismatch: expected {}, got {}",
+                run.story_id, actual
+            ));
+        }
+    }
+    None
+}
+
+fn run_needs_attention(config: &ResolvedConfig, run: &crate::state::RunRecord) -> bool {
+    if local_review_without_pr(config, run) {
+        return false;
+    }
     matches!(
         run.status.as_str(),
         "failed" | "cancelled" | "partial" | "blocked" | "needs_intake"
@@ -1114,6 +1164,17 @@ fn is_synced(run: &crate::state::RunRecord) -> bool {
         run.sync_status.as_str(),
         "applied" | "synced" | "synced_locally"
     )
+}
+
+fn pr_creation_disabled(config: &ResolvedConfig) -> bool {
+    matches!(config.pull_request_create.as_str(), "disabled" | "never")
+}
+
+fn local_review_without_pr(config: &ResolvedConfig, run: &crate::state::RunRecord) -> bool {
+    pr_creation_disabled(config)
+        && run.status == "completed"
+        && run.pr_url.is_none()
+        && !is_synced(run)
 }
 
 fn available_artifacts(config: &ResolvedConfig, paths: &RunArtifactPaths) -> Vec<String> {
@@ -1221,6 +1282,7 @@ fn compact_sentence(value: &str) -> String {
 }
 
 fn review_next_action(
+    config: &ResolvedConfig,
     run: &crate::state::RunRecord,
     has_summary: bool,
     has_result: bool,
@@ -1232,6 +1294,8 @@ fn review_next_action(
         || !has_result
     {
         "Inspect run artifacts and retry when safe.".to_owned()
+    } else if local_review_without_pr(config, run) {
+        "Review local run artifacts and approve sync when ready.".to_owned()
     } else if run.pr_url.is_none() {
         "Create or retry the pull request for this run.".to_owned()
     } else {
@@ -1437,20 +1501,40 @@ impl BoardItemResponse {
                 .show_run(run_id)
                 .ok()
         });
+        let local_review = run
+            .as_ref()
+            .is_some_and(|run| local_review_without_pr(config, run));
+        let board_state = if local_review && item.board_state == BoardState::NeedsAttention {
+            BoardState::Review.label().to_owned()
+        } else {
+            item.board_state.label().to_owned()
+        };
+        let effective_board_state =
+            if local_review && item.board_state == BoardState::NeedsAttention {
+                BoardState::Review
+            } else {
+                item.board_state.clone()
+            };
         let failure_summary = run
             .as_ref()
             .and_then(|run| failure_summary_for_run(config, run));
         let recovery_action = run.as_ref().and_then(|run| {
-            recovery_action_for_run(&item.id, &item.story_status, &item.board_state, run)
+            recovery_action_for_run(&item.id, &item.story_status, &effective_board_state, run)
         });
         let reason = failure_summary
             .as_ref()
             .map(|summary| summary.reason.clone())
-            .unwrap_or_else(|| item.reason.clone());
+            .unwrap_or_else(|| {
+                if local_review {
+                    "review local run artifacts".to_owned()
+                } else {
+                    item.reason.clone()
+                }
+            });
         Self {
             id: item.id,
             title: item.title,
-            board_state: item.board_state.label().to_owned(),
+            board_state,
             story_status: item.story_status,
             lane: item.lane,
             verify: item.verify,
@@ -1920,6 +2004,31 @@ mod tests {
     }
 
     #[test]
+    fn review_request_explains_result_story_mismatch() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = test_config(&temp_dir);
+        add_test_run(&config, "run_mismatch", "failed");
+        write_summary(&config, "run_mismatch");
+        write_result(
+            &config,
+            "run_mismatch",
+            r#"{"version":1,"run_id":"run_mismatch","story_id":"US-WRONG","outcome":"completed","validation":{"commands":[{"command":"cargo test","result":"pass"}]}}"#,
+        );
+
+        let response = handle_request(
+            &config,
+            "GET /api/runs/run_mismatch/review HTTP/1.1\r\n\r\n",
+        )
+        .unwrap();
+
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
+        assert!(response.contains("Invalid result artifact"));
+        assert!(response.contains("RESULT.json story_id mismatch"));
+        assert!(response.contains("US-ATTN"));
+        assert!(response.contains("US-WRONG"));
+    }
+
+    #[test]
     fn review_request_summarizes_pr_and_validation_failures() {
         let temp_dir = tempfile::tempdir().unwrap();
         let config = test_config(&temp_dir);
@@ -2259,32 +2368,159 @@ mod tests {
     }
 
     #[test]
-    fn create_review_pr_failure_moves_run_to_attention_state() {
+    fn disabled_pr_creation_leaves_completed_run_ready_for_local_review() {
         let temp_dir = tempfile::tempdir().unwrap();
         let mut config = test_config(&temp_dir);
         config.pull_request_create = "disabled".to_owned();
         let store = RunStateStore::new(config.state_db.clone());
         store
             .add_run(crate::state::NewRunRecord {
-                run_id: "run_pr_fail".to_owned(),
-                story_id: "US-PR".to_owned(),
-                branch: Some("symphony/run_pr_fail".to_owned()),
+                run_id: "run_local_review".to_owned(),
+                story_id: "US-LOCAL-REVIEW".to_owned(),
+                branch: Some("symphony/run_local_review".to_owned()),
                 worktree: temp_dir.path().join("worktree"),
                 lightweight: false,
                 status: "completed".to_owned(),
-                result_path: Some(PathBuf::from(".harness/runs/run_pr_fail/RESULT.json")),
+                result_path: Some(PathBuf::from(".harness/runs/run_local_review/RESULT.json")),
                 sync_status: "not_applied".to_owned(),
                 next_action: "review run result".to_owned(),
             })
             .unwrap();
 
-        let error = create_review_pr(&config, "run_pr_fail").unwrap_err();
+        create_review_pr(&config, "run_local_review").unwrap();
 
-        assert!(matches!(error, WebError::Pr(PrError::Disabled)));
-        let run = store.show_run("run_pr_fail").unwrap();
+        let run = store.show_run("run_local_review").unwrap();
         assert_eq!(run.status, "completed");
-        assert_eq!(run.pr_status, "failed");
-        assert!(run.next_action.contains("pull request creation failed"));
+        assert_eq!(run.pr_status, "not_applicable");
+        assert_eq!(run.next_action, "review local run artifacts");
+        assert!(!run_needs_attention(&config, &run));
+        assert_eq!(
+            review_next_action(&config, &run, true, true),
+            "Review local run artifacts and approve sync when ready."
+        );
+    }
+
+    #[test]
+    fn sync_request_allows_completed_local_run_when_pr_creation_is_disabled() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut config = test_config(&temp_dir);
+        config.pull_request_create = "disabled".to_owned();
+        fs::create_dir_all(&config.changeset_directory).unwrap();
+        fs::create_dir_all(temp_dir.path().join("scripts/bin")).unwrap();
+        fs::write(
+            config
+                .changeset_directory
+                .join("run_local_sync.changeset.jsonl"),
+            r#"{"op":"changeset.header","version":1,"run_id":"run_local_sync"}
+{"op":"story.update","version":1,"id":"US-LOCAL-SYNC","payload":{"status":"implemented"}}
+"#,
+        )
+        .unwrap();
+        let cli_path = temp_dir.path().join("scripts/bin/harness-cli");
+        fs::write(
+            &cli_path,
+            "#!/bin/sh\nprintf '%s\n' \"$@\" >> sync-args.log\necho 'Changeset run_local_sync applied (2 operation(s)).'\n",
+        )
+        .unwrap();
+        make_executable(&cli_path);
+
+        let store = RunStateStore::new(config.state_db.clone());
+        store
+            .add_run(crate::state::NewRunRecord {
+                run_id: "run_local_sync".to_owned(),
+                story_id: "US-LOCAL-SYNC".to_owned(),
+                branch: Some("symphony/run_local_sync".to_owned()),
+                worktree: temp_dir.path().join("worktree"),
+                lightweight: false,
+                status: "completed".to_owned(),
+                result_path: Some(PathBuf::from(".harness/runs/run_local_sync/RESULT.json")),
+                sync_status: "not_applied".to_owned(),
+                next_action: "review local run artifacts".to_owned(),
+            })
+            .unwrap();
+
+        let response = handle_request(
+            &config,
+            "POST /api/runs/run_local_sync/sync HTTP/1.1\r\n\r\n",
+        )
+        .unwrap();
+
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
+        assert!(response.contains(r#""id":"run_local_sync""#));
+    }
+
+    #[test]
+    fn board_shows_completed_local_run_as_review_when_pr_creation_is_disabled() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut config = test_config(&temp_dir);
+        config.pull_request_create = "disabled".to_owned();
+        seed_story_with_status(
+            &config.harness_db,
+            "US-LOCAL-BOARD",
+            "Local board review",
+            "planned",
+        );
+        let store = RunStateStore::new(config.state_db.clone());
+        store
+            .add_run(crate::state::NewRunRecord {
+                run_id: "run_local_board".to_owned(),
+                story_id: "US-LOCAL-BOARD".to_owned(),
+                branch: Some("symphony/run_local_board".to_owned()),
+                worktree: temp_dir.path().join("worktree"),
+                lightweight: false,
+                status: "completed".to_owned(),
+                result_path: Some(PathBuf::from(".harness/runs/run_local_board/RESULT.json")),
+                sync_status: "not_applied".to_owned(),
+                next_action:
+                    "pull request creation failed: PR creation is disabled by pull_request.create"
+                        .to_owned(),
+            })
+            .unwrap();
+        store.update_pr_status("run_local_board", "failed").unwrap();
+
+        let response = handle_request(&config, "GET /api/board HTTP/1.1\r\n\r\n").unwrap();
+
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
+        assert!(response.contains(r#""id":"US-LOCAL-BOARD""#));
+        assert!(response.contains(r#""board_state":"Review""#));
+        assert!(response.contains("review local run artifacts"));
+        assert!(!response.contains("PR creation failure"));
+    }
+
+    #[test]
+    fn review_hides_pr_retry_for_completed_local_run_when_pr_creation_is_disabled() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut config = test_config(&temp_dir);
+        config.pull_request_create = "disabled".to_owned();
+        seed_story_with_status(
+            &config.harness_db,
+            "US-ATTN",
+            "Local review without PR",
+            "planned",
+        );
+        add_test_run(&config, "run_local_review_failed_pr", "completed");
+        RunStateStore::new(config.state_db.clone())
+            .update_pr_status("run_local_review_failed_pr", "failed")
+            .unwrap();
+        write_summary(&config, "run_local_review_failed_pr");
+        write_result(
+            &config,
+            "run_local_review_failed_pr",
+            r#"{"version":1,"run_id":"run_local_review_failed_pr","story_id":"US-ATTN","outcome":"completed","validation":{"commands":[{"command":"cargo test","result":"pass"}]}}"#,
+        );
+
+        let response = handle_request(
+            &config,
+            "GET /api/runs/run_local_review_failed_pr/review HTTP/1.1\r\n\r\n",
+        )
+        .unwrap();
+
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
+        assert!(response.contains(r#""pr_status":"not_applicable""#));
+        assert!(response.contains(r#""failure_summary":null"#));
+        assert!(response.contains(r#""recovery_action":null"#));
+        assert!(response.contains("Review local run artifacts and approve sync when ready."));
+        assert!(!response.contains("Retry PR creation"));
     }
 
     #[test]

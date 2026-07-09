@@ -114,7 +114,7 @@ The primary board states are:
 | Ready | The task has no incomplete blockers and can be selected. |
 | Blocked | The task has incomplete blockers or a dependency cycle. |
 | In Progress | The user selected the task and Symphony is running it. |
-| Review | A run completed, `RESULT.json` exists, and a PR has been created. |
+| Review | A run completed, `RESULT.json` exists, and either a PR has been created or PR creation is disabled for local artifact review. |
 | Needs Attention | A run failed, was interrupted, or cannot create required review artifacts. |
 | Done | The PR was merged and Symphony sync applied the accepted changeset. |
 
@@ -134,11 +134,12 @@ The primary board states are:
    exits, an explicit cancellation path is added, a protocol stall guard fires,
    or required result validation fails.
 9. When Codex emits `turn/completed` with completed status and required
-   artifacts validate, Symphony creates a PR.
+   artifacts validate, Symphony creates a PR when PR creation is enabled.
 10. The task moves to `Review`.
 11. User reviews summary, result, changeset, validation evidence, PR status, and
    logs.
-12. After the PR is merged, the user approves sync from the UI.
+12. After the PR is merged, or after local artifact review when PR creation is
+   disabled, the user approves sync from the UI.
 13. UI runs Symphony sync.
 14. The task moves to `Done`.
 
@@ -219,11 +220,13 @@ It should include:
 - Validation evidence.
 - Changed files.
 - Human-readable changeset preview.
-- PR link and merge status.
+- PR link and merge status, or local artifact-review status when PR creation is
+  disabled.
 - Codex event log.
 - Human-readable chat and progress log derived from Codex events.
 - Run summary.
-- Approve/sync action after the PR is merged.
+- Approve/sync action after the PR is merged, or after local artifact review
+  when PR creation is disabled.
 - Retry or mark-needs-attention actions when review artifacts are incomplete.
 
 Raw artifacts should remain accessible from the review surface.

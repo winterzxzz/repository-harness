@@ -350,8 +350,15 @@ test("ready card runs codex from the board without opening detail", async ({ pag
 
   const readyColumn = page.getByRole("region", { name: "Ready column" });
   const readyCard = readyColumn.getByTestId("task-card").filter({ hasText: "US-076" });
-  await expect(readyCard.getByRole("button", { name: "Run with Codex" })).toBeVisible();
-  await readyCard.getByRole("button", { name: "Run with Codex" }).click();
+  const runButton = readyCard.getByRole("button", { name: "Run with Codex" });
+  await expect(runButton).toBeVisible();
+  const readyColumnBox = await readyColumn.boundingBox();
+  const runButtonBox = await runButton.boundingBox();
+  expect(readyColumnBox?.width ?? 0, "Ready column keeps readable action width").toBeGreaterThanOrEqual(236);
+  expect(runButtonBox?.width ?? 0, "Run with Codex button width").toBeGreaterThanOrEqual(188);
+  expect(runButtonBox?.height ?? 0, "Run with Codex button height").toBeGreaterThanOrEqual(34);
+  await expectNoHorizontalOverflow(runButton, "Run with Codex button");
+  await runButton.click();
 
   await expect.poll(async () => started).toBe(true);
   await expect(page.getByRole("dialog", { name: "Selected work detail" })).toHaveCount(0);

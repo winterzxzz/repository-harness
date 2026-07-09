@@ -415,6 +415,7 @@ fn validate_finished_run(
             result_path.display()
         )));
     }
+    promote_run_artifacts(config, &prepared, &summary_path, &result_path)?;
 
     let result = parse_result_file(&result_path)?;
     if result.version != 1 {
@@ -1042,5 +1043,52 @@ mod tests {
             .changeset_directory
             .join("run_full.changeset.jsonl")
             .exists());
+    }
+
+    #[test]
+    fn isolated_invalid_result_still_promotes_review_artifacts() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = config_for_root(temp_dir.path());
+        let worktree = temp_dir.path().join(".symphony/worktrees/run_invalid");
+        fs::create_dir_all(worktree.join(".harness/runs/run_invalid")).unwrap();
+        fs::write(
+            worktree.join(".harness/runs/run_invalid/SUMMARY.md"),
+            "# Summary\n",
+        )
+        .unwrap();
+        fs::write(
+            worktree.join(".harness/runs/run_invalid/RESULT.json"),
+            r#"{
+                "version": 1,
+                "run_id": "run_invalid",
+                "story_id": "US-WRONG",
+                "outcome": "completed",
+                "validation": {
+                    "commands": [
+                        { "command": "cargo test", "result": "pass" }
+                    ]
+                },
+                "summary_path": ".harness/runs/run_invalid/SUMMARY.md"
+            }"#,
+        )
+        .unwrap();
+
+        let prepared = PreparedRun {
+            run_id: "run_invalid".to_owned(),
+            story_id: "US-EXPECTED".to_owned(),
+            branch: Some("symphony/run_invalid".to_owned()),
+            worktree,
+            contract_path: config.runs_dir.join("run_invalid/RUN_CONTRACT.json"),
+            harness_db_path: temp_dir
+                .path()
+                .join(".symphony/worktrees/run_invalid/harness.db"),
+            lightweight: false,
+        };
+
+        let error = validate_finished_run(&config, prepared).unwrap_err();
+
+        assert!(error.to_string().contains("RESULT.json story_id mismatch"));
+        assert!(config.runs_dir.join("run_invalid/SUMMARY.md").exists());
+        assert!(config.runs_dir.join("run_invalid/RESULT.json").exists());
     }
 }
