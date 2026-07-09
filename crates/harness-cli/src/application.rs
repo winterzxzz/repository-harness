@@ -126,6 +126,12 @@ pub struct TraceInput {
 }
 
 #[derive(Debug)]
+pub struct ContextPackInput {
+    pub story_id: Option<String>,
+    pub lane: Option<RiskLane>,
+}
+
+#[derive(Debug)]
 pub struct ChangesetApplyResult {
     pub id: String,
     pub applied: bool,
@@ -234,6 +240,10 @@ impl HarnessService {
 
     pub fn score_context(&self, id: i64) -> crate::infrastructure::Result<ContextScoreResult> {
         self.repository.score_context(id)
+    }
+
+    pub fn context_pack(&self, input: ContextPackInput) -> crate::infrastructure::Result<String> {
+        self.repository.context_pack(input)
     }
 
     pub fn story_verify_status(

@@ -166,6 +166,7 @@ without parsing the human table.
 | `trace` | Observability | Record an agent execution trace and print trace quality. | `--summary`, optional trace fields |
 | `score-trace` | Observability | Score trace detail against lane requirements. | optional `--id` |
 | `score-context` | Context selection | Score trace reads against compiled context rules. | trace id |
+| `context` | Context selection | Generate a paste-ready context pack for a story or lane. | optional `--story`, optional `--lane`, optional `--out` |
 | `audit` | Entropy auditing | Run drift checks and compute entropy score. | none |
 | `propose` | Entropy auditing | Generate improvement proposals from friction, interventions, and audit findings. | optional `--commit` |
 | `query matrix` | Task state | Show durable story proof matrix. | optional `--numeric` |

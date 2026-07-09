@@ -6,6 +6,19 @@ stop reading. They are additive to the stable `AGENTS.md` reading list.
 The goal is not to maximize context. The goal is to put the right information
 in the model for the current task phase and risk lane.
 
+For handoffs, generate the starting context pack instead of rebuilding it by
+hand:
+
+```bash
+scripts/bin/harness-cli context --story US-XXX --out context.md
+scripts/bin/harness-cli context --lane high-risk
+```
+
+The generated pack is a paste-ready summary of required docs, product contract,
+related stories, relevant decisions, validation expectations, and optional tool
+availability. Use the tables below when deeper phase-specific retrieval is
+needed or when the generated pack says scope expanded.
+
 ## Context Phases
 
 ### Intake Phase

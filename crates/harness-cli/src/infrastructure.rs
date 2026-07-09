@@ -11,8 +11,8 @@ use thiserror::Error;
 
 use crate::application::{
     BacklogAddInput, BacklogCloseInput, BrownfieldImportResult, ChangesetApplyResult,
-    DbRebuildResult, DecisionAddInput, DecisionVerifyResult, HarnessContext, InitResult,
-    IntakeInput, InterventionAddInput, InterventionFilter, MigrateResult, QueryTable,
+    ContextPackInput, DbRebuildResult, DecisionAddInput, DecisionVerifyResult, HarnessContext,
+    InitResult, IntakeInput, InterventionAddInput, InterventionFilter, MigrateResult, QueryTable,
     StoryAddInput, StoryUpdateInput, StoryVerifyResult, ToolRegisterInput, TraceInput,
 };
 use crate::domain::{
@@ -40,6 +40,8 @@ pub enum HarnessInfraError {
     MissingStoryVerifyCommand(String),
     #[error("story update: story '{0}' not found")]
     StoryNotFound(String),
+    #[error("context requires --story <id> or --lane <tiny|normal|high-risk>")]
+    MissingContextTarget,
     #[error("tool register: tool '{0}' already exists with command '{1}'")]
     ToolAlreadyExists(String, String),
     #[error("tool remove: tool '{0}' not found")]
@@ -103,6 +105,7 @@ pub trait HarnessRepository {
     fn record_trace(&self, input: TraceInput) -> Result<i64>;
     fn score_trace(&self, id: Option<i64>) -> Result<TraceScoreResult>;
     fn score_context(&self, id: i64) -> Result<ContextScoreResult>;
+    fn context_pack(&self, input: ContextPackInput) -> Result<String>;
     fn story_verify_status(&self, id: &str) -> Result<StoryVerifyStatus>;
     fn query_matrix(&self) -> Result<Vec<StoryMatrixRecord>>;
     fn query_backlog(&self, filter: BacklogFilter) -> Result<Vec<BacklogRecord>>;
@@ -1305,6 +1308,30 @@ impl HarnessRepository for SqliteHarnessRepository {
         Ok(score_context(source))
     }
 
+    fn context_pack(&self, input: ContextPackInput) -> Result<String> {
+        let connection = self.open_existing()?;
+        let story = input
+            .story_id
+            .as_deref()
+            .map(|id| load_context_story(&connection, &self.repo_root, id))
+            .transpose()?;
+        let lane = story
+            .as_ref()
+            .map(|story| story.risk_lane.clone())
+            .or_else(|| input.lane.map(|lane| lane.as_db_value().to_owned()))
+            .ok_or(HarnessInfraError::MissingContextTarget)?;
+        let decisions =
+            load_context_decisions(&self.repo_root, &connection, &lane, story.as_ref())?;
+        let tools = load_context_tools(&connection)?;
+
+        Ok(render_context_pack(
+            story.as_ref(),
+            &lane,
+            &decisions,
+            &tools,
+        ))
+    }
+
     fn story_verify_status(&self, id: &str) -> Result<StoryVerifyStatus> {
         let connection = self.open_existing()?;
         connection
@@ -1918,6 +1945,496 @@ impl MatrixColumns {
         }
 
         columns
+    }
+}
+
+#[derive(Debug)]
+struct ContextPackStory {
+    id: String,
+    title: String,
+    doc_path: Option<String>,
+    doc_text: String,
+    status: String,
+    risk_lane: String,
+    contract_doc: Option<String>,
+    unit_proof: i64,
+    integration_proof: i64,
+    e2e_proof: i64,
+    platform_proof: i64,
+    evidence: Option<String>,
+    verify_command: Option<String>,
+    notes: Option<String>,
+    related: Vec<String>,
+}
+
+#[derive(Debug)]
+struct ContextDecision {
+    id: String,
+    title: String,
+    status: String,
+    doc_path: Option<String>,
+}
+
+#[derive(Debug)]
+struct ContextTool {
+    name: String,
+    kind: String,
+    capability: String,
+    status: String,
+}
+
+fn load_story_doc(repo_root: &Path, id: &str) -> Result<(Option<String>, String)> {
+    let mut files = Vec::new();
+    collect_markdown_files(&repo_root.join("docs/stories"), &mut files)?;
+    let needle = id.to_lowercase();
+
+    for path in files {
+        let file_name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        let text = fs::read_to_string(&path)?;
+        if file_name.starts_with(&needle) || text.contains(id) {
+            return Ok((Some(relative_path(repo_root, &path)), text));
+        }
+    }
+
+    Ok((None, String::new()))
+}
+
+fn load_context_story(
+    connection: &Connection,
+    repo_root: &Path,
+    id: &str,
+) -> Result<ContextPackStory> {
+    let (doc_path, doc_text) = load_story_doc(repo_root, id)?;
+    let mut story = connection
+        .query_row(
+            "SELECT
+                id, title, status, risk_lane, contract_doc,
+                unit_proof, integration_proof, e2e_proof, platform_proof,
+                evidence, verify_command, notes
+             FROM story
+             WHERE id=?1;",
+            params![id],
+            |row| {
+                Ok(ContextPackStory {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    doc_path: doc_path.clone(),
+                    doc_text: doc_text.clone(),
+                    status: row.get(2)?,
+                    risk_lane: row.get(3)?,
+                    contract_doc: row.get(4)?,
+                    unit_proof: row.get(5)?,
+                    integration_proof: row.get(6)?,
+                    e2e_proof: row.get(7)?,
+                    platform_proof: row.get(8)?,
+                    evidence: row.get(9)?,
+                    verify_command: row.get(10)?,
+                    notes: row.get(11)?,
+                    related: Vec::new(),
+                })
+            },
+        )
+        .optional()?
+        .ok_or_else(|| HarnessInfraError::StoryNotFound(id.to_owned()))?;
+
+    story.related = load_related_stories(connection, id)?;
+    Ok(story)
+}
+
+fn collect_markdown_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+    if !dir.is_dir() {
+        return Ok(());
+    }
+
+    for entry in fs::read_dir(dir)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            collect_markdown_files(&path, files)?;
+        } else if path.extension().and_then(|value| value.to_str()) == Some("md") {
+            files.push(path);
+        }
+    }
+    files.sort();
+    Ok(())
+}
+
+fn relative_path(repo_root: &Path, path: &Path) -> String {
+    path.strip_prefix(repo_root)
+        .unwrap_or(path)
+        .display()
+        .to_string()
+        .replace('\\', "/")
+}
+
+fn load_related_stories(connection: &Connection, id: &str) -> Result<Vec<String>> {
+    let mut related = Vec::new();
+
+    let mut dependency_statement = connection.prepare(
+        "SELECT story_id, blocks_story_id
+         FROM story_dependency
+         WHERE story_id=?1 OR blocks_story_id=?1
+         ORDER BY story_id, blocks_story_id;",
+    )?;
+    let dependency_rows = dependency_statement.query_map(params![id], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    for (story_id, blocks_story_id) in collect_rows(dependency_rows)? {
+        if story_id == id {
+            related.push(format!("blocks `{blocks_story_id}`"));
+        } else {
+            related.push(format!("blocked by `{story_id}`"));
+        }
+    }
+    drop(dependency_statement);
+
+    let mut hierarchy_statement = connection.prepare(
+        "SELECT parent_story_id, child_story_id
+         FROM story_hierarchy
+         WHERE parent_story_id=?1 OR child_story_id=?1
+         ORDER BY parent_story_id, child_story_id;",
+    )?;
+    let hierarchy_rows = hierarchy_statement.query_map(params![id], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    for (parent_story_id, child_story_id) in collect_rows(hierarchy_rows)? {
+        if parent_story_id == id {
+            related.push(format!("parent of `{child_story_id}`"));
+        } else {
+            related.push(format!("child of `{parent_story_id}`"));
+        }
+    }
+
+    Ok(related)
+}
+
+fn load_context_decisions(
+    repo_root: &Path,
+    connection: &Connection,
+    lane: &str,
+    story: Option<&ContextPackStory>,
+) -> Result<Vec<ContextDecision>> {
+    let mut statement = connection.prepare(
+        "SELECT id, title, status, doc_path
+         FROM decision
+         WHERE status <> 'rejected'
+         ORDER BY id;",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok(ContextDecision {
+            id: row.get(0)?,
+            title: row.get(1)?,
+            status: row.get(2)?,
+            doc_path: row.get(3)?,
+        })
+    })?;
+    let mut decisions = collect_rows(rows)?;
+    append_markdown_decisions(repo_root, &mut decisions)?;
+
+    if lane == "high_risk" {
+        return Ok(decisions);
+    }
+    let Some(story) = story else {
+        return Ok(Vec::new());
+    };
+    Ok(decisions
+        .into_iter()
+        .filter(|decision| decision_matches_story(decision, story))
+        .collect())
+}
+
+fn append_markdown_decisions(repo_root: &Path, decisions: &mut Vec<ContextDecision>) -> Result<()> {
+    let mut files = Vec::new();
+    collect_markdown_files(&repo_root.join("docs/decisions"), &mut files)?;
+
+    for path in files {
+        let rel = relative_path(repo_root, &path);
+        let id = path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("decision")
+            .to_owned();
+        if decisions
+            .iter()
+            .any(|decision| decision.id == id || decision.doc_path.as_deref() == Some(rel.as_str()))
+        {
+            continue;
+        }
+
+        let text = fs::read_to_string(&path)?;
+        decisions.push(ContextDecision {
+            id,
+            title: markdown_title(&text).unwrap_or_else(|| rel.clone()),
+            status: "accepted".to_owned(),
+            doc_path: Some(rel),
+        });
+    }
+
+    Ok(())
+}
+
+fn markdown_title(text: &str) -> Option<String> {
+    text.lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("# "))
+        .map(|line| line.trim_start_matches("# ").trim().to_owned())
+        .filter(|line| !line.is_empty())
+}
+
+fn load_context_tools(connection: &Connection) -> Result<Vec<ContextTool>> {
+    let mut statement = connection.prepare(
+        "SELECT name, kind, capability, status
+         FROM tool
+         WHERE capability IS NOT NULL AND TRIM(capability) <> ''
+         ORDER BY capability, name;",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok(ContextTool {
+            name: row.get(0)?,
+            kind: row.get(1)?,
+            capability: row.get(2)?,
+            status: row.get(3)?,
+        })
+    })?;
+    collect_rows(rows)
+}
+
+fn decision_matches_story(decision: &ContextDecision, story: &ContextPackStory) -> bool {
+    let story_text = format!(
+        "{} {} {} {} {} {}",
+        story.id,
+        story.title,
+        story.doc_text,
+        story.contract_doc.as_deref().unwrap_or(""),
+        story.verify_command.as_deref().unwrap_or(""),
+        story.notes.as_deref().unwrap_or("")
+    );
+    let decision_text = format!(
+        "{} {} {}",
+        decision.id,
+        decision.title,
+        decision.doc_path.as_deref().unwrap_or("")
+    )
+    .to_lowercase();
+
+    context_keywords(&story_text)
+        .into_iter()
+        .any(|keyword| decision_text.contains(&keyword))
+}
+
+fn context_keywords(text: &str) -> Vec<String> {
+    const STOP: &[&str] = &[
+        "docs",
+        "product",
+        "contract",
+        "story",
+        "decision",
+        "decisions",
+        "test",
+        "cargo",
+        "harness",
+        "context",
+        "pack",
+        "generator",
+        "generate",
+        "ready",
+        "paste",
+        "acceptance",
+        "criteria",
+        "generic",
+        "specific",
+        "required",
+        "validation",
+        "expectations",
+        "rules",
+        "rule",
+        "tool",
+        "registry",
+        "normal",
+        "planned",
+        "read",
+        "from",
+        "with",
+        "that",
+        "this",
+    ];
+
+    text.split(|character: char| !character.is_ascii_alphanumeric())
+        .map(str::to_lowercase)
+        .filter(|word| {
+            (word.len() >= 4 || matches!(word.as_str(), "cli" | "db"))
+                && !STOP.contains(&word.as_str())
+        })
+        .collect()
+}
+
+fn render_context_pack(
+    story: Option<&ContextPackStory>,
+    lane: &str,
+    decisions: &[ContextDecision],
+    tools: &[ContextTool],
+) -> String {
+    let mut output = String::new();
+    output.push_str("# Harness Context Pack\n\n");
+    output.push_str("## Target\n\n");
+    if let Some(story) = story {
+        output.push_str(&format!("- Story: `{}` - {}\n", story.id, story.title));
+        output.push_str(&format!("- Status: `{}`\n", story.status));
+    } else {
+        output.push_str("- Story: none\n");
+    }
+    output.push_str(&format!("- Lane: `{}`\n", lane_label(lane)));
+    output.push_str("- Source: Harness durable records and compiled context rules\n\n");
+
+    output.push_str("## Required Context\n\n");
+    for (path, reason) in context_docs_for_lane(lane) {
+        output.push_str(&format!("- `{path}` - {reason}\n"));
+    }
+    if let Some(doc_path) = story.and_then(|story| story.doc_path.as_deref()) {
+        output.push_str(&format!("- `{doc_path}` - story packet\n"));
+    }
+
+    output.push_str("\n## Product Contract\n\n");
+    match story.and_then(|story| story.contract_doc.as_deref()) {
+        Some(contract) => output.push_str(&format!("- `{contract}`\n")),
+        None => output.push_str("- No product contract recorded for this target.\n"),
+    }
+
+    output.push_str("\n## Related Stories\n\n");
+    if let Some(story) = story {
+        if story.related.is_empty() {
+            output.push_str("- No dependency or hierarchy links recorded.\n");
+        } else {
+            for item in &story.related {
+                output.push_str(&format!("- {item}\n"));
+            }
+        }
+    } else {
+        output.push_str("- Lane-only pack; choose `--story` for dependency and hierarchy links.\n");
+    }
+
+    output.push_str("\n## Relevant Decisions\n\n");
+    if decisions.is_empty() {
+        output.push_str("- No matching durable decisions found. Use `harness-cli query decisions` if scope expands.\n");
+    } else {
+        for decision in decisions {
+            let target = decision
+                .doc_path
+                .as_deref()
+                .unwrap_or("durable decision row only");
+            output.push_str(&format!(
+                "- `{target}` - {} (`{}`)\n",
+                decision.title, decision.status
+            ));
+        }
+    }
+
+    output.push_str("\n## Validation Expectations\n\n");
+    if let Some(story) = story {
+        output.push_str(&format!(
+            "- Unit: {}\n",
+            proof_expectation(story.unit_proof)
+        ));
+        output.push_str(&format!(
+            "- Integration: {}\n",
+            proof_expectation(story.integration_proof)
+        ));
+        output.push_str(&format!("- E2E: {}\n", proof_expectation(story.e2e_proof)));
+        output.push_str(&format!(
+            "- Platform: {}\n",
+            proof_expectation(story.platform_proof)
+        ));
+        match story.verify_command.as_deref() {
+            Some(command) if !command.trim().is_empty() => {
+                output.push_str(&format!("- Verify: `{command}`\n"));
+            }
+            _ => output.push_str("- Verify: no story verify command recorded\n"),
+        }
+        if let Some(evidence) = story.evidence.as_deref().filter(|value| !value.is_empty()) {
+            output.push_str(&format!("- Existing evidence: {evidence}\n"));
+        }
+    } else {
+        output.push_str("- Run `harness-cli query matrix` and select story-specific proof before implementation.\n");
+    }
+
+    output.push_str("\n## Tool Availability\n\n");
+    if tools.is_empty() {
+        output.push_str("- No optional external tools registered.\n");
+    } else {
+        for tool in tools {
+            output.push_str(&format!(
+                "- {}: {} (`{}`, {})\n",
+                tool.capability, tool.status, tool.name, tool.kind
+            ));
+        }
+    }
+
+    output.push_str("\n## Paste Prompt\n\n");
+    output.push_str("Read the required context above before changing files. Work only inside the selected lane, preserve the product contract, and use the validation expectations as the completion proof.\n");
+    output
+}
+
+fn context_docs_for_lane(lane: &str) -> Vec<(&'static str, &'static str)> {
+    match lane {
+        "tiny" => vec![
+            ("AGENTS.md", "agent entrypoint"),
+            ("docs/FEATURE_INTAKE.md", "risk lane rules"),
+            (
+                "scripts/bin/harness-cli query matrix",
+                "durable proof matrix",
+            ),
+            ("docs/CONTEXT_RULES.md", "context selection rules"),
+        ],
+        "high_risk" => vec![
+            ("AGENTS.md", "agent entrypoint"),
+            ("README.md", "project thesis and install flow"),
+            ("docs/HARNESS.md", "operating model"),
+            ("docs/FEATURE_INTAKE.md", "risk lane rules"),
+            ("docs/ARCHITECTURE.md", "boundary rules"),
+            ("docs/CONTEXT_RULES.md", "context selection rules"),
+            ("docs/TOOL_REGISTRY.md", "optional tool degrade rules"),
+            (
+                "docs/templates/high-risk-story/",
+                "high-risk planning template",
+            ),
+            ("docs/decisions/", "durable decision history"),
+            (
+                "scripts/bin/harness-cli query matrix",
+                "durable proof matrix",
+            ),
+        ],
+        _ => vec![
+            ("AGENTS.md", "agent entrypoint"),
+            ("README.md", "project thesis and install flow"),
+            ("docs/HARNESS.md", "operating model"),
+            ("docs/FEATURE_INTAKE.md", "risk lane rules"),
+            ("docs/CONTEXT_RULES.md", "context selection rules"),
+            ("docs/TOOL_REGISTRY.md", "optional tool degrade rules"),
+            ("docs/templates/story.md", "normal story packet shape"),
+            (
+                "scripts/bin/harness-cli query matrix",
+                "durable proof matrix",
+            ),
+        ],
+    }
+}
+
+fn lane_label(lane: &str) -> &str {
+    if lane == "high_risk" {
+        "high-risk"
+    } else {
+        lane
+    }
+}
+
+fn proof_expectation(value: i64) -> &'static str {
+    if value == 1 {
+        "required"
+    } else {
+        "not recorded"
     }
 }
 
@@ -3999,6 +4516,76 @@ implemented
             .any(|item| item.title == "Keep installer checksum"
                 && item.status == "implemented"
                 && item.risk.as_deref() == Some("high_risk")));
+    }
+
+    #[test]
+    fn context_pack_for_story_includes_docs_decisions_validation_and_tools() {
+        let (_temp_dir, repository) = isolated_test_repository();
+        repository.init().unwrap();
+        repository
+            .add_story(StoryAddInput {
+                id: "US-CONTEXT".to_owned(),
+                title: "CLI context pack".to_owned(),
+                risk_lane: RiskLane::Normal,
+                contract_doc: Some("docs/product/cli.md".to_owned()),
+                verify_command: Some("cargo test -p harness-cli context_pack".to_owned()),
+                notes: Some("Generate paste-ready context".to_owned()),
+            })
+            .unwrap();
+        repository
+            .update_story(StoryUpdateInput {
+                id: "US-CONTEXT".to_owned(),
+                status: Some("planned".to_owned()),
+                evidence: Some("unit and integration expected".to_owned()),
+                unit: Some(crate::domain::BoolFlag(1)),
+                integration: Some(crate::domain::BoolFlag(1)),
+                e2e: Some(crate::domain::BoolFlag(0)),
+                platform: Some(crate::domain::BoolFlag(0)),
+                verify_command: None,
+            })
+            .unwrap();
+        repository
+            .add_decision(DecisionAddInput {
+                id: "0005-prebuilt-rust-harness-cli".to_owned(),
+                title: "Prebuilt Rust Harness CLI".to_owned(),
+                status: "accepted".to_owned(),
+                doc_path: Some("docs/decisions/0005-prebuilt-rust-harness-cli.md".to_owned()),
+                verify_command: None,
+                predicted_impact: None,
+                notes: None,
+            })
+            .unwrap();
+        repository
+            .register_tool(ToolRegisterInput {
+                name: "context-docs".to_owned(),
+                command: "ctx-docs".to_owned(),
+                description: "Find relevant documentation for context packs".to_owned(),
+                args: Vec::new(),
+                responsibility: "Context selection".to_owned(),
+                force: true,
+                kind: "cli".to_owned(),
+                capability: Some("documentation-lookup".to_owned()),
+                scan_target: None,
+            })
+            .unwrap();
+
+        let pack = repository
+            .context_pack(ContextPackInput {
+                story_id: Some("US-CONTEXT".to_owned()),
+                lane: None,
+            })
+            .unwrap();
+
+        assert!(pack.contains("# Harness Context Pack"));
+        assert!(pack.contains("Story: `US-CONTEXT`"));
+        assert!(pack.contains("Lane: `normal`"));
+        assert!(pack.contains("`docs/CONTEXT_RULES.md`"));
+        assert!(pack.contains("`docs/product/cli.md`"));
+        assert!(pack.contains("`docs/decisions/0005-prebuilt-rust-harness-cli.md`"));
+        assert!(pack.contains("Unit: required"));
+        assert!(pack.contains("Integration: required"));
+        assert!(pack.contains("Verify: `cargo test -p harness-cli context_pack`"));
+        assert!(pack.contains("documentation-lookup: unknown"));
     }
 
     #[test]

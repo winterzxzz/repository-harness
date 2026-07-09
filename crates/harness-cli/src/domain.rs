@@ -379,6 +379,19 @@ pub fn compiled_tool_registry() -> Vec<ToolEntry> {
         ),
         tool(
             "harness-cli",
+            "context",
+            "context",
+            "Generate a paste-ready context pack.",
+            &[
+                ("story", "string", false),
+                ("lane", "enum", false),
+                ("out", "path", false),
+            ],
+            "Context selection",
+            "0.1.12",
+        ),
+        tool(
+            "harness-cli",
             "audit",
             "audit",
             "Run drift checks and compute entropy score.",

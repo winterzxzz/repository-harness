@@ -1,15 +1,15 @@
-use std::env;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::{env, fs};
 
 use clap::{Args, Parser, Subcommand};
 use thiserror::Error;
 
 use crate::application::{
     BacklogAddInput, BacklogCloseInput, BrownfieldImportResult, ChangesetApplyResult,
-    DbRebuildResult, DecisionAddInput, HarnessContext, HarnessService, InitResult, IntakeInput,
-    InterventionAddInput, InterventionFilter, MigrateResult, QueryTable, StoryAddInput,
-    StoryUpdateInput, ToolRegisterInput, TraceInput,
+    ContextPackInput, DbRebuildResult, DecisionAddInput, HarnessContext, HarnessService,
+    InitResult, IntakeInput, InterventionAddInput, InterventionFilter, MigrateResult, QueryTable,
+    StoryAddInput, StoryUpdateInput, ToolRegisterInput, TraceInput,
 };
 use crate::domain::{
     normalize_capability, parse_optional_integer, parse_tool_args, proof_display,
@@ -55,6 +55,8 @@ enum Command {
     ScoreTrace(ScoreTraceArgs),
     /// Score trace context reads against CONTEXT_RULES.md.
     ScoreContext { trace_id: String },
+    /// Generate a paste-ready context pack for a story or lane.
+    Context(ContextArgs),
     /// Run drift audit and entropy score.
     Audit,
     /// Generate improvement proposals from observed patterns.
@@ -346,6 +348,20 @@ struct ScoreTraceArgs {
 }
 
 #[derive(Args, Debug)]
+#[command(after_help = RISK_LANE_HELP)]
+struct ContextArgs {
+    /// Story id to compile context for.
+    #[arg(long)]
+    story: Option<String>,
+    /// Lane to compile generic context for.
+    #[arg(long, value_name = "tiny|normal|high-risk")]
+    lane: Option<String>,
+    /// Write markdown to this path instead of stdout.
+    #[arg(long)]
+    out: Option<PathBuf>,
+}
+
+#[derive(Args, Debug)]
 struct ProposeArgs {
     #[arg(long)]
     commit: bool,
@@ -462,6 +478,8 @@ pub enum InterfaceError {
     Infrastructure(#[from] crate::infrastructure::HarnessInfraError),
     #[error("could not determine current directory: {0}")]
     CurrentDir(std::io::Error),
+    #[error("context out write failed: {0}")]
+    ContextWrite(std::io::Error),
     #[error("query sql requires a SQL statement")]
     EmptySql,
 }
@@ -670,6 +688,18 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
             let id = parse_optional_integer("score-context: trace-id", Some(trace_id))?
                 .expect("value provided");
             print_context_score(&service.score_context(id)?);
+        }
+        Command::Context(args) => {
+            let pack = service.context_pack(ContextPackInput {
+                story_id: args.story,
+                lane: args.lane.as_deref().map(RiskLane::from_str).transpose()?,
+            })?;
+            if let Some(path) = args.out {
+                fs::write(&path, pack).map_err(InterfaceError::ContextWrite)?;
+                println!("Context pack written to {}.", path.display());
+            } else {
+                print!("{pack}");
+            }
         }
         Command::Audit => print_audit(&service.audit()?),
         Command::Propose(args) => print_proposals(&service.propose(args.commit)?),
@@ -1516,5 +1546,14 @@ mod tests {
             .render_long_help()
             .to_string();
         assert!(matrix_help.contains("--numeric"));
+
+        let context_help = command
+            .find_subcommand_mut("context")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+        assert!(context_help.contains("--story"));
+        assert!(context_help.contains("--lane <tiny|normal|high-risk>"));
+        assert!(context_help.contains("--out"));
     }
 }

@@ -115,6 +115,8 @@ scripts/bin/harness-cli decision add --id <id> --title <text> --doc docs/decisio
 scripts/bin/harness-cli trace   --summary <text> --outcome <outcome>
 scripts/bin/harness-cli score-trace
 scripts/bin/harness-cli score-context <trace-id>
+scripts/bin/harness-cli context --story <story-id>
+scripts/bin/harness-cli context --lane <tiny|normal|high-risk> --out context.md
 scripts/bin/harness-cli audit
 scripts/bin/harness-cli propose
 scripts/bin/harness-cli query   matrix
