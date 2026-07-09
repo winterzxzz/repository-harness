@@ -22,28 +22,28 @@ export function SummaryStrip({
       value: activeRun?.id ?? "none",
       detail: activeRun?.active_run ? `${activeRun.active_run} is the only task allowed in progress.` : "No active Symphony run.",
       icon: Radio,
-      className: activeRun?.active_run ? "border-blue-200 bg-blue-50 text-blue-950" : "border-border bg-card"
+      className: activeRun?.active_run ? "border-blue-200 bg-blue-50 text-blue-950 dark:border-blue-900/50 dark:bg-blue-950/20 dark:text-blue-200" : "border-border bg-card"
     },
     {
       label: "Safe to start",
       value: `${counts.Ready} ready`,
       detail: "Ready tasks have no incomplete blockers.",
       icon: PlayCircle,
-      className: "border-emerald-200 bg-emerald-50 text-emerald-950"
+      className: "border-emerald-200 bg-emerald-50 text-emerald-950 dark:border-emerald-900/50 dark:bg-emerald-950/20 dark:text-emerald-200"
     },
     {
       label: "Avoid for now",
       value: `${counts.Blocked} blocked`,
       detail: "Blocked work explains its missing dependency before action.",
       icon: ShieldAlert,
-      className: "border-zinc-300 bg-zinc-100 text-zinc-950"
+      className: "border-zinc-300 bg-zinc-100 text-zinc-950 dark:border-zinc-800 dark:bg-zinc-900/40 dark:text-zinc-400"
     },
     {
       label: "Needs decision",
       value: `${counts.Review} review`,
       detail: "Merge PR first, then approve local sync.",
       icon: GitPullRequestArrow,
-      className: "border-violet-200 bg-violet-50 text-violet-950"
+      className: "border-violet-200 bg-violet-50 text-violet-950 dark:border-violet-900/50 dark:bg-violet-950/20 dark:text-violet-200"
     }
   ];
 
@@ -166,8 +166,8 @@ function TaskCard({
         "group block min-h-[136px] w-full min-w-0 shrink-0 overflow-hidden rounded-md border bg-background p-3 text-left transition-colors focus-within:ring-2 focus-within:ring-ring hover:border-primary",
         cardChrome[item.board_state],
         selected && "border-primary ring-2 ring-ring/25",
-        blocked && "bg-zinc-100",
-        attention && "bg-red-50",
+        blocked && "bg-zinc-100 dark:bg-zinc-900/40",
+        attention && "bg-red-50 dark:bg-red-950/15",
         done && "opacity-80"
       )}
       data-testid="task-card"
@@ -217,30 +217,30 @@ function TaskCard({
 }
 
 const columnChrome: Record<BoardState, string> = {
-  Ready: "border-emerald-200/80",
-  Blocked: "border-zinc-300",
-  "In Progress": "border-blue-200/80",
-  Review: "border-violet-200/80",
-  "Needs Attention": "border-red-200/80",
-  Done: "border-teal-200/80"
+  Ready: "border-emerald-200/80 dark:border-emerald-900/40",
+  Blocked: "border-zinc-300 dark:border-zinc-800",
+  "In Progress": "border-blue-200/80 dark:border-blue-900/40",
+  Review: "border-violet-200/80 dark:border-violet-900/40",
+  "Needs Attention": "border-red-200/80 dark:border-red-900/40",
+  Done: "border-teal-200/80 dark:border-teal-900/40"
 };
 
 const columnIcon: Record<BoardState, string> = {
-  Ready: "border-emerald-200 bg-emerald-50 text-emerald-800",
-  Blocked: "border-zinc-300 bg-zinc-100 text-zinc-700",
-  "In Progress": "border-blue-200 bg-blue-50 text-blue-800",
-  Review: "border-violet-200 bg-violet-50 text-violet-800",
-  "Needs Attention": "border-red-200 bg-red-50 text-red-800",
-  Done: "border-teal-200 bg-teal-50 text-teal-800"
+  Ready: "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-400",
+  Blocked: "border-zinc-300 bg-zinc-100 text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900/50 dark:text-zinc-400",
+  "In Progress": "border-blue-200 bg-blue-50 text-blue-800 dark:border-blue-900/50 dark:bg-blue-950/30 dark:text-blue-400",
+  Review: "border-violet-200 bg-violet-50 text-violet-800 dark:border-violet-900/50 dark:bg-violet-950/30 dark:text-violet-400",
+  "Needs Attention": "border-red-200 bg-red-50 text-red-800 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-400",
+  Done: "border-teal-200 bg-teal-50 text-teal-800 dark:border-teal-900/50 dark:bg-teal-950/30 dark:text-teal-400"
 };
 
 const cardChrome: Record<BoardState, string> = {
-  Ready: "border-emerald-200 hover:bg-emerald-50/45",
-  Blocked: "border-zinc-300",
-  "In Progress": "border-blue-200 hover:bg-blue-50/45",
-  Review: "border-violet-200 hover:bg-violet-50/45",
-  "Needs Attention": "border-red-200",
-  Done: "border-teal-200 hover:bg-teal-50/45"
+  Ready: "border-emerald-200 hover:bg-emerald-50/45 dark:border-emerald-900/30 dark:hover:bg-emerald-950/10",
+  Blocked: "border-zinc-300 dark:border-zinc-800",
+  "In Progress": "border-blue-200 hover:bg-blue-50/45 dark:border-blue-900/30 dark:hover:bg-blue-950/10",
+  Review: "border-violet-200 hover:bg-violet-50/45 dark:border-violet-900/30 dark:hover:bg-violet-950/10",
+  "Needs Attention": "border-red-200 dark:border-red-900/30",
+  Done: "border-teal-200 hover:bg-teal-50/45 dark:border-teal-900/30 dark:hover:bg-teal-950/10"
 };
 
 const stateDot: Record<BoardState, string> = {

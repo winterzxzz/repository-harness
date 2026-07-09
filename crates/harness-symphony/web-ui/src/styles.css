@@ -3,22 +3,41 @@
 @tailwind utilities;
 
 :root {
-  --background: 0 0% 100%;
-  --foreground: 222 22% 8%;
-  --card: 0 0% 100%;
-  --card-foreground: 222 22% 8%;
-  --primary: 211 100% 40%;
-  --primary-foreground: 0 0% 100%;
-  --muted: 214 22% 96%;
-  --muted-foreground: 220 10% 34%;
-  --accent: 211 94% 94%;
-  --accent-foreground: 222 22% 8%;
-  --destructive: 0 70% 42%;
-  --destructive-foreground: 0 0% 100%;
-  --border: 216 16% 88%;
-  --input: 216 16% 84%;
-  --ring: 208 92% 47%;
-  --warning: 25 100% 43%;
+  --background: oklch(99% 0.005 250);
+  --foreground: oklch(18% 0.015 250);
+  --card: oklch(100% 0 0);
+  --card-foreground: oklch(18% 0.015 250);
+  --primary: oklch(52% 0.18 255);
+  --primary-foreground: oklch(100% 0 0);
+  --muted: oklch(96% 0.005 250);
+  --muted-foreground: oklch(45% 0.015 250);
+  --accent: oklch(92% 0.02 255);
+  --accent-foreground: oklch(18% 0.015 250);
+  --destructive: oklch(55% 0.18 20);
+  --destructive-foreground: oklch(98% 0.01 20);
+  --border: oklch(90% 0.01 250);
+  --input: oklch(88% 0.01 250);
+  --ring: oklch(52% 0.18 255);
+  --warning: oklch(65% 0.16 50);
+}
+
+.dark {
+  --background: oklch(10% 0.015 250);
+  --foreground: oklch(97% 0.01 250);
+  --card: oklch(13% 0.015 250);
+  --card-foreground: oklch(95% 0.01 250);
+  --primary: oklch(62% 0.17 255);
+  --primary-foreground: oklch(100% 0 0);
+  --muted: oklch(16% 0.015 250);
+  --muted-foreground: oklch(70% 0.015 250);
+  --accent: oklch(18% 0.02 250);
+  --accent-foreground: oklch(90% 0.015 250);
+  --destructive: oklch(50% 0.18 20);
+  --destructive-foreground: oklch(98% 0.01 20);
+  --border: oklch(20% 0.015 250);
+  --input: oklch(18% 0.015 250);
+  --ring: oklch(62% 0.17 255);
+  --warning: oklch(70% 0.16 50);
 }
 
 * {
@@ -29,8 +48,8 @@ body {
   margin: 0;
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  background: hsl(var(--background));
-  color: hsl(var(--foreground));
+  background: var(--background);
+  color: var(--foreground);
 }
 
 button,

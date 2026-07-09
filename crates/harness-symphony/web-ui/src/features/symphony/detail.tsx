@@ -79,7 +79,7 @@ export function TaskDetailOverlay({
   return (
     <div
       ref={overlayRef}
-      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-foreground/25 px-3 py-4 backdrop-blur-[2px] sm:px-5 lg:py-8"
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/60 px-3 py-4 backdrop-blur-[4px] sm:px-5 lg:py-8"
       data-testid="task-detail-overlay"
       onKeyDown={handleKeyDown}
       onMouseDown={(event) => {
