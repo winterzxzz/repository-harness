@@ -124,7 +124,21 @@ struct StartRunResponse {
     run_id: String,
     story_id: String,
     status: String,
+    agent: String,
 }
+
+#[derive(Debug, Deserialize, Default)]
+struct StartRunRequest {
+    agent: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SettingsPayload {
+    default_agent: String,
+}
+
+const SELECTABLE_AGENTS: [&str; 2] = ["codex", "opencode"];
+const DEFAULT_AGENT_SETTING: &str = "default_agent";
 
 #[derive(Debug, Serialize)]
 struct PrRetryResponse {
@@ -166,6 +180,7 @@ struct ReviewResponse {
     run_id: String,
     story_id: String,
     status: String,
+    agent: String,
     outcome: Option<String>,
     summary: Option<String>,
     result: Option<Value>,
@@ -264,9 +279,11 @@ fn handle_request(config: &ResolvedConfig, request: &str) -> Result<HttpResponse
             json_response(200, &BoardResponse { items })
         }
         (Some("POST"), Some("/api/intake")) => create_guided_intake_response(config, request),
+        (Some("GET"), Some("/api/settings")) => settings_response(config),
+        (Some("PUT"), Some("/api/settings")) => update_settings_response(config, request),
         (Some("POST"), Some(path)) if start_path_story_id(path).is_some() => {
             let story_id = start_path_story_id(path).unwrap_or_default();
-            start_run_response(config, &story_id)
+            start_run_response(config, &story_id, request)
         }
         (Some("POST"), Some(path)) if recover_path_story_id(path).is_some() => {
             let story_id = recover_path_story_id(path).unwrap_or_default();
@@ -297,12 +314,14 @@ fn handle_request(config: &ResolvedConfig, request: &str) -> Result<HttpResponse
             pr_retry_response(config, &run_id)
         }
         (Some("GET"), Some(path)) => static_response(config, path),
-        (Some(_), Some("/health" | "/api/board" | "/api/intake")) => json_response(
-            405,
-            &ErrorResponse {
-                error: "method not allowed".to_owned(),
-            },
-        ),
+        (Some(_), Some("/health" | "/api/board" | "/api/intake" | "/api/settings")) => {
+            json_response(
+                405,
+                &ErrorResponse {
+                    error: "method not allowed".to_owned(),
+                },
+            )
+        }
         (Some(_), Some(path))
             if start_path_story_id(path).is_some()
                 || recover_path_story_id(path).is_some()
@@ -451,12 +470,15 @@ fn recover_run_response(config: &ResolvedConfig, story_id: &str) -> Result<HttpR
             },
         );
     }
-    match prepare_run(config, story_id) {
+    let agent = default_agent(config)?;
+    let config = config_for_agent(config, &agent);
+    match prepare_run(&config, story_id) {
         Ok(prepared) => {
             let response = StartRunResponse {
                 run_id: prepared.run_id.clone(),
                 story_id: prepared.story_id.clone(),
                 status: "recovering".to_owned(),
+                agent,
             };
             spawn_run(config.clone(), prepared);
             json_response(202, &response)
@@ -622,7 +644,101 @@ fn pr_retry_response(config: &ResolvedConfig, run_id: &str) -> Result<HttpRespon
     )
 }
 
-fn start_run_response(config: &ResolvedConfig, story_id: &str) -> Result<HttpResponse, WebError> {
+fn default_agent(config: &ResolvedConfig) -> Result<String, WebError> {
+    let stored = RunStateStore::new(config.state_db.clone()).get_setting(DEFAULT_AGENT_SETTING)?;
+    Ok(stored.unwrap_or_else(|| config.agent_adapter.clone()))
+}
+
+fn settings_response(config: &ResolvedConfig) -> Result<HttpResponse, WebError> {
+    json_response(
+        200,
+        &SettingsPayload {
+            default_agent: default_agent(config)?,
+        },
+    )
+}
+
+fn update_settings_response(
+    config: &ResolvedConfig,
+    request: &str,
+) -> Result<HttpResponse, WebError> {
+    let payload = match serde_json::from_str::<SettingsPayload>(request_body(request)) {
+        Ok(payload) => payload,
+        Err(error) => {
+            return json_response(
+                400,
+                &ErrorResponse {
+                    error: format!("invalid settings request: {error}"),
+                },
+            );
+        }
+    };
+    if !SELECTABLE_AGENTS.contains(&payload.default_agent.as_str()) {
+        return json_response(
+            400,
+            &ErrorResponse {
+                error: format!(
+                    "unsupported agent '{}'. Selectable agents: {}",
+                    payload.default_agent,
+                    SELECTABLE_AGENTS.join(", ")
+                ),
+            },
+        );
+    }
+    RunStateStore::new(config.state_db.clone())
+        .set_setting(DEFAULT_AGENT_SETTING, &payload.default_agent)?;
+    json_response(200, &payload)
+}
+
+fn config_for_agent(config: &ResolvedConfig, agent: &str) -> ResolvedConfig {
+    let mut effective = config.clone();
+    if effective.agent_adapter != agent {
+        effective.agent_adapter = agent.to_owned();
+        effective.agent_command = Vec::new();
+    }
+    effective
+}
+
+fn start_run_response(
+    config: &ResolvedConfig,
+    story_id: &str,
+    request: &str,
+) -> Result<HttpResponse, WebError> {
+    let body = request_body(request);
+    let payload = if body.trim().is_empty() {
+        StartRunRequest::default()
+    } else {
+        match serde_json::from_str::<StartRunRequest>(body) {
+            Ok(payload) => payload,
+            Err(error) => {
+                return json_response(
+                    400,
+                    &ErrorResponse {
+                        error: format!("invalid start request: {error}"),
+                    },
+                );
+            }
+        }
+    };
+    let requested_agent = payload.agent;
+    if let Some(agent) = requested_agent.as_deref() {
+        if !SELECTABLE_AGENTS.contains(&agent) {
+            return json_response(
+                400,
+                &ErrorResponse {
+                    error: format!(
+                        "unsupported agent '{agent}'. Selectable agents: {}",
+                        SELECTABLE_AGENTS.join(", ")
+                    ),
+                },
+            );
+        }
+    }
+    let agent = match requested_agent.clone() {
+        Some(agent) => agent,
+        None => default_agent(config)?,
+    };
+    let config = config_for_agent(config, &agent);
     if let Some(active) = RunStateStore::new(config.state_db.clone()).active_run()? {
         return json_response(
             409,
@@ -631,12 +747,17 @@ fn start_run_response(config: &ResolvedConfig, story_id: &str) -> Result<HttpRes
             },
         );
     }
-    match prepare_run(config, story_id) {
+    match prepare_run(&config, story_id) {
         Ok(prepared) => {
+            if requested_agent.is_some() {
+                RunStateStore::new(config.state_db.clone())
+                    .set_setting(DEFAULT_AGENT_SETTING, &agent)?;
+            }
             let response = StartRunResponse {
                 run_id: prepared.run_id.clone(),
                 story_id: prepared.story_id.clone(),
                 status: "started".to_owned(),
+                agent,
             };
             spawn_run(config.clone(), prepared);
             json_response(202, &response)
@@ -800,6 +921,7 @@ fn review_response(config: &ResolvedConfig, run_id: &str) -> Result<HttpResponse
             run_id: run.run_id,
             story_id: run.story_id,
             status: run.status,
+            agent: run.agent,
             outcome,
             summary,
             result,
@@ -1690,6 +1812,7 @@ mod tests {
             pr_status: "missing".to_owned(),
             sync_status: "not_applied".to_owned(),
             next_action: "inspect run".to_owned(),
+            agent: "codex".to_owned(),
         }
     }
 
@@ -1731,6 +1854,65 @@ mod tests {
 
         assert!(response.starts_with("HTTP/1.1 200 OK"));
         assert!(response.ends_with(r#"{"ok":true}"#));
+    }
+
+    #[test]
+    fn settings_default_agent_falls_back_to_config_adapter() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = test_config(&temp_dir);
+
+        let response = handle_request(&config, "GET /api/settings HTTP/1.1\r\n\r\n").unwrap();
+
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
+        assert!(response.contains(&format!(r#""default_agent":"{}""#, config.agent_adapter)));
+    }
+
+    #[test]
+    fn settings_update_persists_default_agent() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = test_config(&temp_dir);
+
+        let update = handle_request(
+            &config,
+            "PUT /api/settings HTTP/1.1\r\n\r\n{\"default_agent\":\"opencode\"}",
+        )
+        .unwrap();
+        assert!(update.starts_with("HTTP/1.1 200 OK"));
+
+        let fetched = handle_request(&config, "GET /api/settings HTTP/1.1\r\n\r\n").unwrap();
+        assert!(fetched.contains(r#""default_agent":"opencode""#));
+    }
+
+    #[test]
+    fn settings_update_rejects_unknown_agent() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = test_config(&temp_dir);
+
+        let response = handle_request(
+            &config,
+            "PUT /api/settings HTTP/1.1\r\n\r\n{\"default_agent\":\"clippy\"}",
+        )
+        .unwrap();
+
+        assert!(response.starts_with("HTTP/1.1 400"));
+        assert!(response.contains("codex, opencode"));
+    }
+
+    #[test]
+    fn start_request_rejects_unknown_agent_without_touching_default() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = test_config(&temp_dir);
+        seed_story(&config.harness_db);
+
+        let response = handle_request(
+            &config,
+            "POST /api/tasks/US-WEB/start HTTP/1.1\r\n\r\n{\"agent\":\"clippy\"}",
+        )
+        .unwrap();
+
+        assert!(response.starts_with("HTTP/1.1 400"));
+        let settings = handle_request(&config, "GET /api/settings HTTP/1.1\r\n\r\n").unwrap();
+        assert!(settings.contains(&format!(r#""default_agent":"{}""#, config.agent_adapter)));
     }
 
     #[test]
@@ -2655,6 +2837,35 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(active.story_id, "US-START");
+    }
+
+    #[test]
+    fn start_request_with_agent_override_runs_and_remembers_default() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        init_git_repo(temp_dir.path());
+        let mut config = test_config(&temp_dir);
+        config.agent_adapter = "opencode".to_owned();
+        let fake_opencode = temp_dir.path().join("fake-opencode");
+        fs::write(&fake_opencode, "#!/usr/bin/env sh\nexit 0\n").unwrap();
+        make_executable(&fake_opencode);
+        config.agent_command = vec![fake_opencode.to_str().unwrap().to_owned()];
+        seed_runnable_story(&config.harness_db, "US-START");
+
+        let response = handle_request(
+            &config,
+            "POST /api/tasks/US-START/start HTTP/1.1\r\n\r\n{\"agent\":\"opencode\"}",
+        )
+        .unwrap();
+
+        assert!(response.starts_with("HTTP/1.1 202 Accepted"));
+        assert!(response.contains(r#""agent":"opencode""#));
+        let store = RunStateStore::new(config.state_db.clone());
+        assert_eq!(
+            store.get_setting("default_agent").unwrap(),
+            Some("opencode".to_owned())
+        );
+        let active = store.active_run().unwrap().unwrap();
+        assert_eq!(active.agent, "opencode");
     }
 
     #[test]

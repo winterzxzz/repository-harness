@@ -21,7 +21,7 @@ const lifecycleTitles: Record<string, string> = {
   "thread/status/changed": "Thread status changed"
 };
 
-export function formatRunLog(events: unknown[]): RunLogEntry[] {
+export function formatRunLog(events: unknown[], agentName = "Codex"): RunLogEntry[] {
   const entries: RunLogEntry[] = [];
   let deltaBuffer: DeltaBuffer | null = null;
 
@@ -61,9 +61,9 @@ export function formatRunLog(events: unknown[]): RunLogEntry[] {
     if (method && lifecycleTitles[method]) {
       entries.push({
         kind: "progress",
-        source: "Codex",
+        source: agentName,
         title: lifecycleTitles[method],
-        message: lifecycleMessage(method, params),
+        message: lifecycleMessage(method, params, agentName),
         timestamp,
         method
       });
@@ -82,7 +82,7 @@ export function formatRunLog(events: unknown[]): RunLogEntry[] {
       return;
     }
 
-    const completedMessage = completedItemMessage(method, params, timestamp);
+    const completedMessage = completedItemMessage(method, params, timestamp, agentName);
     if (completedMessage) {
       entries.push(completedMessage);
       return;
@@ -95,17 +95,17 @@ export function formatRunLog(events: unknown[]): RunLogEntry[] {
   return entries;
 }
 
-function lifecycleMessage(method: string, params: unknown): string {
+function lifecycleMessage(method: string, params: unknown, agentName: string): string {
   if (method === "turn/completed") {
     const status = getString(params, ["turn", "status"]) ?? "unknown";
     const error = getString(params, ["turn", "error", "message"]);
     return error ? `Turn ended with status ${status}: ${error}` : `Turn ended with status ${status}.`;
   }
   if (method === "turn/started") {
-    return "Codex started working on this task.";
+    return `${agentName} started working on this task.`;
   }
   if (method === "turn/diff/updated") {
-    return "Codex updated the working tree diff.";
+    return `${agentName} updated the working tree diff.`;
   }
   if (method === "thread/status/changed") {
     const status = getString(params, ["status"]) ?? getString(params, ["thread", "status"]) ?? "updated";
@@ -115,10 +115,15 @@ function lifecycleMessage(method: string, params: unknown): string {
     const threadId = getString(params, ["thread", "id"]);
     return threadId ? `Conversation ${threadId} is ready.` : "Conversation is ready.";
   }
-  return "Codex reported progress.";
+  return `${agentName} reported progress.`;
 }
 
-function completedItemMessage(method: string | undefined, params: unknown, timestamp?: string): RunLogEntry | null {
+function completedItemMessage(
+  method: string | undefined,
+  params: unknown,
+  timestamp: string | undefined,
+  agentName: string
+): RunLogEntry | null {
   if (method !== "item/completed") {
     return null;
   }
@@ -136,9 +141,9 @@ function completedItemMessage(method: string | undefined, params: unknown, times
   }
   return {
     kind: "progress",
-    source: "Codex",
+    source: agentName,
     title: "Item completed",
-    message: itemType ? `${humanize(itemType)} completed.` : "Codex completed an item.",
+    message: itemType ? `${humanize(itemType)} completed.` : `${agentName} completed an item.`,
     timestamp,
     method
   };

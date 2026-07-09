@@ -19,6 +19,7 @@ import { StatusBadge } from "./status-badge";
 import type { BoardItem, FailureSummary, PrMergedResponse, PrRetryResponse, RecoveryAction, ReviewResponse, RunEvent } from "./types";
 import { cn } from "../../lib/utils";
 import { formatRunLog } from "../../run-log";
+import { agentLabel } from "./constants";
 
 type ConfettiBurst = {
   id: number;
@@ -440,7 +441,11 @@ export function TaskDetail({
       {reviewState.status === "error" ? <ReviewStatusPanel state={reviewState} /> : null}
       {item.active_run && preservedFailedReview ? <PriorFailureEvidence review={preservedFailedReview} /> : null}
 
-      {item.active_run ? <EventLog events={events} live /> : review ? <EventLog events={review.events} /> : null}
+      {item.active_run ? (
+        <EventLog events={events} live agent={review?.agent} />
+      ) : review ? (
+        <EventLog events={review.events} agent={review.agent} />
+      ) : null}
     </aside>
   );
 }
@@ -620,8 +625,8 @@ function PriorFailureEvidence({ review }: { review: ReviewResponse }) {
   );
 }
 
-function EventLog({ events, live = false }: { events: RunEvent[]; live?: boolean }) {
-  const entries = formatRunLog(events).slice(-12);
+function EventLog({ events, live = false, agent }: { events: RunEvent[]; live?: boolean; agent?: string }) {
+  const entries = formatRunLog(events, agentLabel(agent ?? "codex")).slice(-12);
 
   return (
     <div id="logs" className="flex flex-col gap-3 p-4" role={live ? "status" : undefined} aria-live={live ? "polite" : undefined}>

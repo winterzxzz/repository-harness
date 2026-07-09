@@ -303,6 +303,7 @@ mod tests {
             pr_status: "missing".to_owned(),
             sync_status: "not_applied".to_owned(),
             next_action: "review".to_owned(),
+            agent: "codex".to_owned(),
         }
     }
 

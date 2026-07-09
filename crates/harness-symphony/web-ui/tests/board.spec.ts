@@ -353,9 +353,10 @@ test("ready card runs codex from the board without opening detail", async ({ pag
   const runButton = readyCard.getByRole("button", { name: "Run with Codex" });
   await expect(runButton).toBeVisible();
   const readyColumnBox = await readyColumn.boundingBox();
+  const runControlBox = await runButton.locator("..").boundingBox();
   const runButtonBox = await runButton.boundingBox();
   expect(readyColumnBox?.width ?? 0, "Ready column keeps readable action width").toBeGreaterThanOrEqual(236);
-  expect(runButtonBox?.width ?? 0, "Run with Codex button width").toBeGreaterThanOrEqual(188);
+  expect(runControlBox?.width ?? 0, "Run split control width").toBeGreaterThanOrEqual(188);
   expect(runButtonBox?.height ?? 0, "Run with Codex button height").toBeGreaterThanOrEqual(34);
   await expectNoHorizontalOverflow(runButton, "Run with Codex button");
   await runButton.click();
@@ -363,6 +364,81 @@ test("ready card runs codex from the board without opening detail", async ({ pag
   await expect.poll(async () => started).toBe(true);
   await expect(page.getByRole("dialog", { name: "Selected work detail" })).toHaveCount(0);
   await expect(page.getByRole("region", { name: "In Progress column" }).getByRole("button", { name: /US-076/ })).toBeVisible();
+});
+
+test("agent dropdown runs with opencode and remembers the choice", async ({ page }) => {
+  let startBody: unknown = null;
+  page.on("dialog", async (dialog) => {
+    expect(dialog.message()).toContain("Run US-078 with OpenCode");
+    await dialog.accept();
+  });
+  await page.route("**/api/settings", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ default_agent: "codex" })
+    });
+  });
+  await page.route("**/api/board", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ items: [boardItem("US-078", "OpenCode Agent Selection", "Ready")] })
+    });
+  });
+  await page.route("**/api/tasks/US-078/start", async (route) => {
+    startBody = route.request().postDataJSON();
+    await route.fulfill({
+      status: 202,
+      contentType: "application/json",
+      body: JSON.stringify({ run_id: "run_us_078", story_id: "US-078", status: "started", agent: "opencode" })
+    });
+  });
+
+  await page.goto("/");
+
+  const readyCard = page.getByRole("region", { name: "Ready column" }).getByTestId("task-card").filter({ hasText: "US-078" });
+  await expect(readyCard.getByRole("button", { name: "Run with Codex" })).toBeVisible();
+  await readyCard.getByRole("button", { name: "Choose agent" }).click();
+  await page.getByRole("menuitem", { name: "Run with OpenCode" }).click();
+
+  await expect.poll(async () => startBody).toEqual({ agent: "opencode" });
+  await expect(readyCard.getByRole("button", { name: "Run with OpenCode" })).toBeVisible();
+});
+
+test("settings view saves the default agent and relabels the run button", async ({ page }) => {
+  let savedAgent: string | null = null;
+  await page.route("**/api/settings", async (route) => {
+    if (route.request().method() === "PUT") {
+      const payload = route.request().postDataJSON() as { default_agent: string };
+      savedAgent = payload.default_agent;
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({ default_agent: payload.default_agent })
+      });
+      return;
+    }
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ default_agent: savedAgent ?? "codex" })
+    });
+  });
+  await page.route("**/api/board", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ items: [boardItem("US-078", "OpenCode Agent Selection", "Ready")] })
+    });
+  });
+
+  await page.goto("/");
+
+  await page.getByRole("tab", { name: "Settings" }).click();
+  await page.getByRole("radio", { name: /OpenCode/ }).check({ force: true });
+  await page.getByRole("button", { name: "Save default agent" }).click();
+
+  await expect.poll(async () => savedAgent).toBe("opencode");
+
+  await page.getByRole("tab", { name: "Work Board" }).click();
+  const readyCard = page.getByRole("region", { name: "Ready column" }).getByTestId("task-card").filter({ hasText: "US-078" });
+  await expect(readyCard.getByRole("button", { name: "Run with OpenCode" })).toBeVisible();
 });
 
 test("delete action is hidden for non-ready tasks", async ({ page }) => {

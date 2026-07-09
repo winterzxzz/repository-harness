@@ -139,7 +139,8 @@ pub fn prepare_run(config: &ResolvedConfig, story_id: &str) -> Result<PreparedRu
     write_contract(&contract_path, &contract)?;
     write_agents_shim(&worktree.join("AGENTS.md"), &contract_path, &contract)?;
 
-    RunStateStore::new(config.state_db.clone()).add_run(NewRunRecord {
+    let store = RunStateStore::new(config.state_db.clone());
+    store.add_run(NewRunRecord {
         run_id: run_id.clone(),
         story_id: story.id,
         branch: Some(branch.clone()),
@@ -150,6 +151,7 @@ pub fn prepare_run(config: &ResolvedConfig, story_id: &str) -> Result<PreparedRu
         sync_status: "not_applied".to_owned(),
         next_action: format!("Launch agent for {story_id} or inspect {contract_path:?}"),
     })?;
+    store.record_run_agent(&run_id, &config.agent_adapter)?;
 
     Ok(PreparedRun {
         run_id,
@@ -196,7 +198,8 @@ pub fn prepare_here_run(config: &ResolvedConfig, story_id: &str) -> Result<Prepa
     );
     write_contract(&contract_path, &contract)?;
 
-    RunStateStore::new(config.state_db.clone()).add_run(NewRunRecord {
+    let store = RunStateStore::new(config.state_db.clone());
+    store.add_run(NewRunRecord {
         run_id: run_id.clone(),
         story_id: story_id.to_owned(),
         branch: None,
@@ -207,6 +210,7 @@ pub fn prepare_here_run(config: &ResolvedConfig, story_id: &str) -> Result<Prepa
         sync_status: "not_applied".to_owned(),
         next_action: format!("Launch lightweight run for {story_id} or inspect {contract_path:?}"),
     })?;
+    store.record_run_agent(&run_id, &config.agent_adapter)?;
 
     Ok(PreparedRun {
         run_id,

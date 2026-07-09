@@ -1,3 +1,9 @@
+export type AgentId = "codex" | "opencode";
+
+export type SettingsResponse = {
+  default_agent: AgentId;
+};
+
 export type BoardState =
   | "Ready"
   | "Blocked"
@@ -71,6 +77,7 @@ export type ReviewResponse = {
   run_id: string;
   story_id: string;
   status: string;
+  agent: string;
   outcome: string | null;
   summary: string | null;
   result: unknown | null;

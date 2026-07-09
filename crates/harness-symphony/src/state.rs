@@ -31,6 +31,7 @@ pub struct RunRecord {
     pub pr_status: String,
     pub sync_status: String,
     pub next_action: String,
+    pub agent: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,6 +105,11 @@ impl RunStateStore {
                 last_error TEXT,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             );",
         )?;
         ensure_column(
@@ -117,6 +123,12 @@ impl RunStateStore {
             "run_state",
             "pr_status",
             "ALTER TABLE run_state ADD COLUMN pr_status TEXT NOT NULL DEFAULT 'missing';",
+        )?;
+        ensure_column(
+            &connection,
+            "run_state",
+            "agent",
+            "ALTER TABLE run_state ADD COLUMN agent TEXT NOT NULL DEFAULT 'codex';",
         )?;
         Ok(())
     }
@@ -176,7 +188,7 @@ impl RunStateStore {
         let connection = Connection::open(&self.path)?;
         let mut statement = connection.prepare(
             "SELECT run_id, story_id, branch, worktree, lightweight, status, result_path,
-                    pr_url, pr_status, sync_status, next_action
+                    pr_url, pr_status, sync_status, next_action, agent
              FROM run_state
              ORDER BY created_at DESC, run_id DESC;",
         )?;
@@ -191,7 +203,7 @@ impl RunStateStore {
         connection
             .query_row(
                 "SELECT run_id, story_id, branch, worktree, lightweight, status, result_path,
-                        pr_url, pr_status, sync_status, next_action
+                        pr_url, pr_status, sync_status, next_action, agent
                  FROM run_state
                  WHERE run_id=?1;",
                 params![run_id],
@@ -207,7 +219,7 @@ impl RunStateStore {
         connection
             .query_row(
                 "SELECT run_id, story_id, branch, worktree, lightweight, status, result_path,
-                        pr_url, pr_status, sync_status, next_action
+                        pr_url, pr_status, sync_status, next_action, agent
                  FROM run_state
                  WHERE status IN ('prepared', 'running')
                  ORDER BY created_at ASC
@@ -217,6 +229,48 @@ impl RunStateStore {
             )
             .optional()
             .map_err(StateError::from)
+    }
+
+    pub fn record_run_agent(&self, run_id: &str, agent: &str) -> Result<(), StateError> {
+        self.init()?;
+        let connection = Connection::open(&self.path)?;
+        connection.execute(
+            "UPDATE run_state
+             SET agent=?1, updated_at=datetime('now')
+             WHERE run_id=?2;",
+            params![agent, run_id],
+        )?;
+        if connection.changes() == 0 {
+            return Err(StateError::RunNotFound(run_id.to_owned()));
+        }
+        Ok(())
+    }
+
+    pub fn get_setting(&self, key: &str) -> Result<Option<String>, StateError> {
+        self.init()?;
+        let connection = Connection::open(&self.path)?;
+        connection
+            .query_row(
+                "SELECT value FROM settings WHERE key=?1;",
+                params![key],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(StateError::from)
+    }
+
+    pub fn set_setting(&self, key: &str, value: &str) -> Result<(), StateError> {
+        self.init()?;
+        let connection = Connection::open(&self.path)?;
+        connection.execute(
+            "INSERT INTO settings (key, value, updated_at)
+             VALUES (?1, ?2, datetime('now'))
+             ON CONFLICT(key) DO UPDATE SET
+                value=excluded.value,
+                updated_at=datetime('now');",
+            params![key, value],
+        )?;
+        Ok(())
     }
 
     pub fn update_pr_url(&self, run_id: &str, pr_url: &str) -> Result<(), StateError> {
@@ -472,6 +526,7 @@ fn run_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunRecord> {
         pr_status: row.get(8)?,
         sync_status: row.get(9)?,
         next_action: row.get(10)?,
+        agent: row.get(11)?,
     })
 }
 
@@ -626,6 +681,41 @@ mod tests {
         assert_eq!(run.status, "completed");
         assert_eq!(run.pr_status, "failed");
         assert!(run.next_action.contains("gh auth failed"));
+    }
+
+    #[test]
+    fn run_agent_defaults_to_codex_and_can_be_recorded() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = RunStateStore::new(temp_dir.path().join(".symphony/state.db"));
+
+        store.add_run(new_record("run_1", "prepared")).unwrap();
+        assert_eq!(store.show_run("run_1").unwrap().agent, "codex");
+
+        store.record_run_agent("run_1", "opencode").unwrap();
+        assert_eq!(store.show_run("run_1").unwrap().agent, "opencode");
+
+        let missing = store
+            .record_run_agent("run_missing", "opencode")
+            .unwrap_err();
+        assert!(matches!(missing, StateError::RunNotFound(_)));
+    }
+
+    #[test]
+    fn settings_round_trip_and_missing_key_is_none() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = RunStateStore::new(temp_dir.path().join(".symphony/state.db"));
+
+        assert_eq!(store.get_setting("default_agent").unwrap(), None);
+        store.set_setting("default_agent", "opencode").unwrap();
+        assert_eq!(
+            store.get_setting("default_agent").unwrap(),
+            Some("opencode".to_owned())
+        );
+        store.set_setting("default_agent", "codex").unwrap();
+        assert_eq!(
+            store.get_setting("default_agent").unwrap(),
+            Some("codex".to_owned())
+        );
     }
 
     #[test]

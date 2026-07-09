@@ -20,7 +20,7 @@ const CODEX_IDLE_RECONCILE_SECONDS: u64 = 1;
 pub enum AgentError {
     #[error("agent.command is not configured. Set agent.command in .harness/symphony.yml.")]
     MissingCommand,
-    #[error("unsupported agent adapter '{0}'. Supported adapters: custom, codex")]
+    #[error("unsupported agent adapter '{0}'. Supported adapters: custom, codex, opencode")]
     UnsupportedAdapter(String),
     #[error("agent command failed with status {status}: {stderr}")]
     CommandFailed { status: String, stderr: String },
@@ -36,6 +36,7 @@ pub fn run_agent(config: &ResolvedConfig, prepared: &PreparedRun) -> Result<(), 
     match config.agent_adapter.as_str() {
         "custom" => run_custom_agent(config, prepared),
         "codex" => run_codex_agent(config, prepared),
+        "opencode" => run_opencode_agent(config, prepared),
         other => Err(AgentError::UnsupportedAdapter(other.to_owned())),
     }
 }
@@ -46,6 +47,9 @@ pub fn resolved_agent_command(config: &ResolvedConfig) -> Vec<String> {
     }
     if config.agent_adapter == "codex" {
         return vec!["codex".to_owned(), "app-server".to_owned()];
+    }
+    if config.agent_adapter == "opencode" {
+        return vec!["opencode".to_owned(), "run".to_owned(), "--auto".to_owned()];
     }
     Vec::new()
 }
@@ -64,6 +68,10 @@ pub fn agent_adapter_status(config: &ResolvedConfig) -> Result<String, AgentErro
             "codex app-server command: {}; runtime: uncapped",
             resolved_agent_command(config).join(" ")
         )),
+        "opencode" => Ok(format!(
+            "opencode headless command: {}; runtime: uncapped",
+            resolved_agent_command(config).join(" ")
+        )),
         other => Err(AgentError::UnsupportedAdapter(other.to_owned())),
     }
 }
@@ -80,6 +88,33 @@ fn run_custom_agent(config: &ResolvedConfig, prepared: &PreparedRun) -> Result<(
     Err(AgentError::CommandFailed {
         status: output.status.to_string(),
         stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+    })
+}
+
+fn run_opencode_agent(config: &ResolvedConfig, prepared: &PreparedRun) -> Result<(), AgentError> {
+    let mut command = resolved_agent_command(config);
+    if command.is_empty() {
+        return Err(AgentError::MissingCommand);
+    }
+    command.push(agent_prompt(config, prepared));
+    let output = base_command(&command, prepared).output()?;
+    let output_log_path = prepared
+        .contract_path
+        .parent()
+        .unwrap_or(&prepared.worktree)
+        .join("AGENT_OUTPUT.log");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    append_event_log(
+        &output_log_path,
+        &format!("--- opencode exit: {}\n{stdout}\n{stderr}", output.status),
+    )?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(AgentError::CommandFailed {
+        status: output.status.to_string(),
+        stderr: stderr.trim().to_owned(),
     })
 }
 
@@ -371,7 +406,7 @@ fn send_turn_start(
                 "input": [
                     {
                         "type": "text",
-                        "text": codex_prompt(config, prepared),
+                        "text": agent_prompt(config, prepared),
                         "text_elements": []
                     }
                 ]
@@ -420,7 +455,7 @@ fn turn_error_from_query<'a>(message: &'a Value, turn_id: &str) -> Option<&'a st
         .and_then(Value::as_str)
 }
 
-fn codex_prompt(config: &ResolvedConfig, prepared: &PreparedRun) -> String {
+fn agent_prompt(config: &ResolvedConfig, prepared: &PreparedRun) -> String {
     let harness_cli = config.repo_root.join("scripts/bin/harness-cli");
     format!(
         "You are running inside a Harness Symphony worktree. Read AGENTS.md and the run contract at {}. Complete only story {} for run {}. Do not change unrelated product code. Write all required artifacts under the current working directory: .harness/runs/{}/SUMMARY.md and .harness/runs/{}/RESULT.json. Use Harness CLI writes with HARNESS_DB_PATH, HARNESS_RUN_ID, and HARNESS_RUN_MODE from the environment so .harness/changesets/{}.changeset.jsonl is produced in this worktree. If scripts/bin/harness-cli is absent in the worktree, run the root binary at {} while keeping the current worktree as cwd. RESULT.json must have version 1, run_id {}, story_id {}, an allowed outcome, summary_path .harness/runs/{}/SUMMARY.md, and a top-level validation object. Do not write validation_evidence. validation must be either {{\"commands\":[{{\"command\":\"exact command\",\"result\":\"pass\"}}]}} with each result set to pass, fail, or unavailable, or {{\"unavailable\":\"non-empty reason\"}}.",
@@ -521,9 +556,9 @@ mod tests {
     }
 
     #[test]
-    fn codex_prompt_points_to_worktree_artifacts_and_run_env() {
+    fn agent_prompt_points_to_worktree_artifacts_and_run_env() {
         let config = config("codex", vec![]);
-        let prompt = codex_prompt(&config, &prepared());
+        let prompt = agent_prompt(&config, &prepared());
 
         assert!(prompt.contains("US-046"));
         assert!(prompt.contains(".harness/runs/run_1/SUMMARY.md"));
@@ -533,6 +568,81 @@ mod tests {
         assert!(prompt.contains("top-level validation object"));
         assert!(prompt.contains("Do not write validation_evidence"));
         assert!(prompt.contains("\"result\":\"pass\""));
+    }
+
+    #[test]
+    fn opencode_adapter_defaults_to_headless_run_command() {
+        let config = config("opencode", vec![]);
+
+        assert_eq!(
+            resolved_agent_command(&config),
+            vec!["opencode".to_owned(), "run".to_owned(), "--auto".to_owned()]
+        );
+        assert!(agent_adapter_status(&config)
+            .unwrap()
+            .contains("opencode headless"));
+    }
+
+    #[test]
+    fn opencode_adapter_passes_prompt_and_logs_output() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let worktree = temp_dir.path().join("worktree");
+        fs::create_dir_all(&worktree).unwrap();
+        let fake_opencode = temp_dir.path().join("fake-opencode");
+        fs::write(
+            &fake_opencode,
+            r#"#!/usr/bin/env sh
+for last in "$@"; do :; done
+printf '%s\n' "prompt: $last"
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&fake_opencode).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&fake_opencode, permissions).unwrap();
+
+        let config = config("opencode", vec![fake_opencode.to_str().unwrap()]);
+        let mut prepared = prepared();
+        prepared.worktree = worktree.clone();
+        prepared.harness_db_path = worktree.join("harness.db");
+        prepared.contract_path = worktree.join(".harness/runs/run_1/RUN_CONTRACT.json");
+
+        run_opencode_agent(&config, &prepared).unwrap();
+
+        let log =
+            fs::read_to_string(worktree.join(".harness/runs/run_1/AGENT_OUTPUT.log")).unwrap();
+        assert!(log.contains("prompt: You are running inside a Harness Symphony worktree"));
+    }
+
+    #[test]
+    fn opencode_adapter_reports_command_failure_with_stderr() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let worktree = temp_dir.path().join("worktree");
+        fs::create_dir_all(&worktree).unwrap();
+        let fake_opencode = temp_dir.path().join("fake-opencode");
+        fs::write(
+            &fake_opencode,
+            r#"#!/usr/bin/env sh
+echo "opencode exploded" >&2
+exit 3
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&fake_opencode).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&fake_opencode, permissions).unwrap();
+
+        let config = config("opencode", vec![fake_opencode.to_str().unwrap()]);
+        let mut prepared = prepared();
+        prepared.worktree = worktree.clone();
+        prepared.harness_db_path = worktree.join("harness.db");
+        prepared.contract_path = worktree.join(".harness/runs/run_1/RUN_CONTRACT.json");
+
+        let error = run_opencode_agent(&config, &prepared).unwrap_err();
+        assert!(matches!(
+            error,
+            AgentError::CommandFailed { ref stderr, .. } if stderr.contains("opencode exploded")
+        ));
     }
 
     #[test]

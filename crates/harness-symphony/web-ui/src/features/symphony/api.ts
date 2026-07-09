@@ -1,4 +1,5 @@
 import type {
+  AgentId,
   BoardItem,
   BoardResponse,
   BoardState,
@@ -10,6 +11,7 @@ import type {
   PrRetryResponse,
   RecoveryAction,
   ReviewResponse,
+  SettingsResponse,
   SyncResponse
 } from "./types";
 
@@ -40,9 +42,31 @@ export async function fetchReview(runId: string, options?: { signal?: AbortSigna
   return readJson(response, parseReviewResponse, "Review request failed");
 }
 
-export async function postStartTask(storyId: string): Promise<void> {
-  const response = await fetch(`/api/tasks/${encodeURIComponent(storyId)}/start`, { method: "POST" });
+export async function postStartTask(storyId: string, agent?: AgentId): Promise<void> {
+  const response = await fetch(`/api/tasks/${encodeURIComponent(storyId)}/start`, {
+    method: "POST",
+    ...(agent
+      ? {
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ agent })
+        }
+      : {})
+  });
   await readEmptyOrJson(response, "Start failed");
+}
+
+export async function fetchSettings(options?: { signal?: AbortSignal }): Promise<SettingsResponse> {
+  const response = await fetch("/api/settings", { signal: options?.signal });
+  return readJson(response, parseSettingsResponse, "Settings request failed");
+}
+
+export async function putSettings(defaultAgent: AgentId): Promise<SettingsResponse> {
+  const response = await fetch("/api/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ default_agent: defaultAgent })
+  });
+  return readJson(response, parseSettingsResponse, "Settings update failed");
 }
 
 export async function postRetireTask(storyId: string): Promise<void> {
@@ -166,12 +190,19 @@ function parseEventsResponse(value: unknown): EventsResponse {
   };
 }
 
+function parseSettingsResponse(value: unknown): SettingsResponse {
+  const record = expectRecord(value, "settings response");
+  const agent = expectString(record.default_agent, "default_agent");
+  return { default_agent: agent === "opencode" ? "opencode" : "codex" };
+}
+
 function parseReviewResponse(value: unknown): ReviewResponse {
   const record = expectRecord(value, "review response");
   return {
     run_id: expectString(record.run_id, "run_id"),
     story_id: expectString(record.story_id, "story_id"),
     status: expectString(record.status, "status"),
+    agent: typeof record.agent === "string" ? record.agent : "codex",
     outcome: parseNullableString(record.outcome, "outcome"),
     summary: parseNullableString(record.summary, "summary"),
     result: record.result ?? null,

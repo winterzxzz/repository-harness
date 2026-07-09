@@ -317,6 +317,19 @@ agent:
   adapter: codex
 ```
 
+For the first-class OpenCode adapter (headless `opencode run --auto`):
+
+```yaml
+version: 1
+agent:
+  adapter: opencode
+```
+
+The web UI can also pick the agent per run: the board Run button is a split
+button (Codex/OpenCode), the chosen agent is remembered as the default in the
+Symphony state DB, and the Settings tab manages the same default via
+`GET/PUT /api/settings`.
+
 For a custom one-shot command adapter:
 
 ```yaml

@@ -355,7 +355,10 @@ fn check_agent_adapter(config: &ResolvedConfig) -> DoctorCheck {
             name: "agent adapter",
             status: CheckStatus::Fail,
             detail: error.to_string(),
-            next: Some("Set agent.adapter to custom or codex in .harness/symphony.yml.".to_owned()),
+            next: Some(
+                "Set agent.adapter to custom, codex, or opencode in .harness/symphony.yml."
+                    .to_owned(),
+            ),
         },
     }
 }

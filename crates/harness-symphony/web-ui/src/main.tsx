@@ -12,21 +12,25 @@ import { Card } from "./components/ui/card";
 import { Input } from "./components/ui/input";
 import {
   fetchBoard,
+  fetchSettings,
   postCreateGuidedIntake,
   postMarkPrMerged,
   postRecoverTask,
   postRetireTask,
   postRetryPr,
   postStartTask,
-  postSyncRun
+  postSyncRun,
+  putSettings
 } from "./features/symphony/api";
 import { BoardGrid, SummaryStrip } from "./features/symphony/board";
 import { ConfettiBurstHost, TaskDetail, TaskDetailOverlay } from "./features/symphony/detail";
 import { GuidedIntakePanel } from "./features/symphony/intake";
-import { states } from "./features/symphony/constants";
+import { SettingsPanel } from "./features/symphony/settings";
+import { agentLabel, states } from "./features/symphony/constants";
 import { ControllerSidebar } from "./features/symphony/sidebar";
 import { ToastProvider, useToast } from "./features/symphony/toast";
 import type {
+  AgentId,
   BoardItem,
   BoardState,
   GuidedIntakeDraft,
@@ -43,7 +47,7 @@ type ConfettiBurst = {
   y: number;
 };
 
-type AppView = "board" | "intake";
+type AppView = "board" | "intake" | "settings";
 
 function App() {
   const toast = useToast();
@@ -62,6 +66,9 @@ function App() {
   const [retryingPrRunId, setRetryingPrRunId] = React.useState<string | null>(null);
   const [creatingStory, setCreatingStory] = React.useState(false);
   const [intakeError, setIntakeError] = React.useState<string | null>(null);
+  const [defaultAgent, setDefaultAgent] = React.useState<AgentId>("codex");
+  const [savingSettings, setSavingSettings] = React.useState(false);
+  const [settingsError, setSettingsError] = React.useState<string | null>(null);
   const confettiBurstIdRef = React.useRef(0);
   const boardRequestIdRef = React.useRef(0);
   const selectedOpenerRef = React.useRef<HTMLElement | null>(null);
@@ -95,6 +102,16 @@ function App() {
   React.useEffect(() => {
     void loadBoard();
   }, [loadBoard]);
+
+  React.useEffect(() => {
+    const controller = new AbortController();
+    fetchSettings({ signal: controller.signal })
+      .then((settings) => setDefaultAgent(settings.default_agent))
+      .catch(() => {
+        // Keep the codex fallback when settings are unavailable.
+      });
+    return () => controller.abort();
+  }, []);
 
   const filtered = React.useMemo(() => {
     const value = query.trim().toLowerCase();
@@ -149,11 +166,14 @@ function App() {
   );
 
   const startTask = React.useCallback(
-    async (storyId: string) => {
+    async (storyId: string, agent?: AgentId) => {
       setStartingId(storyId);
       setError(null);
       try {
-        await postStartTask(storyId);
+        await postStartTask(storyId, agent);
+        if (agent) {
+          setDefaultAgent(agent);
+        }
         await loadBoard();
         toast.add({ kind: "success", title: "Run started", description: `${storyId} is now in progress.` });
       } catch (cause) {
@@ -168,13 +188,37 @@ function App() {
   );
 
   const runTaskFromBoard = React.useCallback(
-    async (item: BoardItem) => {
-      if (!window.confirm(`Run ${item.id} with Codex? This starts Symphony and allows Codex to edit the repository.`)) {
+    async (item: BoardItem, agent?: AgentId) => {
+      const label = agentLabel(agent ?? defaultAgent);
+      if (!window.confirm(`Run ${item.id} with ${label}? This starts Symphony and allows ${label} to edit the repository.`)) {
         return;
       }
-      await startTask(item.id);
+      await startTask(item.id, agent);
     },
-    [startTask]
+    [defaultAgent, startTask]
+  );
+
+  const saveDefaultAgent = React.useCallback(
+    async (agent: AgentId) => {
+      setSavingSettings(true);
+      setSettingsError(null);
+      try {
+        const settings = await putSettings(agent);
+        setDefaultAgent(settings.default_agent);
+        toast.add({
+          kind: "success",
+          title: "Default agent saved",
+          description: `New runs start with ${agentLabel(settings.default_agent)}.`
+        });
+      } catch (cause) {
+        const msg = cause instanceof Error ? cause.message : "Settings update failed";
+        setSettingsError(msg);
+        toast.add({ kind: "error", title: "Settings update failed", description: msg });
+      } finally {
+        setSavingSettings(false);
+      }
+    },
+    [toast]
   );
 
   const retireTask = React.useCallback(
@@ -318,7 +362,7 @@ function App() {
 
   function switchView(nextView: AppView) {
     setView(nextView);
-    if (nextView === "intake") {
+    if (nextView !== "board") {
       setSelectedId(null);
     }
   }
@@ -373,6 +417,18 @@ function App() {
                   >
                     Guided Intake
                   </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={view === "settings"}
+                    className={cn(
+                      "inline-flex h-7 lg:h-8 items-center justify-center whitespace-nowrap rounded-lg px-4 text-xs font-bold transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 cursor-pointer",
+                      view === "settings" ? "bg-background text-foreground shadow-sm border border-border/40 font-bold" : "hover:text-foreground/80 hover:bg-muted/30"
+                    )}
+                    onClick={() => switchView("settings")}
+                  >
+                    Settings
+                  </button>
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2 xl:justify-end">
@@ -422,12 +478,20 @@ function App() {
                 selectedId={selected?.id ?? null}
                 activeRunId={activeRun?.active_run ?? null}
                 startingId={startingId}
+                defaultAgent={defaultAgent}
                 onSelect={selectTask}
                 onRun={runTaskFromBoard}
               />
             </section>
-          ) : (
+          ) : view === "intake" ? (
             <GuidedIntakePanel creating={creatingStory} error={intakeError} onCreate={createGuidedStory} />
+          ) : (
+            <SettingsPanel
+              defaultAgent={defaultAgent}
+              saving={savingSettings}
+              error={settingsError}
+              onSave={saveDefaultAgent}
+            />
           )}
 
           <ConfettiBurstHost bursts={confettiBursts} onBurstDone={clearConfettiBurst} />
@@ -456,7 +520,9 @@ function App() {
           <p className="order-4 text-xs leading-5 text-muted-foreground md:order-none">
             {view === "board"
               ? "Source: local Symphony API responses for board state, run events, review artifacts, PR status, and sync state."
-              : "Source: local draft state until explicit create writes Harness intake and story records."}
+              : view === "intake"
+                ? "Source: local draft state until explicit create writes Harness intake and story records."
+                : "Source: local Symphony settings; the default agent persists in the Symphony state database."}
           </p>
         </div>
       </div>
