@@ -311,7 +311,7 @@ function App() {
                     <PanelTop className="size-3.5" />
                     Local operations surface
                   </span>
-                  <span className="inline-flex min-h-7 items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 text-emerald-800">
+                  <span className="inline-flex min-h-7 items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-950/20 dark:text-emerald-400">
                     <Activity className={cn("size-3.5", activeRun?.active_run && "motion-safe:animate-pulse")} />
                     {activeRun?.active_run ? "Run active" : "No active run"}
                   </span>
@@ -322,14 +322,14 @@ function App() {
                 <p className="mt-1 max-w-3xl text-sm font-medium leading-6 text-muted-foreground">
                   Start safe work, watch the active run, review evidence, and sync accepted changes from one local controller.
                 </p>
-                <div role="tablist" aria-label="Command Center views" className="mt-3 flex flex-wrap gap-2">
+                <div role="tablist" aria-label="Command Center views" className="mt-3 inline-flex h-9 items-center justify-center rounded-lg bg-muted p-1 text-muted-foreground">
                   <button
                     type="button"
                     role="tab"
                     aria-selected={view === "board"}
                     className={cn(
-                      "min-h-9 rounded-sm border px-3 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                      view === "board" ? "border-primary bg-primary text-primary-foreground" : "border-border bg-muted text-muted-foreground hover:text-foreground"
+                      "inline-flex h-7 items-center justify-center whitespace-nowrap rounded-md px-3 text-sm font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
+                      view === "board" ? "bg-background text-foreground shadow-sm" : "hover:text-foreground"
                     )}
                     onClick={() => switchView("board")}
                   >
@@ -340,8 +340,8 @@ function App() {
                     role="tab"
                     aria-selected={view === "intake"}
                     className={cn(
-                      "min-h-9 rounded-sm border px-3 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                      view === "intake" ? "border-primary bg-primary text-primary-foreground" : "border-border bg-muted text-muted-foreground hover:text-foreground"
+                      "inline-flex h-7 items-center justify-center whitespace-nowrap rounded-md px-3 text-sm font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
+                      view === "intake" ? "bg-background text-foreground shadow-sm" : "hover:text-foreground"
                     )}
                     onClick={() => switchView("intake")}
                   >

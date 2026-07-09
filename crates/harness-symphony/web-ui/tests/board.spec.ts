@@ -1111,3 +1111,9 @@ test("review logs render readable chat and progress entries while preserving raw
   await expect(detail.getByText("Raw artifact: APP_SERVER_EVENTS.jsonl")).toBeVisible();
   await expect(detail.getByText(".harness/runs/run_chat/APP_SERVER_EVENTS.jsonl")).toBeVisible();
 });
+
+test("main layout is split-pane on desktop", async ({ page }) => {
+  await page.goto("/");
+  const layout = page.locator("main > div");
+  await expect(layout).toHaveClass(/lg:grid-cols-\[240px_minmax\(0,1fr\)\]/);
+});
