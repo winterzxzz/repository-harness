@@ -155,6 +155,9 @@ test("guided intake creates a story after explicit confirmation", async ({ page 
   await page.getByRole("button", { name: "Create story" }).click();
 
   await expect.poll(async () => createRequested).toBe(true);
+  const successToast = page.getByRole("region", { name: "Notifications" }).getByRole("alert").filter({ hasText: "Story created" });
+  await expect(successToast).toBeVisible();
+  await expect(successToast).toContainText("US-075-DRAFT");
   await expect(page.getByRole("region", { name: "Ready column" }).getByRole("button", { name: /US-075-DRAFT/ })).toBeVisible();
   expect(startRequested).toBe(false);
 });

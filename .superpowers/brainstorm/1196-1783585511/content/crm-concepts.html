@@ -1,0 +1,283 @@
+<h2>Chọn hướng thiết kế CRM UI cho Symphony</h2>
+<p class="subtitle">Hãy xem các mẫu wireframe dưới đây tại trình duyệt và chọn phương án bạn thích nhất.</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Dạng Bảng/Danh Sách (Database/Table-First)</h3>
+      <p>Giống Notion/Attio. Tối ưu cho việc quét danh sách nhanh, lọc theo cột, hiển thị chi tiết dạng Drawer trượt từ bên phải.</p>
+    </div>
+  </div>
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Dạng Kanban Board Cao Cấp (Modern Card-Board)</h3>
+      <p>Giống folk.app/Plane. Các thẻ công việc được làm lại với nhãn trạng thái bo tròn mềm mại, hiển thị trực quan các liên kết phụ thuộc và hành động nhanh khi hover.</p>
+    </div>
+  </div>
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Bảng Điều Khiển Hợp Nhất (Unified Dashboard Split-Pane)</h3>
+      <p>Giống Linear/HubSpot. Sidebar và thanh điều hướng mượt mà, chia đôi màn hình: bên trái là Kanban/Danh sách công việc, bên phải là logs/lịch sử chạy trực tiếp.</p>
+    </div>
+  </div>
+</div>
+
+<style>
+  .crm-preview-container {
+    margin-top: 2rem;
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+  }
+  .crm-mockup {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--card);
+    color: var(--card-foreground);
+    font-family: system-ui, sans-serif;
+    overflow: hidden;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  }
+  .crm-mockup-header {
+    background: var(--muted);
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-weight: 600;
+    font-size: 14px;
+  }
+  .crm-mockup-body {
+    padding: 16px;
+    min-height: 220px;
+  }
+  /* Table View Mockup */
+  .mock-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  .mock-table th {
+    text-align: left;
+    padding: 8px;
+    border-bottom: 2px solid var(--border);
+    color: var(--muted-foreground);
+    font-weight: 600;
+  }
+  .mock-table td {
+    padding: 10px 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  .badge-pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 9999px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .badge-success { background: #dcfce7; color: #166534; }
+  .dark .badge-success { background: #064e3b; color: #34d399; }
+  .badge-info { background: #dbeafe; color: #1e40af; }
+  .dark .badge-info { background: #1e3a8a; color: #60a5fa; }
+  .badge-warning { background: #fef3c7; color: #92400e; }
+  .dark .badge-warning { background: #78350f; color: #fbbf24; }
+
+  /* Board View Mockup */
+  .mock-kanban {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+  }
+  .mock-col {
+    background: var(--muted);
+    border-radius: 6px;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .mock-col-title {
+    font-size: 12px;
+    font-weight: bold;
+    color: var(--muted-foreground);
+    padding: 4px;
+    text-transform: uppercase;
+  }
+  .mock-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .mock-card h4 {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .mock-card-meta {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    color: var(--muted-foreground);
+  }
+
+  /* Split Pane View Mockup */
+  .mock-split {
+    display: grid;
+    grid-template-columns: 200px 1fr 240px;
+    min-height: 240px;
+  }
+  .mock-sidebar {
+    background: var(--muted);
+    border-right: 1px solid var(--border);
+    padding: 12px;
+    font-size: 13px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .mock-sidebar-item {
+    padding: 6px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .mock-sidebar-item.active {
+    background: var(--accent);
+    color: var(--accent-foreground);
+    font-weight: bold;
+  }
+  .mock-logs {
+    background: #0f172a;
+    color: #e2e8f0;
+    font-family: monospace;
+    font-size: 11px;
+    padding: 12px;
+    border-left: 1px solid var(--border);
+  }
+</style>
+
+<div class="crm-preview-container">
+  <h3>Bản dựng minh họa (Interactive Mockups)</h3>
+
+  <!-- Mockup A -->
+  <div class="crm-mockup">
+    <div class="crm-mockup-header">
+      <span>Phương án A: Giao diện Bảng/Danh Sách (Notion/Attio style)</span>
+      <span class="badge-pill badge-info">Table Mode</span>
+    </div>
+    <div class="crm-mockup-body">
+      <table class="mock-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Task Name</th>
+            <th>Status</th>
+            <th>Lane</th>
+            <th>Run ID</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>US-073</strong></td>
+            <td>Command Center Redesign</td>
+            <td><span class="badge-pill badge-success">Done</span></td>
+            <td>normal</td>
+            <td>run_2301</td>
+          </tr>
+          <tr>
+            <td><strong>US-074</strong></td>
+            <td>Guided Intake Panel</td>
+            <td><span class="badge-pill badge-success">Done</span></td>
+            <td>normal</td>
+            <td>run_2302</td>
+          </tr>
+          <tr>
+            <td><strong>US-077</strong></td>
+            <td>Toast Notification Feed</td>
+            <td><span class="badge-pill badge-info">Ready</span></td>
+            <td>tiny</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td><strong>US-LOCAL-DEMO</strong></td>
+            <td>Local environment demo</td>
+            <td><span class="badge-pill badge-warning">Blocked</span></td>
+            <td>high-risk</td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Mockup B -->
+  <div class="crm-mockup">
+    <div class="crm-mockup-header">
+      <span>Phương án B: Bảng Kanban Cải Tiến (folk.app style)</span>
+      <span class="badge-pill badge-info">Card Mode</span>
+    </div>
+    <div class="crm-mockup-body">
+      <div class="mock-kanban">
+        <div class="mock-col">
+          <div class="mock-col-title">Ready (1)</div>
+          <div class="mock-card">
+            <div class="mock-card-meta"><span>US-077</span><span class="badge-pill badge-info">tiny</span></div>
+            <h4>Toast Notification Feed</h4>
+            <div class="mock-card-meta"><span>Click to run with Codex</span></div>
+          </div>
+        </div>
+        <div class="mock-col">
+          <div class="mock-col-title">In Progress (0)</div>
+          <div style="border: 1px dashed var(--border); height: 80px; border-radius: 6px; display:flex; align-items:center; justify-content:center; color: var(--muted-foreground); font-size:12px;">
+            Kéo thả hoặc chạy tác vụ...
+          </div>
+        </div>
+        <div class="mock-col">
+          <div class="mock-col-title">Done (2)</div>
+          <div class="mock-card">
+            <div class="mock-card-meta"><span>US-073</span><span class="badge-pill badge-success">normal</span></div>
+            <h4>Command Center Redesign</h4>
+          </div>
+          <div class="mock-card">
+            <div class="mock-card-meta"><span>US-074</span><span class="badge-pill badge-success">normal</span></div>
+            <h4>Guided Intake Panel</h4>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Mockup C -->
+  <div class="crm-mockup">
+    <div class="crm-mockup-header">
+      <span>Phương án C: Split-Pane Hợp Nhất (Linear/HubSpot style)</span>
+      <span class="badge-pill badge-info">Workspace Mode</span>
+    </div>
+    <div class="mock-split">
+      <div class="mock-sidebar">
+        <div class="mock-sidebar-item active">📋 Work Board</div>
+        <div class="mock-sidebar-item">📥 Guided Intake</div>
+        <div class="mock-sidebar-item">📊 Performance Logs</div>
+        <div class="mock-sidebar-item">⚙️ Settings</div>
+      </div>
+      <div style="padding: 12px; font-size: 13px;">
+        <h4>Active Workspace View</h4>
+        <p style="color:var(--muted-foreground); font-size:12px;">Nội dung của bảng chính (Kanban/Table) hiển thị ở đây, được tối ưu hóa độ rộng và căn chỉnh tự động.</p>
+      </div>
+      <div class="mock-logs">
+        <span style="color:#22c55e;">[system]</span> server listening on 5178...<br>
+        <span style="color:#0ea5e9;">[symphony]</span> starting run_2302...<br>
+        <span style="color:#eab308;">[codex]</span> reading main.tsx...<br>
+        <span style="color:#22c55e;">[success]</span> test pass!
+      </div>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,479 @@
+<h2>Phương án Đề xuất: CRM Workspace Đa góc nhìn (Split-Pane Dashboard)</h2>
+<p class="subtitle">Kết hợp tính năng của cả 3 phương án để tạo nên giao diện quản lý vận hành chuyên nghiệp nhất.</p>
+
+<div class="split-workspace-preview">
+  <div class="mock-workspace-window">
+    <!-- Left Sidebar -->
+    <div class="mock-left-sidebar">
+      <div class="logo-area">
+        <span class="logo-icon">S</span>
+        <div class="logo-text">
+          <strong>Symphony</strong>
+          <span style="font-size: 10px; opacity: 0.7; display: block;">Local Command Center</span>
+        </div>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="section-label">Workspace</div>
+        <div class="sidebar-btn active">📋 Work Board</div>
+        <div class="sidebar-btn">📥 Guided Intake</div>
+        <div class="sidebar-btn">📝 Run Logs <span class="live-indicator">live</span></div>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="section-label">Lọc Trạng Thái</div>
+        <div class="status-filter"><span class="dot dot-ready"></span> Ready <span class="count">3</span></div>
+        <div class="status-filter"><span class="dot dot-progress"></span> Running <span class="count">1</span></div>
+        <div class="status-filter"><span class="dot dot-blocked"></span> Blocked <span class="count">2</span></div>
+      </div>
+    </div>
+
+    <!-- Center Main Panel -->
+    <div class="mock-main-panel">
+      <div class="main-header">
+        <div class="header-left">
+          <h1>Symphony Board</h1>
+          <span class="status-pill active-pill">● 1 Run Active</span>
+        </div>
+        <div class="header-right">
+          <input type="text" class="search-box" placeholder="Tìm kiếm task (US-073...)" />
+          <button class="action-btn-primary">+ Add Story</button>
+        </div>
+      </div>
+
+      <!-- View Switcher -->
+      <div class="view-tabs">
+        <div class="tab active">📋 Kanban Board</div>
+        <div class="tab">☰ Table List</div>
+        <div class="tab">⚡ Metrics & History</div>
+      </div>
+
+      <!-- Main Board Content -->
+      <div class="board-columns">
+        <div class="column">
+          <div class="col-head">Ready (1)</div>
+          <div class="col-cards">
+            <div class="board-card active-card">
+              <div class="card-tag tiny-tag">tiny</div>
+              <h4>Toast Notification Feed</h4>
+              <div class="card-desc">Hiển thị toast thông báo thành công sau khi tạo story.</div>
+              <div class="card-footer">
+                <span class="card-id">US-077</span>
+                <button class="run-mini-btn">▶ Run</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="column">
+          <div class="col-head">In Progress (1)</div>
+          <div class="col-cards">
+            <div class="board-card progress-card">
+              <div class="card-tag normal-tag">normal</div>
+              <h4>Workspace Redesign</h4>
+              <div class="card-desc">Cải tiến giao diện người dùng theo chuẩn CRM.</div>
+              <div class="progress-bar-container">
+                <div class="progress-bar-fill" style="width: 65%;"></div>
+              </div>
+              <div class="card-footer">
+                <span class="card-id">US-078</span>
+                <span style="font-size: 10px; color:#22c55e;">running...</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="column">
+          <div class="col-head">Blocked (1)</div>
+          <div class="col-cards">
+            <div class="board-card blocked-card">
+              <div class="card-tag high-tag">high-risk</div>
+              <h4>Local UI Flow Demo</h4>
+              <div class="card-desc">Tạo luồng demo trực tiếp trên máy local.</div>
+              <div class="blocker-warning">⚠️ Chờ US-078 hoàn tất</div>
+              <div class="card-footer">
+                <span class="card-id">US-DEMO</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right Drawer Detail Panel -->
+    <div class="mock-right-drawer">
+      <div class="drawer-header">
+        <span class="badge-pill-success">Ready</span>
+        <span style="font-family: monospace; font-size: 11px;">US-077</span>
+      </div>
+      <div class="drawer-body">
+        <h3>Toast Notification Feed</h3>
+        <p class="drawer-desc">Thêm hiển thị toast thông báo thành công sau khi tạo story từ Guided Intake.</p>
+
+        <div class="meta-list">
+          <div class="meta-item"><span class="meta-label">Lane:</span> <strong>tiny</strong></div>
+          <div class="meta-item"><span class="meta-label">Proof:</span> <strong>configured</strong></div>
+          <div class="meta-item"><span class="meta-label">Blockers:</span> <strong>none</strong></div>
+        </div>
+
+        <div class="drawer-actions">
+          <button class="btn-block-primary">▶ Start work with Codex</button>
+          <button class="btn-block-secondary">🗑️ Retire Story</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+  .split-workspace-preview {
+    margin-top: 1.5rem;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+  }
+  .mock-workspace-window {
+    display: grid;
+    grid-template-columns: 220px 1fr 280px;
+    height: 480px;
+    background: var(--background);
+    color: var(--foreground);
+    font-family: system-ui, -apple-system, sans-serif;
+  }
+
+  /* Left Sidebar styles */
+  .mock-left-sidebar {
+    background: oklch(12% 0.015 250);
+    border-right: 1px solid var(--border);
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+  .logo-area {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .logo-icon {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    background: var(--primary);
+    color: white;
+    font-weight: bold;
+    border-radius: 6px;
+  }
+  .logo-text {
+    font-size: 13px;
+  }
+  .sidebar-section {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .section-label {
+    font-size: 10px;
+    font-weight: bold;
+    text-transform: uppercase;
+    opacity: 0.5;
+    margin-bottom: 6px;
+    letter-spacing: 0.05em;
+  }
+  .sidebar-btn, .status-filter {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: all 0.15s ease;
+  }
+  .sidebar-btn.active {
+    background: rgba(255,255,255,0.06);
+    color: var(--primary);
+    font-weight: 600;
+  }
+  .sidebar-btn:hover, .status-filter:hover {
+    background: rgba(255,255,255,0.04);
+  }
+  .live-indicator {
+    font-size: 9px;
+    background: var(--destructive);
+    color: white;
+    padding: 1px 4px;
+    border-radius: 4px;
+    font-weight: bold;
+  }
+  .dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 8px;
+  }
+  .dot-ready { background: #10b981; }
+  .dot-progress { background: #3b82f6; }
+  .dot-blocked { background: #6b7280; }
+  .count {
+    opacity: 0.6;
+    font-size: 11px;
+    font-family: monospace;
+  }
+
+  /* Center Main Panel styles */
+  .mock-main-panel {
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    overflow-y: auto;
+  }
+  .main-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .header-left h1 {
+    margin: 0;
+    font-size: 20px;
+    font-weight: 700;
+  }
+  .status-pill {
+    display: inline-block;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    margin-top: 4px;
+    font-weight: 600;
+  }
+  .active-pill {
+    background: rgba(16, 185, 129, 0.15);
+    color: #10b981;
+  }
+  .search-box {
+    background: var(--muted);
+    border: 1px solid var(--border);
+    color: var(--foreground);
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    width: 180px;
+    margin-right: 8px;
+    outline: none;
+  }
+  .action-btn-primary {
+    background: var(--primary);
+    color: white;
+    border: none;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: bold;
+    cursor: pointer;
+  }
+
+  /* View tabs */
+  .view-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border);
+    gap: 16px;
+  }
+  .tab {
+    padding: 8px 4px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    color: var(--muted-foreground);
+  }
+  .tab.active {
+    color: var(--foreground);
+    border-bottom-color: var(--primary);
+  }
+
+  /* Board Columns */
+  .board-columns {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    flex: 1;
+  }
+  .column {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .col-head {
+    font-size: 12px;
+    font-weight: bold;
+    color: var(--muted-foreground);
+  }
+  .col-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-height: 200px;
+    background: rgba(255,255,255,0.01);
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    padding: 8px;
+  }
+  .board-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .board-card:hover {
+    transform: translateY(-2px);
+    border-color: var(--primary);
+  }
+  .active-card {
+    box-shadow: 0 0 0 1px var(--primary);
+  }
+  .card-tag {
+    align-self: flex-start;
+    font-size: 9px;
+    font-weight: bold;
+    padding: 2px 6px;
+    border-radius: 4px;
+    text-transform: uppercase;
+  }
+  .tiny-tag { background: rgba(59, 130, 246, 0.15); color: #3b82f6; }
+  .normal-tag { background: rgba(16, 185, 129, 0.15); color: #10b981; }
+  .high-tag { background: rgba(239, 68, 68, 0.15); color: #ef4448; }
+
+  .board-card h4 {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .card-desc {
+    font-size: 11px;
+    opacity: 0.7;
+    line-height: 1.4;
+  }
+  .card-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-top: 1px solid var(--border);
+    padding-top: 8px;
+    margin-top: 4px;
+  }
+  .card-id {
+    font-family: monospace;
+    font-size: 10px;
+    opacity: 0.6;
+  }
+  .run-mini-btn {
+    background: rgba(16, 185, 129, 0.15);
+    color: #10b981;
+    border: 1px solid #10b981;
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 10px;
+    font-weight: bold;
+    cursor: pointer;
+  }
+  .progress-bar-container {
+    height: 4px;
+    background: var(--muted);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .progress-bar-fill {
+    height: 100%;
+    background: var(--primary);
+  }
+  .blocker-warning {
+    font-size: 10px;
+    color: #f59e0b;
+    background: rgba(245, 158, 11, 0.1);
+    padding: 4px;
+    border-radius: 4px;
+  }
+
+  /* Right Drawer styles */
+  .mock-right-drawer {
+    background: oklch(12% 0.015 250);
+    border-left: 1px solid var(--border);
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .drawer-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 12px;
+  }
+  .badge-pill-success {
+    background: rgba(16, 185, 129, 0.15);
+    color: #10b981;
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-weight: bold;
+  }
+  .drawer-body h3 {
+    margin: 0 0 10px 0;
+    font-size: 16px;
+  }
+  .drawer-desc {
+    font-size: 12px;
+    opacity: 0.7;
+    line-height: 1.5;
+  }
+  .meta-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 20px 0;
+  }
+  .meta-item {
+    font-size: 12px;
+    display: flex;
+    justify-content: space-between;
+  }
+  .meta-label {
+    opacity: 0.6;
+  }
+  .drawer-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .btn-block-primary {
+    background: var(--primary);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 10px;
+    font-size: 12px;
+    font-weight: bold;
+    cursor: pointer;
+  }
+  .btn-block-secondary {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--foreground);
+    border-radius: 6px;
+    padding: 10px;
+    font-size: 12px;
+    font-weight: bold;
+    cursor: pointer;
+  }
+</style>

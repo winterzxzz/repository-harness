@@ -1,0 +1,61 @@
+<h2>Proposed Design Palette</h2>
+<p class="subtitle">Here is a visual mockup of the new dashboard color scheme based on the screenshot.</p>
+
+<div class="section" style="max-width: 800px; margin: 0 auto;">
+  <div style="background-color: #0a0a0c; padding: 24px; border-radius: 8px; border: 1px solid #1f1f23; margin-top: 16px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; border-b: 1px solid #1f1f23; padding-bottom: 12px; margin-bottom: 20px;">
+      <span style="color: #ffffff; font-weight: bold; font-size: 14px;">Symphony Command Center Mockup</span>
+      <button style="background-color: #10b981; color: #ffffff; border: none; padding: 6px 12px; border-radius: 4px; font-weight: bold; cursor: pointer; font-size: 12px;">Add project</button>
+    </div>
+
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+      <!-- Standard Ready Card -->
+      <div>
+        <div style="color: #10b981; font-size: 11px; font-weight: bold; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em;">Actionable Now (Ready)</div>
+        <div style="background-color: #131316; border: 1px solid #1f1f23; border-radius: 6px; padding: 16px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <span style="font-family: monospace; font-size: 11px; color: #71717a;">US-076</span>
+            <span style="background-color: rgba(16, 185, 129, 0.1); color: #10b981; font-size: 10px; padding: 2px 6px; border-radius: 12px; font-weight: bold;">ready</span>
+          </div>
+          <h3 style="color: #f4f4f5; font-size: 14px; font-weight: bold; margin: 8px 0 4px 0; line-height: 1.4;">Run Ready Story From Board Card</h3>
+          <p style="color: #a1a1aa; font-size: 12px; margin: 0 0 12px 0; line-height: 1.4;">Ready cards now expose a guarded Run with Codex action.</p>
+          <button style="background-color: #10b981; color: #ffffff; border: none; width: 100%; padding: 8px; border-radius: 4px; font-weight: bold; font-size: 12px; cursor: pointer;">Run with Codex</button>
+        </div>
+      </div>
+
+      <!-- Decision Card -->
+      <div>
+        <div style="color: #a78bfa; font-size: 11px; font-weight: bold; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em;">Waiting On Your Decision (Review)</div>
+        <div style="background-color: #130e1a; border: 1px solid #1b1226; border-radius: 6px; padding: 16px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <span style="font-family: monospace; font-size: 11px; color: #a78bfa;">US-073</span>
+            <span style="background-color: rgba(139, 92, 246, 0.15); color: #c084fc; font-size: 10px; padding: 2px 6px; border-radius: 12px; font-weight: bold;">review</span>
+          </div>
+          <h3 style="color: #f4f4f5; font-size: 14px; font-weight: bold; margin: 8px 0 4px 0; line-height: 1.4;">REST call-control contract</h3>
+          <p style="color: #d8b4fe; font-size: 12px; margin: 0 0 12px 0; line-height: 1.4;">Do internal rollout operators need server-side controls now?</p>
+          <div style="border-top: 1px solid #1b1226; padding-top: 8px; display: flex; gap: 8px;">
+            <span style="background-color: #0a0a0c; border: 1px solid #1b1226; color: #a78bfa; font-size: 10px; padding: 2px 6px; border-radius: 12px;">normal</span>
+            <span style="background-color: #0a0a0c; border: 1px solid #1b1226; color: #a78bfa; font-size: 10px; padding: 2px 6px; border-radius: 12px;">run_17816</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="options">
+  <div class="option" data-choice="approve" onclick="toggleSelect(this)">
+    <div class="letter">✓</div>
+    <div class="content">
+      <h3>Approve Design</h3>
+      <p>The layout and colors look correct. Proceed to documentation and implementation planning.</p>
+    </div>
+  </div>
+  <div class="option" data-choice="refine" onclick="toggleSelect(this)">
+    <div class="letter">✗</div>
+    <div class="content">
+      <h3>Request Adjustments</h3>
+      <p>I would like to suggest changes to the colors or layout of this palette.</p>
+    </div>
+  </div>
+</div>
