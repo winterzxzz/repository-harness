@@ -1124,3 +1124,10 @@ test("view tabs contain Kanban and Table options", async ({ page }) => {
   await expect(page.getByRole("tab", { name: "Guided Intake" })).toBeVisible();
 });
 
+test("detail drawer contains slide transition styles", async ({ page }) => {
+  await page.goto("/");
+  // Trigger opening a card by clicking on a card button
+  await page.getByRole("button", { name: /US-/ }).first().click();
+  const popup = page.getByTestId("task-detail-popup");
+  await expect(popup).toHaveClass(/translate-x-0/);
+});

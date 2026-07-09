@@ -79,7 +79,7 @@ export function TaskDetailOverlay({
   return (
     <div
       ref={overlayRef}
-      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/60 px-3 py-4 backdrop-blur-[4px] sm:px-5 lg:py-8"
+      className="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-[4px]"
       data-testid="task-detail-overlay"
       onKeyDown={handleKeyDown}
       onMouseDown={(event) => {
@@ -341,7 +341,7 @@ export function TaskDetail({
     <aside
       aria-label="Selected work detail"
       aria-modal="true"
-      className="relative max-h-[calc(100dvh-2rem)] min-w-0 w-full max-w-4xl overflow-auto rounded-lg border border-border bg-background shadow-2xl outline-none"
+      className="relative h-full w-full max-w-xl md:max-w-2xl overflow-y-auto border-l border-border bg-background shadow-2xl outline-none transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] translate-x-0"
       data-testid="task-detail-popup"
       ref={dialogRef}
       role="dialog"
@@ -358,7 +358,7 @@ export function TaskDetail({
         <X data-icon="inline-start" />
       </Button>
 
-      <div className="border-b border-border p-4">
+      <div className="border-b border-border p-4 pr-16">
         <div className="flex min-w-0 items-center justify-between gap-3">
           <StatusBadge state={item.board_state} className="shrink-0" />
           <span className="bounded-text min-w-0 font-mono text-xs font-bold text-muted-foreground">{item.id}</span>
