@@ -25,6 +25,7 @@ import { ConfettiBurstHost, TaskDetail, TaskDetailOverlay } from "./features/sym
 import { GuidedIntakePanel } from "./features/symphony/intake";
 import { states } from "./features/symphony/constants";
 import { ControllerSidebar } from "./features/symphony/sidebar";
+import { ToastProvider, useToast } from "./features/symphony/toast";
 import type {
   BoardItem,
   BoardState,
@@ -45,6 +46,7 @@ type ConfettiBurst = {
 type AppView = "board" | "intake";
 
 function App() {
+  const toast = useToast();
   const [items, setItems] = React.useState<BoardItem[]>([]);
   const [view, setView] = React.useState<AppView>("board");
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
@@ -153,13 +155,16 @@ function App() {
       try {
         await postStartTask(storyId);
         await loadBoard();
+        toast.add({ kind: "success", title: "Run started", description: `${storyId} is now in progress.` });
       } catch (cause) {
-        setError(cause instanceof Error ? cause.message : "Start failed");
+        const msg = cause instanceof Error ? cause.message : "Start failed";
+        setError(msg);
+        toast.add({ kind: "error", title: "Start failed", description: msg });
       } finally {
         setStartingId(null);
       }
     },
-    [loadBoard]
+    [loadBoard, toast]
   );
 
   const runTaskFromBoard = React.useCallback(
@@ -183,13 +188,16 @@ function App() {
         await postRetireTask(item.id);
         setSelectedId(null);
         await loadBoard();
+        toast.add({ kind: "success", title: "Task retired", description: `${item.id} removed from active board.` });
       } catch (cause) {
-        setError(cause instanceof Error ? cause.message : "Delete failed");
+        const msg = cause instanceof Error ? cause.message : "Delete failed";
+        setError(msg);
+        toast.add({ kind: "error", title: "Retire failed", description: msg });
       } finally {
         setDeletingId(null);
       }
     },
-    [loadBoard]
+    [loadBoard, toast]
   );
 
   const recoverTask = React.useCallback(
@@ -202,13 +210,16 @@ function App() {
       try {
         await postRecoverTask(action);
         await loadBoard();
+        toast.add({ kind: "success", title: "Recovery applied", description: `${storyId} recovery action completed.` });
       } catch (cause) {
-        setError(cause instanceof Error ? cause.message : "Recovery failed");
+        const msg = cause instanceof Error ? cause.message : "Recovery failed";
+        setError(msg);
+        toast.add({ kind: "error", title: "Recovery failed", description: msg });
       } finally {
         setRecoveringId(null);
       }
     },
-    [loadBoard]
+    [loadBoard, toast]
   );
 
   const syncRun = React.useCallback(
@@ -218,16 +229,22 @@ function App() {
       try {
         const result = await postSyncRun(runId);
         if (!result.applied) {
-          setError("No new changeset was applied for that run.");
+          const msg = "No new changeset was applied for that run.";
+          setError(msg);
+          toast.add({ kind: "info", title: "Sync skipped", description: msg });
+        } else {
+          toast.add({ kind: "success", title: "Sync applied", description: `Run ${runId} changeset applied.` });
         }
         await loadBoard();
       } catch (cause) {
-        setError(cause instanceof Error ? cause.message : "Sync failed");
+        const msg = cause instanceof Error ? cause.message : "Sync failed";
+        setError(msg);
+        toast.add({ kind: "error", title: "Sync failed", description: msg });
       } finally {
         setSyncingRunId(null);
       }
     },
-    [loadBoard]
+    [loadBoard, toast]
   );
 
   const markPrMerged = React.useCallback(
@@ -237,15 +254,18 @@ function App() {
       try {
         const result = await postMarkPrMerged(runId);
         await loadBoard();
+        toast.add({ kind: "success", title: "PR marked merged", description: `Run ${runId} marked as merged.` });
         return result;
       } catch (cause) {
-        setError(cause instanceof Error ? cause.message : "Merge update failed");
+        const msg = cause instanceof Error ? cause.message : "Merge update failed";
+        setError(msg);
+        toast.add({ kind: "error", title: "Merge update failed", description: msg });
         throw cause;
       } finally {
         setMarkingMergedRunId(null);
       }
     },
-    [loadBoard]
+    [loadBoard, toast]
   );
 
   const retryPr = React.useCallback(
@@ -258,15 +278,18 @@ function App() {
       try {
         const result = await postRetryPr(action);
         await loadBoard();
+        toast.add({ kind: "success", title: "PR retry queued", description: `Run ${runId} PR retry initiated.` });
         return result;
       } catch (cause) {
-        setError(cause instanceof Error ? cause.message : "PR retry failed");
+        const msg = cause instanceof Error ? cause.message : "PR retry failed";
+        setError(msg);
+        toast.add({ kind: "error", title: "PR retry failed", description: msg });
         throw cause;
       } finally {
         setRetryingPrRunId(null);
       }
     },
-    [loadBoard]
+    [loadBoard, toast]
   );
 
   const createGuidedStory = React.useCallback(
@@ -281,13 +304,16 @@ function App() {
         await loadBoard();
         setQuery(story.story_id);
         setView("board");
+        toast.add({ kind: "success", title: "Story created", description: `${story.story_id} added to board.` });
       } catch (cause) {
-        setIntakeError(cause instanceof Error ? cause.message : "Create story failed");
+        const msg = cause instanceof Error ? cause.message : "Create story failed";
+        setIntakeError(msg);
+        toast.add({ kind: "error", title: "Story creation failed", description: msg });
       } finally {
         setCreatingStory(false);
       }
     },
-    [loadBoard]
+    [loadBoard, toast]
   );
 
   function switchView(nextView: AppView) {
@@ -298,37 +324,37 @@ function App() {
   }
 
   return (
-    <main className="min-h-screen bg-muted/45 text-foreground">
-      <div className="mx-auto grid w-full max-w-[1760px] grid-cols-1 gap-3 p-3 md:p-4 lg:grid-cols-[240px_minmax(0,1fr)] xl:p-5">
+    <main className="min-h-screen bg-muted/15 text-foreground">
+      <div className="mx-auto grid w-full max-w-[1760px] grid-cols-1 gap-2 lg:gap-4 p-2 md:p-4 lg:grid-cols-[240px_minmax(0,1fr)] xl:p-5">
         <ControllerSidebar counts={counts} items={items} selectedId={selected?.id ?? null} onSelect={selectTask} />
 
-        <div className="flex min-w-0 flex-col gap-3">
-          <header className="rounded-lg border border-border bg-background p-3">
-            <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+        <div className="flex min-w-0 flex-col gap-2 lg:gap-4">
+          <header className="rounded-xl border border-border bg-card/60 backdrop-blur-md p-2 lg:p-4 shadow-sm">
+            <div className="flex flex-col gap-1.5 xl:flex-row xl:items-center xl:justify-between">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-muted-foreground">
-                  <span className="inline-flex min-h-7 items-center gap-2 rounded-full border border-border bg-muted px-2.5">
+                  <span className="inline-flex min-h-7 items-center gap-2 rounded-full border border-border/80 bg-muted/50 px-2.5">
                     <PanelTop className="size-3.5" />
                     Local operations surface
                   </span>
-                  <span className="inline-flex min-h-7 items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-950/20 dark:text-emerald-400">
+                  <span className="inline-flex min-h-7 items-center gap-2 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2.5 text-emerald-700 dark:text-emerald-400">
                     <Activity className={cn("size-3.5", activeRun?.active_run && "motion-safe:animate-pulse")} />
                     {activeRun?.active_run ? "Run active" : "No active run"}
                   </span>
                 </div>
-                <h1 className="mt-2 text-2xl font-semibold leading-tight tracking-normal md:text-[32px]">
+                <h1 className="cmd-heading-glow mt-1 lg:mt-2 text-2xl font-bold tracking-tight text-foreground md:text-[32px]">
                   Symphony Command Center
                 </h1>
-                <p className="mt-1 max-w-3xl text-sm font-medium leading-6 text-muted-foreground">
+                <p className="mt-0.5 lg:mt-1 max-w-3xl text-sm font-medium leading-normal lg:leading-relaxed text-muted-foreground">
                   Start safe work, watch the active run, review evidence, and sync accepted changes from one local controller.
                 </p>
-                <div role="tablist" aria-label="Command Center views" className="mt-4 inline-flex h-10 items-center justify-center rounded-xl bg-muted/40 border border-border/50 p-1 text-muted-foreground">
+                <div role="tablist" aria-label="Command Center views" className="mt-2.5 lg:mt-4 inline-flex h-9 lg:h-10 items-center justify-center rounded-xl bg-muted/40 border border-border/50 p-1 text-muted-foreground">
                   <button
                     type="button"
                     role="tab"
                     aria-selected={view === "board"}
                     className={cn(
-                      "inline-flex h-8 items-center justify-center whitespace-nowrap rounded-lg px-4 text-xs font-bold transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
+                      "inline-flex h-7 lg:h-8 items-center justify-center whitespace-nowrap rounded-lg px-4 text-xs font-bold transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 cursor-pointer",
                       view === "board" ? "bg-background text-foreground shadow-sm border border-border/40 font-bold" : "hover:text-foreground/80 hover:bg-muted/30"
                     )}
                     onClick={() => switchView("board")}
@@ -340,7 +366,7 @@ function App() {
                     role="tab"
                     aria-selected={view === "intake"}
                     className={cn(
-                      "inline-flex h-8 items-center justify-center whitespace-nowrap rounded-lg px-4 text-xs font-bold transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
+                      "inline-flex h-7 lg:h-8 items-center justify-center whitespace-nowrap rounded-lg px-4 text-xs font-bold transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 cursor-pointer",
                       view === "intake" ? "bg-background text-foreground shadow-sm border border-border/40 font-bold" : "hover:text-foreground/80 hover:bg-muted/30"
                     )}
                     onClick={() => switchView("intake")}
@@ -356,12 +382,12 @@ function App() {
                   <Input
                     value={query}
                     onChange={(event) => setQuery(event.target.value)}
-                    className="h-10 bg-muted/60 pl-9"
+                    className="h-10 bg-muted/50 pl-9 border-border/60"
                     placeholder="Find task or story ID"
                     aria-label="Find task"
                   />
                 </label>
-                <Button variant="outline" onClick={() => void loadBoard()} disabled={loading} className="h-10 bg-background">
+                <Button variant="outline" onClick={() => void loadBoard()} disabled={loading} className="h-10 bg-card border-border hover:bg-muted/30">
                   <RefreshCw data-icon="inline-start" className={cn(loading && "motion-safe:animate-spin")} />
                   Refresh
                 </Button>
@@ -372,7 +398,7 @@ function App() {
           {view === "board" ? <SummaryStrip activeRun={activeRun} counts={counts} className="order-1 md:order-none" /> : null}
 
           {view === "board" && error ? (
-            <Card role="alert" className="order-1 flex items-center gap-3 border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive md:order-none">
+            <Card role="alert" className="order-1 flex items-center gap-3 border-destructive/35 bg-destructive/5 p-4 text-sm text-destructive md:order-none rounded-xl">
               <AlertTriangle className="size-4 shrink-0" />
               {error}
             </Card>
@@ -382,7 +408,7 @@ function App() {
             <section
               id="board"
               aria-busy={loading}
-              className="command-board-surface order-2 grid min-h-[calc(100dvh-232px)] grid-cols-1 gap-3 rounded-lg border border-border bg-background p-2 md:order-none"
+              className="command-board-surface order-2 grid min-h-[calc(100dvh-232px)] grid-cols-1 gap-4 rounded-xl border border-border bg-background/25 p-3 md:order-none shadow-sm"
             >
               <div className="sr-only" role="status" aria-live="polite">
                 {loading
@@ -459,6 +485,8 @@ function usePrefersReducedMotion() {
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <App />
+    <ToastProvider>
+      <App />
+    </ToastProvider>
   </React.StrictMode>
 );

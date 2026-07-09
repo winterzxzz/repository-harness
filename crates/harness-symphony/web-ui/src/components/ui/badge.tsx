@@ -4,13 +4,13 @@ import { cn } from "../../lib/utils";
 export type BadgeTone = "neutral" | "muted" | "success" | "info" | "accent" | "danger" | "complete";
 
 const tones: Record<BadgeTone, string> = {
-  neutral: "border-border bg-muted text-muted-foreground",
-  muted: "border-zinc-300 bg-zinc-100 text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900/50 dark:text-zinc-400",
-  success: "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-400",
-  info: "border-blue-200 bg-blue-50 text-blue-800 dark:border-blue-900/50 dark:bg-blue-950/30 dark:text-blue-400",
-  accent: "border-violet-200 bg-violet-50 text-violet-800 dark:border-violet-900/50 dark:bg-violet-950/30 dark:text-violet-400",
-  danger: "border-red-200 bg-red-50 text-red-800 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-400",
-  complete: "border-teal-200 bg-teal-50 text-teal-800 dark:border-teal-900/50 dark:bg-teal-950/30 dark:text-teal-400"
+  neutral: "border-border/80 bg-muted/50 text-muted-foreground",
+  muted: "border-zinc-500/20 bg-zinc-500/10 text-zinc-600 dark:text-zinc-450 dark:text-zinc-400",
+  success: "border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
+  info: "border-blue-500/25 bg-blue-500/10 text-blue-700 dark:text-blue-400",
+  accent: "border-violet-500/25 bg-violet-500/10 text-violet-700 dark:text-violet-400",
+  danger: "border-red-500/25 bg-red-500/10 text-red-700 dark:text-red-450 dark:text-red-400",
+  complete: "border-teal-500/25 bg-teal-500/10 text-teal-700 dark:text-teal-400"
 };
 
 export function Badge({

@@ -341,7 +341,7 @@ export function TaskDetail({
     <aside
       aria-label="Selected work detail"
       aria-modal="true"
-      className="relative h-full w-full max-w-xl md:max-w-2xl overflow-y-auto border-l border-border bg-background shadow-2xl outline-none transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] translate-x-0"
+      className="relative h-full w-full max-w-xl md:max-w-2xl overflow-y-auto border-l border-border/80 bg-card/95 backdrop-blur-md shadow-2xl outline-none transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] translate-x-0"
       data-testid="task-detail-popup"
       ref={dialogRef}
       role="dialog"
@@ -546,7 +546,7 @@ function ReviewPanel({
 
 function FailureSummaryPanel({ summary, compact = false }: { summary: FailureSummary; compact?: boolean }) {
   return (
-    <div className={cn("rounded-md border border-destructive/30 bg-destructive/10 p-3", compact ? "mt-3" : "")}>
+    <div className={cn("rounded-xl border border-destructive/35 bg-destructive/5 p-4 shadow-sm", compact ? "mt-4" : "")}>
       <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
         <div className="flex min-w-0 max-w-full flex-1 items-center gap-2">
           <AlertTriangle className="size-4 shrink-0 text-destructive" />
@@ -571,9 +571,9 @@ function FailureSummaryPanel({ summary, compact = false }: { summary: FailureSum
 
 function TextBlock({ title, text }: { title: string; text: string }) {
   return (
-    <div>
+    <div className="flex flex-col gap-2">
       <SectionTitle>{title}</SectionTitle>
-      <pre className="bounded-text mt-2 max-h-52 max-w-full overflow-auto whitespace-pre-wrap rounded-md border border-border bg-muted p-3 text-xs leading-5">
+      <pre className="bounded-text max-h-52 max-w-full overflow-auto whitespace-pre-wrap rounded-xl border border-border/80 bg-background/50 p-4 text-xs font-mono leading-relaxed text-foreground/90 shadow-inner">
         {text}
       </pre>
     </div>
@@ -635,8 +635,8 @@ function EventLog({ events, live = false }: { events: RunEvent[]; live?: boolean
             <div
               key={`${entry.method ?? entry.title}-${index}`}
               className={cn(
-                "grid min-h-12 grid-cols-[minmax(0,1fr)] gap-2 border-b border-border/70 px-3 py-3 text-sm last:border-b-0",
-                entry.kind === "message" ? "bg-background" : "bg-muted"
+                "grid min-h-12 grid-cols-[minmax(0,1fr)] gap-2 border-b border-border/60 px-4 py-3.5 text-sm last:border-b-0 transition-colors duration-150",
+                entry.kind === "message" ? "bg-background/40 hover:bg-background/60" : "bg-muted/30 hover:bg-muted/45"
               )}
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -661,9 +661,9 @@ function EventLog({ events, live = false }: { events: RunEvent[]; live?: boolean
 
 function Field({ label, value }: { label: string; value: string }) {
   return (
-    <div className="min-w-0 rounded-md border border-border p-3">
-      <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="bounded-text mt-1 text-sm font-semibold">{value}</div>
+    <div className="min-w-0 rounded-xl border border-border/70 bg-background/30 p-3.5 shadow-sm transition-all hover:bg-background/50">
+      <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">{label}</div>
+      <div className="bounded-text mt-1.5 text-sm font-bold text-foreground leading-snug">{value}</div>
     </div>
   );
 }
@@ -679,19 +679,19 @@ function ListBlock({
 }) {
   return (
     <div>
-      <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground">{title}</p>
-      <div className="mt-2 grid min-h-8 gap-2 sm:flex sm:flex-wrap">
+      <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground/70">{title}</p>
+      <div className="mt-2.5 grid min-h-8 gap-2 sm:flex sm:flex-wrap">
         {values.length > 0 ? (
           values.map((value) => (
             <span
               key={value}
-              className="bounded-text max-w-full rounded-md border border-border bg-muted px-2 py-1 text-xs font-medium leading-5 text-muted-foreground"
+              className="bounded-text max-w-full rounded-md border border-border/60 bg-muted/40 px-2.5 py-1 text-xs font-semibold leading-normal text-muted-foreground shadow-sm hover:border-border transition-colors duration-150"
             >
               {value}
             </span>
           ))
         ) : (
-          <span className="text-sm text-muted-foreground">{empty}</span>
+          <span className="text-sm text-muted-foreground italic font-medium">{empty}</span>
         )}
       </div>
     </div>
@@ -699,5 +699,5 @@ function ListBlock({
 }
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
-  return <h3 className="text-xl font-semibold leading-tight">{children}</h3>;
+  return <h3 className="text-lg font-bold tracking-tight text-foreground">{children}</h3>;
 }

@@ -21,11 +21,11 @@ export function ControllerSidebar({
   return (
     <aside
       aria-label="Workspace navigation"
-      className="flex min-h-0 flex-col rounded-xl border border-border/80 bg-background/50 backdrop-blur-sm p-4 shadow-sm lg:sticky lg:top-4 lg:min-h-[calc(100vh-40px)]"
+      className="flex min-h-0 flex-col rounded-xl border border-border/80 bg-card/60 backdrop-blur-md p-2 lg:p-4 shadow-sm lg:sticky lg:top-4 lg:min-h-[calc(100vh-40px)]"
     >
-      <div className="mb-4 rounded-xl border border-border/60 bg-muted/30 p-3.5">
+      <div className="mb-1.5 lg:mb-4 rounded-xl border border-border/60 bg-muted/20 p-2 lg:p-3.5 shadow-inner">
         <div className="flex items-center gap-2.5 text-sm font-semibold">
-          <span className="grid size-8 place-items-center rounded-lg border border-border bg-background font-mono text-xs font-bold text-primary shadow-sm">
+          <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-border bg-background font-mono text-xs font-bold text-primary shadow-sm animate-pulse">
             S
           </span>
           <div className="flex flex-col leading-none">
@@ -35,11 +35,11 @@ export function ControllerSidebar({
         </div>
       </div>
 
-      <nav aria-label="Primary" className="scrollbar-none flex gap-1 overflow-x-auto border-t border-border/50 py-3 lg:flex-col lg:overflow-visible">
+      <nav aria-label="Primary" className="scrollbar-none flex gap-1 overflow-x-auto border-t border-border/50 py-1.5 lg:py-3 lg:flex-col lg:overflow-visible">
         <SidebarLabel>Workspace</SidebarLabel>
         <SidebarItem active href="#board" label="Work board" count={String(Object.values(counts).reduce((sum, count) => sum + count, 0))} />
         <details className="min-w-56 rounded-md lg:min-w-0 group">
-          <summary className="flex min-h-[34px] cursor-pointer list-none items-center justify-between rounded-lg px-2.5 text-xs font-semibold text-muted-foreground transition-all duration-150 hover:bg-muted/65 hover:text-foreground focus-visible:outline-none">
+          <summary className="flex min-h-[34px] cursor-pointer list-none items-center justify-between rounded-lg px-2.5 text-xs font-semibold text-muted-foreground transition-all duration-150 hover:bg-muted/60 hover:text-foreground focus-visible:outline-none">
             <span className="flex items-center gap-1.5">
               <span className="text-[9px] text-muted-foreground/50 transition-transform duration-150 group-open:rotate-90">▶</span>
               <span>Dependencies</span>
@@ -62,7 +62,7 @@ export function ControllerSidebar({
         <SidebarItem href="#logs" label="Run logs" count="live" />
       </nav>
 
-      <nav aria-label="Status" className="scrollbar-none mt-1 flex gap-1 overflow-x-auto border-t border-border/50 py-3 lg:flex-col lg:overflow-visible">
+      <nav aria-label="Status" className="scrollbar-none mt-0.5 lg:mt-1 flex gap-1 overflow-x-auto border-t border-border/50 py-1.5 lg:py-3 lg:flex-col lg:overflow-visible">
         <SidebarLabel>Status</SidebarLabel>
         <SidebarItem href={`#${columnId("Ready")}`} label="Ready" count={String(counts.Ready)} />
         <SidebarItem href={`#${columnId("Blocked")}`} label="Blocked" count={String(counts.Blocked)} />
@@ -95,7 +95,7 @@ function SidebarDependencyGraph({
         </div>
         <span className="font-mono text-[10px] text-muted-foreground bg-muted/40 border border-border/30 rounded px-1.5 py-0.5">{edgeCount}</span>
       </div>
-      <div className="mt-1 grid max-h-[34vh] gap-2 overflow-auto pr-1 scrollbar-none" aria-label="Dependency edges">
+      <div className="mt-1 grid max-h-[34vh] gap-2 overflow-auto pr-1 scrollbar-thin" aria-label="Dependency edges">
         {graphItems.length > 0 ? (
           graphItems.map((item) => (
             <button
@@ -103,8 +103,8 @@ function SidebarDependencyGraph({
               type="button"
               onClick={() => onSelect(item.id)}
               className={cn(
-                "w-full rounded-lg border border-border/60 bg-muted/20 p-2.5 text-left transition-all duration-150 hover:border-primary/50 hover:bg-muted/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                item.id === selectedId && "border-primary bg-primary/[0.04] ring-1 ring-primary/30"
+                "w-full rounded-lg border border-border/60 bg-muted/10 p-2.5 text-left transition-all duration-150 hover:border-primary/40 hover:bg-muted/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer hover:shadow-sm",
+                item.id === selectedId && "border-primary bg-primary/[0.03] ring-1 ring-primary/35 shadow-sm"
               )}
             >
               <div className="flex items-center justify-between gap-2">
@@ -119,7 +119,7 @@ function SidebarDependencyGraph({
             </button>
           ))
         ) : (
-          <div className="rounded-lg border border-dashed border-border/80 bg-background/50 p-3.5 text-xs leading-5 text-muted-foreground/60 text-center">
+          <div className="rounded-lg border border-dashed border-border/80 bg-background/50 p-3.5 text-xs leading-5 text-muted-foreground/60 text-center font-medium">
             No dependency edges on the current board.
           </div>
         )}
@@ -130,7 +130,7 @@ function SidebarDependencyGraph({
 
 function GraphLine({ left, right }: { left: string; right: string }) {
   return (
-    <div className="flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground/75 bg-muted/45 border border-border/25 px-2 py-0.5 rounded">
+    <div className="flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground/75 bg-muted/40 border border-border/20 px-2 py-0.5 rounded">
       <span className="truncate font-semibold">{left}</span>
       <span className="text-muted-foreground/45 font-sans">→</span>
       <span className="truncate font-semibold">{right}</span>
@@ -158,8 +158,8 @@ function SidebarItem({
       href={href}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "flex min-h-[34px] min-w-max items-center justify-between gap-3 rounded-lg px-2.5 text-xs font-semibold text-muted-foreground transition-all duration-150 hover:bg-muted/65 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring lg:min-w-0",
-        active && "bg-muted text-foreground shadow-sm border border-border/40 font-bold"
+        "flex min-h-[34px] min-w-max items-center justify-between gap-3 rounded-lg px-2.5 text-xs font-semibold text-muted-foreground transition-all duration-150 hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring lg:min-w-0 cursor-pointer",
+        active && "bg-muted/80 text-foreground shadow-sm border border-border/40 font-bold border-l-2 border-l-primary"
       )}
     >
       <span>{label}</span>

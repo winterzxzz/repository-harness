@@ -71,8 +71,8 @@ export function GuidedIntakePanel({ creating, error, onCreate }: GuidedIntakePan
   }
 
   return (
-    <section className="grid gap-3 xl:grid-cols-[minmax(0,0.95fr)_minmax(360px,0.65fr)]" aria-label="Guided Intake">
-      <Card className="min-w-0 rounded-lg p-4">
+    <section className="grid gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(360px,0.65fr)]" aria-label="Guided Intake">
+      <Card className="min-w-0 rounded-xl p-5 shadow-sm">
         <div className="flex flex-col gap-3 border-b border-border pb-4 md:flex-row md:items-start md:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
@@ -112,7 +112,7 @@ export function GuidedIntakePanel({ creating, error, onCreate }: GuidedIntakePan
                   {activeQuestion.label}
                 </label>
               </div>
-              <div className="flex gap-1">
+              <div className="flex gap-1.5">
                 {questions.map((question, index) => (
                   <button
                     key={question.key}
@@ -120,12 +120,12 @@ export function GuidedIntakePanel({ creating, error, onCreate }: GuidedIntakePan
                     onClick={() => setActiveIndex(index)}
                     aria-label={`Go to intake question ${index + 1}`}
                     className={cn(
-                      "size-7 rounded-sm border text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                      "size-7 rounded-md border text-xs font-bold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer hover:scale-105",
                       index === activeIndex
                         ? "border-primary bg-primary text-primary-foreground"
                         : answers[question.key].trim().length > 0
-                          ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-                          : "border-border bg-background text-muted-foreground"
+                          ? "border-emerald-500/35 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+                          : "border-border bg-background/55 text-muted-foreground"
                     )}
                   >
                     {index + 1}
@@ -194,7 +194,7 @@ function DraftPreview({
   const validation = answers.validation.trim() || "Recommended: Playwright UI check plus build verification.";
 
   return (
-    <Card role="region" aria-label="Draft story preview" className="min-w-0 rounded-lg p-4">
+    <Card role="region" aria-label="Draft story preview" className="min-w-0 rounded-xl p-5 shadow-sm bg-card/75 backdrop-blur-sm border-border">
       <div className="flex items-start gap-3">
         <span className="grid size-9 shrink-0 place-items-center rounded-md border border-emerald-200 bg-emerald-50 text-emerald-800">
           <Lightbulb className="size-4" />
@@ -243,9 +243,9 @@ function DraftPreview({
 
 function PreviewRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md border border-border bg-background p-3">
-      <p className="text-xs font-semibold text-muted-foreground">{label}</p>
-      <p className="bounded-text mt-1 font-medium">{value}</p>
+    <div className="rounded-xl border border-border/70 bg-background/30 p-3.5 shadow-sm transition-all hover:bg-background/55">
+      <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">{label}</p>
+      <p className="bounded-text mt-1.5 text-sm font-bold text-foreground leading-snug">{value}</p>
     </div>
   );
 }

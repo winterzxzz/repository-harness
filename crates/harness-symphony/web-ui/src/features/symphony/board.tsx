@@ -22,51 +22,60 @@ export function SummaryStrip({
       value: activeRun?.id ?? "none",
       detail: activeRun?.active_run ? `${activeRun.active_run} is the only task allowed in progress.` : "No active Symphony run.",
       icon: Radio,
-      className: activeRun?.active_run ? "border-blue-200 bg-blue-50 text-blue-950 dark:border-blue-900/50 dark:bg-blue-950/20 dark:text-blue-200" : "border-border bg-card"
+      className: activeRun?.active_run ? "border-blue-500/30 bg-blue-500/5 text-blue-800 dark:text-blue-400" : "border-border bg-card text-muted-foreground"
     },
     {
       label: "Safe to start",
       value: `${counts.Ready} ready`,
       detail: "Ready tasks have no incomplete blockers.",
       icon: PlayCircle,
-      className: "border-emerald-200 bg-emerald-50 text-emerald-950 dark:border-emerald-900/50 dark:bg-emerald-950/20 dark:text-emerald-200"
+      className: "border-emerald-500/30 bg-emerald-500/5 text-emerald-800 dark:text-emerald-400"
     },
     {
       label: "Avoid for now",
       value: `${counts.Blocked} blocked`,
       detail: "Blocked work explains its missing dependency before action.",
       icon: ShieldAlert,
-      className: "border-zinc-300 bg-zinc-100 text-zinc-950 dark:border-zinc-800 dark:bg-zinc-900/40 dark:text-zinc-400"
+      className: "border-zinc-500/25 bg-zinc-500/5 text-zinc-700 dark:text-zinc-400"
     },
     {
       label: "Needs decision",
       value: `${counts.Review} review`,
       detail: "Merge PR first, then approve local sync.",
       icon: GitPullRequestArrow,
-      className: "border-violet-200 bg-violet-50 text-violet-950 dark:border-violet-900/50 dark:bg-violet-950/20 dark:text-violet-200"
+      className: "border-violet-500/30 bg-violet-500/5 text-violet-800 dark:text-violet-400"
     }
   ];
 
   return (
     <section
       aria-label="Command status rail"
-      className={cn("scrollbar-none flex gap-2 overflow-x-auto md:grid md:grid-cols-2 md:overflow-visible xl:grid-cols-[1.2fr_.9fr_.9fr_1fr]", className)}
+      className={cn("scrollbar-none flex gap-2 lg:gap-3 overflow-x-auto md:grid md:grid-cols-2 md:overflow-visible xl:grid-cols-[1.2fr_.9fr_.9fr_1fr]", className)}
     >
       {metrics.map((metric) => {
         const Icon = metric.icon;
         return (
-        <Card key={metric.label} className={cn("min-w-[210px] rounded-md p-3 md:min-w-0", metric.className)}>
-          <div className="flex items-start gap-3">
-            <span className="grid size-8 shrink-0 place-items-center rounded-md border border-current/15 bg-white/50">
-              <Icon className="size-4" />
-            </span>
-            <div className="min-w-0">
-              <span className="text-xs font-semibold text-current/70">{metric.label}</span>
-              <strong className="mt-0.5 block truncate text-xl leading-tight">{metric.value}</strong>
-              <p className="mt-1 text-xs leading-5 text-current/70">{metric.detail}</p>
+          <Card 
+            key={metric.label} 
+            className={cn(
+              "min-w-[210px] rounded-xl p-3 lg:p-4 md:min-w-0 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md cursor-default border border-border bg-card", 
+              metric.className
+            )}
+          >
+            <div className="flex items-start gap-2.5">
+              <span className={cn(
+                "grid size-8 lg:size-9 shrink-0 place-items-center rounded-lg border border-current/15 bg-background/40 shadow-sm",
+                metric.label === "Active run" && activeRun?.active_run && "motion-safe:animate-pulse"
+              )}>
+                <Icon className="size-4 lg:size-4.5" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-current/60">{metric.label}</span>
+                <strong className="mt-0.5 lg:mt-1 block truncate text-lg font-bold leading-none tracking-tight text-foreground">{metric.value}</strong>
+                <p className="mt-1 lg:mt-1.5 text-xs leading-tight lg:leading-normal text-current/75 font-medium">{metric.detail}</p>
+              </div>
             </div>
-          </div>
-        </Card>
+          </Card>
         );
       })}
     </section>
@@ -90,7 +99,7 @@ export function BoardGrid({
 }) {
   return (
     <div className="min-h-0 min-w-0 overflow-x-auto">
-      <div className="grid h-[calc(100dvh-244px)] min-h-[410px] min-w-[1500px] grid-cols-[repeat(6,minmax(240px,1fr))] items-stretch gap-2.5 max-sm:h-auto max-sm:min-h-0 max-sm:min-w-0 max-sm:grid-cols-1">
+      <div className="grid h-[calc(100dvh-244px)] min-h-[410px] min-w-[1500px] grid-cols-[repeat(6,minmax(240px,1fr))] items-stretch gap-2.5 lg:gap-3 max-sm:h-auto max-sm:min-h-0 max-sm:min-w-0 max-sm:grid-cols-1">
         {states.map((state) => {
           const stateItems = items.filter((item) => item.board_state === state);
           const Icon = stateIcon[state];
@@ -100,20 +109,20 @@ export function BoardGrid({
               id={columnId(state)}
               aria-label={`${state} column`}
               className={cn(
-                "flex h-full min-h-0 flex-col overflow-hidden rounded-md border bg-muted/45 max-sm:h-[min(520px,calc(100dvh-180px))] max-sm:min-h-[320px]",
+                "flex h-full min-h-0 flex-col overflow-hidden rounded-xl border bg-muted/20 shadow-sm max-sm:h-[min(520px,calc(100dvh-180px))] max-sm:min-h-[320px]",
                 columnChrome[state]
               )}
             >
-              <div className="flex min-h-12 items-center justify-between gap-2 border-b border-border/80 bg-background px-3">
+              <div className="flex min-h-12 items-center justify-between gap-2 border-b border-border bg-card/60 backdrop-blur-sm px-3 py-2">
                 <div className="flex items-center gap-2">
                   <span className={cn("grid size-6 place-items-center rounded-md border", columnIcon[state])}>
                     <Icon className={cn("size-3.5", state === "In Progress" && "motion-safe:animate-spin")} />
                   </span>
-                  <h2 className="text-sm font-bold">{state}</h2>
+                  <h2 className="text-sm font-bold tracking-tight text-foreground">{state}</h2>
                 </div>
                 <StatusBadge state={state}>{stateItems.length}</StatusBadge>
               </div>
-              <div aria-label={`${state} tasks`} className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2">
+              <div aria-label={`${state} tasks`} className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2 scrollbar-thin">
                 {stateItems.map((item) => (
                   <TaskCard
                     key={item.id}
@@ -126,7 +135,7 @@ export function BoardGrid({
                   />
                 ))}
                 {stateItems.length === 0 ? (
-                  <div className="flex min-h-24 items-center justify-center rounded-md border border-dashed border-border bg-background/65 px-3 text-center text-xs text-muted-foreground">
+                  <div className="flex min-h-24 items-center justify-center rounded-lg border border-dashed border-border/80 bg-card/45 px-3 text-center text-xs text-muted-foreground font-medium">
                     No tasks
                   </div>
                 ) : null}
@@ -155,7 +164,6 @@ function TaskCard({
   onRun: (item: BoardItem) => Promise<void>;
 }) {
   const blocked = item.board_state === "Blocked";
-  const attention = item.board_state === "Needs Attention";
   const done = item.board_state === "Done";
   const canRun = item.board_state === "Ready" && item.verify === "configured" && activeRunId === null;
   const runDisabled = item.board_state !== "Ready" || item.verify !== "configured" || activeRunId !== null || startingId === item.id;
@@ -163,18 +171,24 @@ function TaskCard({
   return (
     <div
       className={cn(
-        "group block min-h-[136px] w-full min-w-0 shrink-0 overflow-hidden rounded-md border bg-background p-3 text-left transition-colors focus-within:ring-2 focus-within:ring-ring hover:border-primary",
-        cardChrome[item.board_state],
-        selected && "border-primary ring-2 ring-ring/25",
-        blocked && "bg-zinc-100 dark:bg-zinc-900/40",
-        attention && "bg-red-50 dark:bg-red-950/15",
-        done && "opacity-80"
+        "group block min-h-[136px] w-full min-w-0 shrink-0 overflow-hidden rounded-lg border bg-card p-3 text-left transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md focus-within:ring-2 focus-within:ring-ring cursor-pointer",
+        item.board_state === "Ready" && "task-card-ready",
+        item.board_state === "Blocked" && "task-card-blocked",
+        item.board_state === "In Progress" && "task-card-progress active-run-card",
+        item.board_state === "Review" && "task-card-review",
+        item.board_state === "Needs Attention" && "task-card-attention",
+        item.board_state === "Done" && "task-card-done",
+        selected && "border-primary ring-2 ring-ring/25 shadow-md"
       )}
       data-testid="task-card"
     >
-      <button type="button" onClick={() => onSelect(item.id)} className="block w-full min-w-0 text-left focus-visible:outline-none">
+      <button 
+        type="button" 
+        onClick={() => onSelect(item.id)} 
+        className="block w-full min-w-0 text-left focus-visible:outline-none cursor-pointer"
+      >
         <div className="flex min-w-0 items-center justify-between gap-2">
-          <span className="flex min-w-0 items-center gap-1.5 truncate font-mono text-xs font-bold text-muted-foreground">
+          <span className="flex min-w-0 items-center gap-1.5 truncate font-mono text-[10px] font-bold text-muted-foreground">
             <span className={cn("size-2 shrink-0 rounded-full", stateDot[item.board_state])} />
             <span className="min-w-0 truncate">{item.id}</span>
           </span>
@@ -182,34 +196,34 @@ function TaskCard({
             {item.board_state === "In Progress" ? "active" : item.verify}
           </Badge>
         </div>
-        <h3 className="bounded-text mt-2 line-clamp-3 text-sm font-bold leading-5">{item.title}</h3>
-        <p className="bounded-text mt-2 line-clamp-2 text-xs leading-5 text-muted-foreground">{item.reason}</p>
+        <h3 className="bounded-text mt-2 line-clamp-3 text-sm font-bold leading-tight text-foreground group-hover:text-primary transition-colors duration-150">{item.title}</h3>
+        <p className="bounded-text mt-1.5 line-clamp-2 text-xs leading-relaxed text-muted-foreground font-medium">{item.reason}</p>
         {item.failure_summary ? (
-          <div className="mt-2 flex min-w-0 items-start gap-2 overflow-hidden rounded-sm border border-destructive/20 bg-destructive/10 px-2 py-1 text-xs font-semibold text-destructive">
-            <AlertTriangle className="size-3 shrink-0" />
-            <span className="bounded-text line-clamp-2 min-w-0">{item.failure_summary.category}</span>
+          <div className="mt-2.5 flex min-w-0 items-start gap-1.5 overflow-hidden rounded-md border border-destructive/20 bg-destructive/10 px-2 py-1.5 text-xs font-semibold text-destructive">
+            <AlertTriangle className="size-3.5 shrink-0 mt-0.5" />
+            <span className="bounded-text line-clamp-2 min-w-0 leading-normal">{item.failure_summary.category}</span>
           </div>
         ) : null}
       </button>
-      <div className="mt-3 flex min-w-0 flex-wrap gap-1 border-t border-border/70 pt-2">
-        <span className="max-w-full truncate rounded-full border border-border bg-background/80 px-2 py-0.5 text-xs font-semibold text-muted-foreground">
+      <div className="mt-3 flex min-w-0 flex-wrap gap-1.5 border-t border-border/50 pt-2.5">
+        <span className="max-w-full truncate rounded-md border border-border bg-background/50 px-2 py-0.5 text-[10px] font-bold text-muted-foreground">
           {item.board_state === "Ready" ? "Start" : item.board_state === "Blocked" ? "Start disabled" : item.lane}
         </span>
-        <span className="max-w-full truncate rounded-full border border-border bg-background/80 px-2 py-0.5 text-xs font-semibold text-muted-foreground">
+        <span className="max-w-full truncate rounded-md border border-border bg-background/50 px-2 py-0.5 text-[10px] font-bold text-muted-foreground">
           {item.blockers.length > 0 ? `${item.blockers.length} blockers` : item.run_id ?? "No run"}
         </span>
       </div>
       {item.board_state === "Ready" ? (
         <Button
           type="button"
-          className="mt-3 h-9 w-full justify-start overflow-hidden px-2.5 text-left"
+          className="mt-3 h-9 w-full justify-start overflow-hidden px-2.5 text-left text-xs cursor-pointer"
           disabled={runDisabled}
           aria-label="Run with Codex"
           title={canRun ? "Start this Ready story with Codex" : "Cannot start while another run is active or proof is missing"}
           onClick={() => void onRun(item)}
         >
-          <Play className="shrink-0" />
-          <span className="min-w-0 truncate">{startingId === item.id ? "Starting" : "Run with Codex"}</span>
+          <Play className="shrink-0 size-3" />
+          <span className="min-w-0 truncate">{startingId === item.id ? "Starting..." : "Run with Codex"}</span>
         </Button>
       ) : null}
     </div>
@@ -217,37 +231,28 @@ function TaskCard({
 }
 
 const columnChrome: Record<BoardState, string> = {
-  Ready: "border-emerald-200/80 dark:border-emerald-900/40",
-  Blocked: "border-zinc-300 dark:border-zinc-800",
-  "In Progress": "border-blue-200/80 dark:border-blue-900/40",
-  Review: "border-violet-200/80 dark:border-violet-900/40",
-  "Needs Attention": "border-red-200/80 dark:border-red-900/40",
-  Done: "border-teal-200/80 dark:border-teal-900/40"
+  Ready: "border-border border-t-2 border-t-emerald-500/80 dark:border-t-emerald-400/80",
+  Blocked: "border-border border-t-2 border-t-zinc-400/70 dark:border-t-zinc-600/70",
+  "In Progress": "border-border border-t-2 border-t-blue-500/80 dark:border-t-blue-400/80",
+  Review: "border-border border-t-2 border-t-violet-500/80 dark:border-t-violet-400/80",
+  "Needs Attention": "border-border border-t-2 border-t-red-500/80 dark:border-t-red-400/80",
+  Done: "border-border border-t-2 border-t-teal-500/80 dark:border-t-teal-400/80"
 };
 
 const columnIcon: Record<BoardState, string> = {
-  Ready: "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-400",
-  Blocked: "border-zinc-300 bg-zinc-100 text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900/50 dark:text-zinc-400",
-  "In Progress": "border-blue-200 bg-blue-50 text-blue-800 dark:border-blue-900/50 dark:bg-blue-950/30 dark:text-blue-400",
-  Review: "border-violet-200 bg-violet-50 text-violet-800 dark:border-violet-900/50 dark:bg-violet-950/30 dark:text-violet-400",
-  "Needs Attention": "border-red-200 bg-red-50 text-red-800 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-400",
-  Done: "border-teal-200 bg-teal-50 text-teal-800 dark:border-teal-900/50 dark:bg-teal-950/30 dark:text-teal-400"
-};
-
-const cardChrome: Record<BoardState, string> = {
-  Ready: "border-emerald-200 hover:bg-emerald-50/45 dark:border-emerald-900/30 dark:hover:bg-emerald-950/10",
-  Blocked: "border-zinc-300 dark:border-zinc-800",
-  "In Progress": "border-blue-200 hover:bg-blue-50/45 dark:border-blue-900/30 dark:hover:bg-blue-950/10",
-  Review: "border-violet-200 hover:bg-violet-50/45 dark:border-violet-900/30 dark:hover:bg-violet-950/10",
-  "Needs Attention": "border-red-200 dark:border-red-900/30",
-  Done: "border-teal-200 hover:bg-teal-50/45 dark:border-teal-900/30 dark:hover:bg-teal-950/10"
+  Ready: "column-icon-ready",
+  Blocked: "column-icon-blocked",
+  "In Progress": "column-icon-progress",
+  Review: "column-icon-review",
+  "Needs Attention": "column-icon-attention",
+  Done: "column-icon-done"
 };
 
 const stateDot: Record<BoardState, string> = {
-  Ready: "bg-emerald-500",
-  Blocked: "bg-zinc-500",
-  "In Progress": "bg-blue-500",
-  Review: "bg-violet-500",
-  "Needs Attention": "bg-red-500",
-  Done: "bg-teal-500"
+  Ready: "bg-emerald-555 bg-emerald-500 shadow-sm shadow-emerald-500/50",
+  Blocked: "bg-zinc-500 shadow-sm shadow-zinc-500/50",
+  "In Progress": "bg-blue-500 shadow-sm shadow-blue-500/50",
+  Review: "bg-violet-500 shadow-sm shadow-violet-500/50",
+  "Needs Attention": "bg-red-500 shadow-sm shadow-red-500/50",
+  Done: "bg-teal-500 shadow-sm shadow-teal-500/50"
 };
