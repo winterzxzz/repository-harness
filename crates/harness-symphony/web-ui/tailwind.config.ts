@@ -1,38 +1,56 @@
 import type { Config } from "tailwindcss";
 
+function withOpacity(variableName: string) {
+  return ({ opacityValue }: { opacityValue?: string }) => {
+    if (opacityValue !== undefined) {
+      return `color-mix(in oklch, var(${variableName}) calc(100% * ${opacityValue}), transparent)`;
+    }
+    return `var(${variableName})`;
+  };
+}
+
 const config: Config = {
   darkMode: ["class"],
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
   theme: {
     extend: {
       colors: {
-        border: "var(--border)",
-        input: "var(--input)",
-        ring: "var(--ring)",
-        background: "var(--background)",
-        foreground: "var(--foreground)",
+        border: withOpacity("--border"),
+        input: withOpacity("--input"),
+        ring: withOpacity("--ring"),
+        background: withOpacity("--background"),
+        foreground: withOpacity("--foreground"),
         primary: {
-          DEFAULT: "var(--primary)",
-          foreground: "var(--primary-foreground)"
+          DEFAULT: withOpacity("--primary"),
+          foreground: withOpacity("--primary-foreground")
         },
         muted: {
-          DEFAULT: "var(--muted)",
-          foreground: "var(--muted-foreground)"
+          DEFAULT: withOpacity("--muted"),
+          foreground: withOpacity("--muted-foreground")
         },
         accent: {
-          DEFAULT: "var(--accent)",
-          foreground: "var(--accent-foreground)"
+          DEFAULT: withOpacity("--accent"),
+          foreground: withOpacity("--accent-foreground")
         },
         destructive: {
-          DEFAULT: "var(--destructive)",
-          foreground: "var(--destructive-foreground)"
+          DEFAULT: withOpacity("--destructive"),
+          foreground: withOpacity("--destructive-foreground")
         },
         warning: {
-          DEFAULT: "var(--warning)"
+          DEFAULT: withOpacity("--warning")
         },
         card: {
-          DEFAULT: "var(--card)",
-          foreground: "var(--card-foreground)"
+          DEFAULT: withOpacity("--card"),
+          foreground: withOpacity("--card-foreground")
+        },
+        violet: {
+          50: withOpacity("--violet-50"),
+          200: withOpacity("--violet-200"),
+          400: withOpacity("--violet-400"),
+          500: withOpacity("--violet-500"),
+          800: withOpacity("--violet-800"),
+          900: withOpacity("--violet-900"),
+          950: withOpacity("--violet-950")
         }
       },
       borderRadius: {
