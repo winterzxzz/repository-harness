@@ -2039,6 +2039,25 @@ fn load_context_story(
             },
         )
         .optional()?
+        .or_else(|| {
+            doc_path.as_ref().map(|_| ContextPackStory {
+                id: id.to_owned(),
+                title: markdown_title(&doc_text).unwrap_or_else(|| id.to_owned()),
+                doc_path: doc_path.clone(),
+                doc_text: doc_text.clone(),
+                status: "markdown-only".to_owned(),
+                risk_lane: "normal".to_owned(),
+                contract_doc: None,
+                unit_proof: 0,
+                integration_proof: 0,
+                e2e_proof: 0,
+                platform_proof: 0,
+                evidence: None,
+                verify_command: None,
+                notes: None,
+                related: Vec::new(),
+            })
+        })
         .ok_or_else(|| HarnessInfraError::StoryNotFound(id.to_owned()))?;
 
     story.related = load_related_stories(connection, id)?;
@@ -2287,9 +2306,13 @@ fn render_context_pack(
         output.push_str("- Story: none\n");
     }
     output.push_str(&format!("- Lane: `{}`\n", lane_label(lane)));
-    output.push_str("- Source: Harness durable records and compiled context rules\n\n");
+    if story.is_some_and(|story| story.status == "markdown-only") {
+        output.push_str("- Source: markdown story files and compiled context rules\n\n");
+    } else {
+        output.push_str("- Source: Harness durable records and compiled context rules\n\n");
+    }
 
-    output.push_str("## Required Context\n\n");
+    output.push_str("## Recommended Context\n\n");
     for (path, reason) in context_docs_for_lane(lane) {
         output.push_str(&format!("- `{path}` - {reason}\n"));
     }
@@ -2373,7 +2396,7 @@ fn render_context_pack(
     }
 
     output.push_str("\n## Paste Prompt\n\n");
-    output.push_str("Read the required context above before changing files. Work only inside the selected lane, preserve the product contract, and use the validation expectations as the completion proof.\n");
+    output.push_str("Start with the recommended context above, then follow imports, search results, and nearby tests as the task demands. Work inside the selected lane, preserve the product contract, and use the validation expectations as completion proof.\n");
     output
 }
 
@@ -2386,7 +2409,6 @@ fn context_docs_for_lane(lane: &str) -> Vec<(&'static str, &'static str)> {
                 "scripts/bin/harness-cli query matrix",
                 "durable proof matrix",
             ),
-            ("docs/CONTEXT_RULES.md", "context selection rules"),
         ],
         "high_risk" => vec![
             ("AGENTS.md", "agent entrypoint"),
@@ -2408,12 +2430,7 @@ fn context_docs_for_lane(lane: &str) -> Vec<(&'static str, &'static str)> {
         ],
         _ => vec![
             ("AGENTS.md", "agent entrypoint"),
-            ("README.md", "project thesis and install flow"),
-            ("docs/HARNESS.md", "operating model"),
             ("docs/FEATURE_INTAKE.md", "risk lane rules"),
-            ("docs/CONTEXT_RULES.md", "context selection rules"),
-            ("docs/TOOL_REGISTRY.md", "optional tool degrade rules"),
-            ("docs/templates/story.md", "normal story packet shape"),
             (
                 "scripts/bin/harness-cli query matrix",
                 "durable proof matrix",
@@ -4579,13 +4596,75 @@ implemented
         assert!(pack.contains("# Harness Context Pack"));
         assert!(pack.contains("Story: `US-CONTEXT`"));
         assert!(pack.contains("Lane: `normal`"));
-        assert!(pack.contains("`docs/CONTEXT_RULES.md`"));
+        assert!(pack.contains("## Recommended Context"));
         assert!(pack.contains("`docs/product/cli.md`"));
         assert!(pack.contains("`docs/decisions/0005-prebuilt-rust-harness-cli.md`"));
         assert!(pack.contains("Unit: required"));
         assert!(pack.contains("Integration: required"));
         assert!(pack.contains("Verify: `cargo test -p harness-cli context_pack`"));
         assert!(pack.contains("documentation-lookup: unknown"));
+        assert!(!pack.contains("`docs/CONTEXT_RULES.md`"));
+        assert!(!pack.contains("## Required Context"));
+        assert!(!pack.contains("Read the required context"));
+    }
+
+    #[test]
+    fn context_pack_falls_back_to_markdown_story_when_durable_row_is_missing() {
+        let (_temp_dir, repository) = isolated_test_repository();
+        repository.init().unwrap();
+        fs::create_dir_all(repository.repo_root.join("docs/stories")).unwrap();
+        fs::write(
+            repository
+                .repo_root
+                .join("docs/stories/US-FILE-context-pack.md"),
+            r#"# File Backed Context Pack
+
+## Status
+
+planned
+
+## Validation
+
+`cargo test -p harness-cli context_pack`
+"#,
+        )
+        .unwrap();
+
+        let pack = repository
+            .context_pack(ContextPackInput {
+                story_id: Some("US-FILE".to_owned()),
+                lane: None,
+            })
+            .unwrap();
+
+        assert!(pack.contains("Story: `US-FILE` - File Backed Context Pack"));
+        assert!(pack.contains("Status: `markdown-only`"));
+        assert!(pack.contains("Lane: `normal`"));
+        assert!(pack.contains("`docs/stories/US-FILE-context-pack.md` - story packet"));
+        assert!(pack.contains("Verify: no story verify command recorded"));
+    }
+
+    #[test]
+    fn normal_lane_context_pack_keeps_default_context_small() {
+        let (_temp_dir, repository) = isolated_test_repository();
+        repository.init().unwrap();
+
+        let pack = repository
+            .context_pack(ContextPackInput {
+                story_id: None,
+                lane: Some(RiskLane::Normal),
+            })
+            .unwrap();
+
+        assert!(pack.contains("## Recommended Context"));
+        assert!(pack.contains("`AGENTS.md`"));
+        assert!(pack.contains("`docs/FEATURE_INTAKE.md`"));
+        assert!(pack.contains("`scripts/bin/harness-cli query matrix`"));
+        assert!(!pack.contains("`README.md`"));
+        assert!(!pack.contains("`docs/HARNESS.md`"));
+        assert!(!pack.contains("`docs/CONTEXT_RULES.md`"));
+        assert!(!pack.contains("`docs/TOOL_REGISTRY.md`"));
+        assert!(!pack.contains("`docs/templates/story.md`"));
     }
 
     #[test]
