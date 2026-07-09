@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
@@ -42,8 +42,8 @@ fn main() -> ExitCode {
 }
 
 fn run_score(
-    artifact_dir: &std::path::Path,
-    task_path: &std::path::Path,
+    artifact_dir: &Path,
+    task_path: &Path,
 ) -> Result<(), harness_bench::error::BenchError> {
     let spec = TaskSpec::load(task_path)?;
     let artifact = Artifact::load(artifact_dir)?;

@@ -22,4 +22,7 @@ pub enum BenchError {
 
     #[error("check '{0}' misconfigured: {1}")]
     CheckConfig(String, String),
+
+    #[error("artifact is for task '{artifact}', but spec is for '{spec}'")]
+    TaskMismatch { spec: String, artifact: String },
 }

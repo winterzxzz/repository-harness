@@ -42,7 +42,9 @@ pub fn functional_pass(spec: &TaskSpec, artifact: &Artifact) -> Result<bool, Ben
 }
 
 fn query_first_string(db: &Path, sql: &str) -> Result<Option<String>, BenchError> {
-    let conn = rusqlite::Connection::open(db).map_err(|e| BenchError::Sqlite(e.to_string()))?;
+    let conn =
+        rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| BenchError::Sqlite(e.to_string()))?;
     let value = conn.query_row(sql, [], |row| row.get::<_, String>(0));
     match value {
         Ok(v) => Ok(Some(v)),
@@ -52,9 +54,14 @@ fn query_first_string(db: &Path, sql: &str) -> Result<Option<String>, BenchError
 }
 
 fn query_first_i64(db: &Path, sql: &str) -> Result<i64, BenchError> {
-    let conn = rusqlite::Connection::open(db).map_err(|e| BenchError::Sqlite(e.to_string()))?;
+    let conn =
+        rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| BenchError::Sqlite(e.to_string()))?;
     conn.query_row(sql, [], |row| row.get::<_, i64>(0))
-        .map_err(|e| BenchError::Sqlite(e.to_string()))
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(0),
+            other => Err(BenchError::Sqlite(other.to_string())),
+        })
 }
 
 fn eval_check(check: &Check, artifact: &Artifact) -> Result<(bool, String), BenchError> {
@@ -110,6 +117,12 @@ pub fn run_checks(spec: &TaskSpec, artifact: &Artifact) -> Result<Vec<CheckResul
 }
 
 pub fn score_artifact(spec: &TaskSpec, artifact: &Artifact) -> Result<RunScore, BenchError> {
+    if artifact.meta.task != spec.id {
+        return Err(BenchError::TaskMismatch {
+            spec: spec.id.clone(),
+            artifact: artifact.meta.task.clone(),
+        });
+    }
     let functional = functional_pass(spec, artifact)?;
     let checks = run_checks(spec, artifact)?;
     Ok(RunScore {
@@ -145,7 +158,7 @@ mod tests {
         }
     }
 
-    fn artifact_with_db(exit_ok: bool, lane: &str, traces: usize) -> (tempfile::TempDir, Artifact) {
+    fn artifact_with_db(lane: &str, traces: usize) -> (tempfile::TempDir, Artifact) {
         let tmp = tempfile::tempdir().unwrap();
         fs::create_dir_all(tmp.path().join("worktree")).unwrap();
         fs::write(
@@ -153,7 +166,6 @@ mod tests {
             r#"{"task":"T1","arm":"hn","k":1,"agent":"fake","exit_code":0}"#,
         )
         .unwrap();
-        let _ = exit_ok;
         seed_db(&tmp.path().join("harness.db"), lane, traces);
         let artifact = Artifact::load(tmp.path()).unwrap();
         (tmp, artifact)
@@ -187,36 +199,103 @@ sql = "SELECT count(*) FROM trace"
 
     #[test]
     fn functional_passes_on_exit_zero() {
-        let (_tmp, artifact) = artifact_with_db(true, "tiny", 1);
+        let (_tmp, artifact) = artifact_with_db("tiny", 1);
         let spec = spec_with("true");
         assert!(functional_pass(&spec, &artifact).unwrap());
     }
 
     #[test]
     fn functional_fails_on_exit_nonzero() {
-        let (_tmp, artifact) = artifact_with_db(true, "tiny", 1);
+        let (_tmp, artifact) = artifact_with_db("tiny", 1);
         let spec = spec_with("false");
         assert!(!functional_pass(&spec, &artifact).unwrap());
     }
 
     #[test]
     fn sql_expect_matches_and_mismatches() {
-        let (_tmp, artifact) = artifact_with_db(true, "tiny", 1);
+        let (_tmp, artifact) = artifact_with_db("tiny", 1);
         let results = run_checks(&spec_with("true"), &artifact).unwrap();
         assert!(results[0].passed, "lane matches 'tiny'");
 
-        let (_tmp2, wrong) = artifact_with_db(true, "high-risk", 1);
+        let (_tmp2, wrong) = artifact_with_db("high-risk", 1);
         let results = run_checks(&spec_with("true"), &wrong).unwrap();
         assert!(!results[0].passed, "lane 'high-risk' != 'tiny'");
     }
 
     #[test]
     fn sql_nonzero_reflects_trace_count() {
-        let (_tmp, has) = artifact_with_db(true, "tiny", 3);
+        let (_tmp, has) = artifact_with_db("tiny", 3);
         assert!(run_checks(&spec_with("true"), &has).unwrap()[1].passed);
 
-        let (_tmp2, none) = artifact_with_db(true, "tiny", 0);
+        let (_tmp2, none) = artifact_with_db("tiny", 0);
         assert!(!run_checks(&spec_with("true"), &none).unwrap()[1].passed);
+    }
+
+    #[test]
+    fn sql_nonzero_zero_rows_does_not_abort_run() {
+        // Non-aggregate query that returns zero rows (as opposed to an
+        // aggregate like `count(*)`, which always returns exactly one row).
+        let (_tmp, artifact) = artifact_with_db("tiny", 1);
+        let toml = r#"
+id = "T1"
+lane = "tiny"
+
+[functional]
+test_command = "true"
+
+[[checks]]
+id = "no_matching_rows"
+responsibility = "Observability"
+kind = "sql_nonzero"
+sql = "SELECT id FROM trace WHERE 0"
+"#;
+        let spec = TaskSpec::from_toml_str(toml).unwrap();
+        let score = score_artifact(&spec, &artifact).unwrap();
+        assert_eq!(score.checks.len(), 1);
+        assert!(
+            !score.checks[0].passed,
+            "zero rows should be treated as count 0, not error"
+        );
+    }
+
+    #[test]
+    fn unknown_check_kind_is_rejected() {
+        let (_tmp, artifact) = artifact_with_db("tiny", 1);
+        let toml = r#"
+id = "T1"
+lane = "tiny"
+
+[functional]
+test_command = "true"
+
+[[checks]]
+id = "mystery"
+responsibility = "Task specification"
+kind = "bogus"
+"#;
+        let spec = TaskSpec::from_toml_str(toml).unwrap();
+        let err = run_checks(&spec, &artifact).unwrap_err();
+        assert!(matches!(err, BenchError::CheckConfig(_, _)));
+    }
+
+    #[test]
+    fn task_mismatch_between_artifact_and_spec_is_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("worktree")).unwrap();
+        fs::write(
+            tmp.path().join("meta.json"),
+            r#"{"task":"T2","arm":"hn","k":1,"agent":"fake","exit_code":0}"#,
+        )
+        .unwrap();
+        seed_db(&tmp.path().join("harness.db"), "tiny", 1);
+        let artifact = Artifact::load(tmp.path()).unwrap();
+
+        // spec_with() builds a spec whose id is "T1".
+        let err = score_artifact(&spec_with("true"), &artifact).unwrap_err();
+        assert!(matches!(
+            err,
+            BenchError::TaskMismatch { spec, artifact } if spec == "T1" && artifact == "T2"
+        ));
     }
 
     #[test]

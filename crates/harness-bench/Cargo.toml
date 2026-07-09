@@ -1,8 +1,9 @@
 [package]
 name = "harness-bench"
 version = "0.1.0"
-edition = "2021"
-license = "MIT"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [[bin]]
 name = "harness-bench"
