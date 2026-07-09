@@ -1,9 +1,9 @@
 import { ArrowRight, GitBranch } from "lucide-react";
 import type * as React from "react";
 import { cn } from "../../lib/utils";
-import { columnId } from "./constants";
+import { bucketId } from "./constants";
 import { StatusBadge } from "./status-badge";
-import type { BoardItem, BoardState } from "./types";
+import type { BoardBucket, BoardItem } from "./types";
 
 export function ControllerSidebar({
   counts,
@@ -11,7 +11,7 @@ export function ControllerSidebar({
   selectedId,
   onSelect
 }: {
-  counts: Record<BoardState, number>;
+  counts: Record<BoardBucket, number>;
   items: BoardItem[];
   selectedId: string | null;
   onSelect: (id: string) => void;
@@ -64,9 +64,10 @@ export function ControllerSidebar({
 
       <nav aria-label="Status" className="scrollbar-none mt-0.5 lg:mt-1 flex gap-1 overflow-x-auto border-t border-border/50 py-1.5 lg:py-3 lg:flex-col lg:overflow-visible">
         <SidebarLabel>Status</SidebarLabel>
-        <SidebarItem href={`#${columnId("Ready")}`} label="Ready" count={String(counts.Ready)} />
-        <SidebarItem href={`#${columnId("Blocked")}`} label="Blocked" count={String(counts.Blocked)} />
-        <SidebarItem href={`#${columnId("Review")}`} label="Review" count={String(counts.Review)} />
+        <SidebarItem href={`#${bucketId("Drafts")}`} label="Drafts" count={String(counts.Drafts)} />
+        <SidebarItem href={`#${bucketId("Active")}`} label="Active" count={String(counts.Active)} />
+        <SidebarItem href={`#${bucketId("Ready")}`} label="Ready" count={String(counts.Ready)} />
+        <SidebarItem href={`#${bucketId("Done")}`} label="Done" count={String(counts.Done)} />
       </nav>
 
       <SidebarDependencyGraph items={items} selectedId={selectedId} onSelect={onSelect} />
@@ -170,4 +171,3 @@ function SidebarItem({
     </a>
   );
 }
-
