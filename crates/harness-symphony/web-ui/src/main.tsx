@@ -16,6 +16,7 @@ import {
   postCreateGuidedIntake,
   postMarkPrMerged,
   postRecoverTask,
+  postRejectRun,
   postRetireTask,
   postRetryPr,
   postStartTask,
@@ -26,6 +27,8 @@ import { BoardGrid, SummaryStrip } from "./features/symphony/board";
 import { ConfettiBurstHost, TaskDetail, TaskDetailOverlay } from "./features/symphony/detail";
 import { GuidedIntakePanel } from "./features/symphony/intake";
 import { SettingsPanel } from "./features/symphony/settings";
+import { ToolDashboard } from "./features/symphony/tool-dashboard";
+import { TraceExplorer } from "./features/symphony/trace-explorer";
 import { agentLabel, states } from "./features/symphony/constants";
 import { ControllerSidebar } from "./features/symphony/sidebar";
 import { ToastProvider, useToast } from "./features/symphony/toast";
@@ -36,6 +39,7 @@ import type {
   GuidedIntakeDraft,
   PrMergedResponse,
   PrRetryResponse,
+  RejectRunResponse,
   RecoveryAction
 } from "./features/symphony/types";
 import { cn } from "./lib/utils";
@@ -47,7 +51,7 @@ type ConfettiBurst = {
   y: number;
 };
 
-type AppView = "board" | "intake" | "settings";
+type AppView = "board" | "intake" | "traces" | "tools" | "settings";
 
 function App() {
   const toast = useToast();
@@ -64,6 +68,7 @@ function App() {
   const [syncingRunId, setSyncingRunId] = React.useState<string | null>(null);
   const [markingMergedRunId, setMarkingMergedRunId] = React.useState<string | null>(null);
   const [retryingPrRunId, setRetryingPrRunId] = React.useState<string | null>(null);
+  const [rejectingRunId, setRejectingRunId] = React.useState<string | null>(null);
   const [creatingStory, setCreatingStory] = React.useState(false);
   const [intakeError, setIntakeError] = React.useState<string | null>(null);
   const [defaultAgent, setDefaultAgent] = React.useState<AgentId>("codex");
@@ -336,6 +341,27 @@ function App() {
     [loadBoard, toast]
   );
 
+  const rejectRun = React.useCallback(
+    async (runId: string, reason: string): Promise<RejectRunResponse> => {
+      setRejectingRunId(runId);
+      setError(null);
+      try {
+        const result = await postRejectRun(runId, reason);
+        await loadBoard();
+        toast.add({ kind: "info", title: "Run rejected", description: result.next_action });
+        return result;
+      } catch (cause) {
+        const msg = cause instanceof Error ? cause.message : "Reject failed";
+        setError(msg);
+        toast.add({ kind: "error", title: "Reject failed", description: msg });
+        throw cause;
+      } finally {
+        setRejectingRunId(null);
+      }
+    },
+    [loadBoard, toast]
+  );
+
   const createGuidedStory = React.useCallback(
     async (draft: GuidedIntakeDraft) => {
       if (!window.confirm("Create a durable Harness story from this guided intake? This writes intake and story records but does not start Symphony.")) {
@@ -392,7 +418,7 @@ function App() {
                 <p className="mt-0.5 lg:mt-1 max-w-3xl text-sm font-medium leading-normal lg:leading-relaxed text-muted-foreground">
                   Start safe work, watch the active run, review evidence, and sync accepted changes from one local controller.
                 </p>
-                <div role="tablist" aria-label="Command Center views" className="mt-2.5 lg:mt-4 inline-flex h-9 lg:h-10 items-center justify-center rounded-xl bg-muted/40 border border-border/50 p-1 text-muted-foreground">
+                <div role="tablist" aria-label="Command Center views" className="mt-2.5 lg:mt-4 flex max-w-full items-center gap-1 overflow-x-auto rounded-xl bg-muted/40 border border-border/50 p-1 text-muted-foreground">
                   <button
                     type="button"
                     role="tab"
@@ -416,6 +442,30 @@ function App() {
                     onClick={() => switchView("intake")}
                   >
                     Guided Intake
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={view === "traces"}
+                    className={cn(
+                      "inline-flex h-7 lg:h-8 items-center justify-center whitespace-nowrap rounded-lg px-4 text-xs font-bold transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 cursor-pointer",
+                      view === "traces" ? "bg-background text-foreground shadow-sm border border-border/40 font-bold" : "hover:text-foreground/80 hover:bg-muted/30"
+                    )}
+                    onClick={() => switchView("traces")}
+                  >
+                    Trace Explorer
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={view === "tools"}
+                    className={cn(
+                      "inline-flex h-7 lg:h-8 items-center justify-center whitespace-nowrap rounded-lg px-4 text-xs font-bold transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 cursor-pointer",
+                      view === "tools" ? "bg-background text-foreground shadow-sm border border-border/40 font-bold" : "hover:text-foreground/80 hover:bg-muted/30"
+                    )}
+                    onClick={() => switchView("tools")}
+                  >
+                    Tool Status
                   </button>
                   <button
                     type="button"
@@ -485,6 +535,10 @@ function App() {
             </section>
           ) : view === "intake" ? (
             <GuidedIntakePanel creating={creatingStory} error={intakeError} onCreate={createGuidedStory} />
+          ) : view === "traces" ? (
+            <TraceExplorer />
+          ) : view === "tools" ? (
+            <ToolDashboard />
           ) : (
             <SettingsPanel
               defaultAgent={defaultAgent}
@@ -506,6 +560,7 @@ function App() {
                 syncingRunId={syncingRunId}
                 markingMergedRunId={markingMergedRunId}
                 retryingPrRunId={retryingPrRunId}
+                rejectingRunId={rejectingRunId}
                 onClose={closeSelectedTask}
                 onStart={startTask}
                 onRetire={retireTask}
@@ -513,6 +568,7 @@ function App() {
                 onSync={syncRun}
                 onMarkPrMerged={markPrMerged}
                 onRetryPr={retryPr}
+                onReject={rejectRun}
               />
             </TaskDetailOverlay>
           ) : null}
@@ -522,7 +578,11 @@ function App() {
               ? "Source: local Symphony API responses for board state, run events, review artifacts, PR status, and sync state."
               : view === "intake"
                 ? "Source: local draft state until explicit create writes Harness intake and story records."
-                : "Source: local Symphony settings; the default agent persists in the Symphony state database."}
+                : view === "traces"
+                  ? "Source: Harness trace records in the durable database."
+                  : view === "tools"
+                    ? "Source: Harness tool registry and latest presence scan."
+                    : "Source: local Symphony settings; the default agent persists in the Symphony state database."}
           </p>
         </div>
       </div>

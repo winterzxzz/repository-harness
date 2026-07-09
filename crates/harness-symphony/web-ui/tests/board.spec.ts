@@ -41,6 +41,18 @@ async function expectReadableTaskCard(locator: Locator, label: string) {
 }
 
 test("board renders task columns and detail controls", async ({ page }) => {
+  await page.route("**/api/board", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        items: [boardItem("US-052", "Sync Approval And Done Transition", "Ready")]
+      })
+    });
+  });
+  await page.route("**/api/tasks/US-052/context", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ story_id: "US-052", content: "# Context" }) });
+  });
+
   await page.goto("/");
 
   await expect(page.getByRole("heading", { name: "Symphony Command Center" })).toBeVisible();
@@ -442,6 +454,203 @@ test("settings view saves the default agent and relabels the run button", async 
   await page.getByRole("tab", { name: "Work Board" }).click();
   const readyCard = page.getByRole("region", { name: "Ready column" }).getByTestId("task-card").filter({ hasText: "US-078" });
   await expect(readyCard.getByRole("button", { name: "Run with OpenCode" })).toBeVisible();
+});
+
+test("task detail renders context pack with fenced code", async ({ page }) => {
+  let contextRequested = false;
+  await page.route("**/api/board", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        items: [boardItem("US-080", "Context Viewer Surface", "Ready")]
+      })
+    });
+  });
+  await page.route("**/api/tasks/US-080/context", async (route) => {
+    contextRequested = true;
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        story_id: "US-080",
+        content: "# Context Pack\n\nRead this first.\n\n```bash\ncargo test -p harness-symphony\n```"
+      })
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /US-080/ }).click();
+
+  const detail = page.getByRole("dialog", { name: "Selected work detail" });
+  await expect(detail.getByRole("heading", { name: "Context pack" })).toBeVisible();
+  await expect(detail.getByText("Read this first.")).toBeVisible();
+  await expect(detail.getByText("bash")).toBeVisible();
+  await expect(detail.getByText("cargo test -p harness-symphony")).toBeVisible();
+  await expect.poll(async () => contextRequested).toBe(true);
+});
+
+test("trace explorer loads and filters trace records", async ({ page }) => {
+  let requestedUrl = "";
+  await page.route("**/api/board", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [] }) });
+  });
+  await page.route("**/api/traces**", async (route) => {
+    requestedUrl = route.request().url();
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        total: 1,
+        traces: [
+          {
+            id: 7,
+            story_id: "US-080",
+            summary: "Trace target",
+            outcome: "completed",
+            created_at: "2026-07-09 10:00:00",
+            duration_seconds: 12,
+            harness_friction: "none"
+          }
+        ]
+      })
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("tab", { name: "Trace Explorer" }).click();
+  await expect(page.getByRole("heading", { name: "Trace Explorer" })).toBeVisible();
+  await page.getByRole("textbox", { name: "Trace story filter" }).fill("US-080");
+  await page.getByRole("button", { name: "Apply trace filter" }).click();
+
+  await expect.poll(async () => requestedUrl).toContain("story_id=US-080");
+  await expect(page.getByRole("region", { name: "Trace results" })).toContainText("Trace target");
+  await expect(page.getByRole("region", { name: "Trace results" })).toContainText("completed");
+});
+
+test("tool status dashboard lists tools and triggers scan", async ({ page }) => {
+  let checked = false;
+  await page.route("**/api/board", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [] }) });
+  });
+  await page.route("**/api/tools", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        tools: [
+          {
+            provider: "custom",
+            name: "deploy-check",
+            kind: "cli",
+            capability: "deploy-verification",
+            status: checked ? "present" : "unknown",
+            description: "Verify deploy health before release",
+            responsibility: "Verification",
+            command: "./scripts/deploy-check.sh",
+            source: "registered",
+            since: "registered",
+            scan_target: null,
+            checked_at: checked ? "2026-07-09 10:00:00" : null
+          }
+        ]
+      })
+    });
+  });
+  await page.route("**/api/tools/check", async (route) => {
+    checked = true;
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ tools: [{ name: "deploy-check", status: "present" }] })
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("tab", { name: "Tool Status" }).click();
+  await expect(page.getByRole("heading", { name: "Tool Status" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Tool registry" })).toContainText("deploy-check");
+  await expect(page.getByRole("region", { name: "Tool registry" })).toContainText("unknown");
+
+  await page.getByRole("button", { name: "Check tools" }).click();
+
+  await expect.poll(async () => checked).toBe(true);
+  await expect(page.getByRole("region", { name: "Tool registry" })).toContainText("present");
+});
+
+test("run monitor summarizes active event progress", async ({ page }) => {
+  await page.route("**/api/board", async (route) => {
+    const item = boardItem("US-081", "Run Monitor Progress", "In Progress");
+    item.active_run = "run_us_081";
+    item.run_id = "run_us_081";
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [item] }) });
+  });
+  await page.route("**/api/runs/run_us_081/events", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        run_id: "run_us_081",
+        events: [
+          { method: "turn/started", params: { timestamp: "2026-07-09T10:00:00Z" } },
+          { method: "turn/diff/updated", params: { timestamp: "2026-07-09T10:01:00Z" } }
+        ]
+      })
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /US-081/ }).click();
+
+  const monitor = page.getByRole("region", { name: "Run monitor" });
+  await expect(monitor.getByRole("heading", { name: "Run monitor" })).toBeVisible();
+  await expect(monitor).toContainText("Events 2");
+  await expect(monitor).toContainText("Execution");
+});
+
+test("review panel rejects a run with a reason", async ({ page }) => {
+  let rejectBody: unknown = null;
+  const item = boardItem("US-082", "Reject Review Run", "Review");
+  item.run_id = "run_us_082";
+  await page.route("**/api/board", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [item] }) });
+  });
+  await page.route("**/api/tasks/US-082/context", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ story_id: "US-082", content: "# Context" }) });
+  });
+  await page.route("**/api/runs/run_us_082/review", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        run_id: "run_us_082",
+        story_id: "US-082",
+        status: "completed",
+        agent: "codex",
+        outcome: "completed",
+        summary: "Ready for review",
+        result: null,
+        validation: null,
+        changed_files: ["src/lib.rs"],
+        changeset_preview: "diff",
+        pr_url: "https://example.test/pr/82",
+        pr_status: "created",
+        artifact_paths: [],
+        events: [],
+        suggested_next_action: "Review evidence.",
+        failure_summary: null,
+        recovery_action: null
+      })
+    });
+  });
+  await page.route("**/api/runs/run_us_082/reject", async (route) => {
+    rejectBody = route.request().postDataJSON();
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ run_id: "run_us_082", status: "rejected", next_action: "review rejected: Needs tests" })
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /US-082/ }).click();
+  const detail = page.getByRole("dialog", { name: "Selected work detail" });
+  await detail.getByRole("textbox", { name: "Review note" }).fill("Needs tests");
+  await detail.getByRole("button", { name: "Reject run" }).click();
+
+  await expect.poll(async () => rejectBody).toEqual({ reason: "Needs tests" });
 });
 
 test("delete action is hidden for non-ready tasks", async ({ page }) => {
@@ -1204,6 +1413,16 @@ test("view tabs contain Kanban and Table options", async ({ page }) => {
 });
 
 test("detail drawer contains slide transition styles", async ({ page }) => {
+  await page.route("**/api/board", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ items: [boardItem("US-090", "Slide Transition Detail", "Ready")] })
+    });
+  });
+  await page.route("**/api/tasks/US-090/context", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ story_id: "US-090", content: "# Context" }) });
+  });
+
   await page.goto("/");
   // Trigger opening a card by clicking on a card button
   await page.getByRole("button", { name: /US-/ }).first().click();

@@ -15,8 +15,9 @@ import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Separator } from "../../components/ui/separator";
 import { ApiError, fetchEvents, fetchReview } from "./api";
+import { ContextViewer } from "./context-viewer";
 import { StatusBadge } from "./status-badge";
-import type { BoardItem, FailureSummary, PrMergedResponse, PrRetryResponse, RecoveryAction, ReviewResponse, RunEvent } from "./types";
+import type { BoardItem, FailureSummary, PrMergedResponse, PrRetryResponse, RecoveryAction, RejectRunResponse, ReviewResponse, RunEvent } from "./types";
 import { cn } from "../../lib/utils";
 import { formatRunLog } from "../../run-log";
 import { agentLabel } from "./constants";
@@ -175,13 +176,15 @@ export function TaskDetail({
   syncingRunId,
   markingMergedRunId,
   retryingPrRunId,
+  rejectingRunId,
   onClose,
   onStart,
   onRetire,
   onRecover,
   onSync,
   onMarkPrMerged,
-  onRetryPr
+  onRetryPr,
+  onReject
 }: {
   item: BoardItem;
   startingId: string | null;
@@ -190,6 +193,7 @@ export function TaskDetail({
   syncingRunId: string | null;
   markingMergedRunId: string | null;
   retryingPrRunId: string | null;
+  rejectingRunId: string | null;
   onClose: (origin?: HTMLElement) => void;
   onStart: (storyId: string) => Promise<void>;
   onRetire: (item: BoardItem) => Promise<void>;
@@ -197,6 +201,7 @@ export function TaskDetail({
   onSync: (runId: string) => Promise<void>;
   onMarkPrMerged: (runId: string) => Promise<PrMergedResponse>;
   onRetryPr: (runId: string, action: RecoveryAction) => Promise<PrRetryResponse>;
+  onReject: (runId: string, reason: string) => Promise<RejectRunResponse>;
 }) {
   const [events, setEvents] = React.useState<RunEvent[]>([]);
   const [reviewState, setReviewState] = React.useState<ReviewState>({ status: "idle" });
@@ -423,6 +428,8 @@ export function TaskDetail({
         <HierarchyBlock item={item} />
       </div>
 
+      <ContextViewer storyId={item.id} />
+
       {review ? (
         <div className="border-b border-border p-4">
           <ReviewPanel
@@ -430,9 +437,11 @@ export function TaskDetail({
             syncing={syncingRunId === review.run_id}
             markingMerged={markingMergedRunId === review.run_id}
             retryingPr={retryingPrRunId === review.run_id}
+            rejecting={rejectingRunId === review.run_id}
             onSync={onSync}
             onMarkPrMerged={markReviewPrMerged}
             onRetryPr={retryReviewPr}
+            onReject={onReject}
           />
         </div>
       ) : null}
@@ -468,21 +477,27 @@ function ReviewPanel({
   syncing,
   markingMerged,
   retryingPr,
+  rejecting,
   onSync,
   onMarkPrMerged,
-  onRetryPr
+  onRetryPr,
+  onReject
 }: {
   review: ReviewResponse;
   syncing: boolean;
   markingMerged: boolean;
   retryingPr: boolean;
+  rejecting: boolean;
   onSync: (runId: string) => Promise<void>;
   onMarkPrMerged: (runId: string) => Promise<void>;
   onRetryPr: (runId: string, action: RecoveryAction) => Promise<void>;
+  onReject: (runId: string, reason: string) => Promise<RejectRunResponse>;
 }) {
   const canMarkMerged = review.pr_status === "created" && review.pr_url !== null;
   const canSync = review.pr_status === "merged" && review.status === "completed";
   const prRecovery = review.recovery_action?.kind === "pr_retry" ? review.recovery_action : null;
+  const [reviewNote, setReviewNote] = React.useState("");
+  const rejectDisabled = rejecting || reviewNote.trim().length === 0;
 
   return (
     <div className="flex flex-col gap-3">
@@ -521,6 +536,16 @@ function ReviewPanel({
       <ListBlock title="Artifacts" values={review.artifact_paths} empty="No artifacts found" />
 
       <Separator />
+      <label className="grid gap-2">
+        <span className="text-xs font-bold uppercase tracking-widest text-muted-foreground/70">Review note</span>
+        <textarea
+          aria-label="Review note"
+          className="min-h-20 resize-y rounded-lg border border-border bg-background/50 p-3 text-sm leading-6 text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          maxLength={500}
+          value={reviewNote}
+          onChange={(event) => setReviewNote(event.target.value)}
+        />
+      </label>
       <div className="flex flex-wrap gap-2">
         {prRecovery ? (
           <Button variant="outline" disabled={retryingPr} onClick={() => void onRetryPr(review.run_id, prRecovery)}>
@@ -543,6 +568,10 @@ function ReviewPanel({
         <Button disabled={!canSync || syncing} onClick={() => void onSync(review.run_id)}>
           {syncing ? <Loader2 data-icon="inline-start" className="motion-safe:animate-spin" /> : <CheckCircle2 data-icon="inline-start" />}
           Approve Sync
+        </Button>
+        <Button variant="outline" disabled={rejectDisabled} onClick={() => void onReject(review.run_id, reviewNote.trim())}>
+          {rejecting ? <Loader2 data-icon="inline-start" className="motion-safe:animate-spin" /> : <ShieldAlert data-icon="inline-start" />}
+          Reject run
         </Button>
       </div>
     </div>
@@ -627,12 +656,20 @@ function PriorFailureEvidence({ review }: { review: ReviewResponse }) {
 
 function EventLog({ events, live = false, agent }: { events: RunEvent[]; live?: boolean; agent?: string }) {
   const entries = formatRunLog(events, agentLabel(agent ?? "codex")).slice(-12);
+  const stage = runMonitorStage(events);
 
   return (
-    <div id="logs" className="flex flex-col gap-3 p-4" role={live ? "status" : undefined} aria-live={live ? "polite" : undefined}>
+    <div id="logs" className="flex flex-col gap-3 p-4" role="region" aria-label="Run monitor" aria-live={live ? "polite" : undefined}>
       <div className="flex items-baseline justify-between gap-3">
-        <SectionTitle>Run communication</SectionTitle>
+        <SectionTitle>Run monitor</SectionTitle>
         <p className="text-xs text-muted-foreground">Raw artifact: APP_SERVER_EVENTS.jsonl</p>
+      </div>
+      <h4 className="sr-only">Run communication</h4>
+      <p className="text-xs font-semibold text-muted-foreground">Events {events.length} - {stage}</p>
+      <div className="grid gap-2 sm:grid-cols-3">
+        <Field label="Stage" value={stage} />
+        <Field label="Events" value={String(events.length)} />
+        <Field label="Last update" value={entries.at(-1)?.timestamp ?? "pending"} />
       </div>
       <div className="max-h-80 overflow-auto rounded-md border border-border bg-muted">
         {entries.length > 0 ? (
@@ -662,6 +699,28 @@ function EventLog({ events, live = false, agent }: { events: RunEvent[]; live?: 
       </div>
     </div>
   );
+}
+
+function runMonitorStage(events: RunEvent[]): string {
+  const methods = events.map(eventMethod);
+  if (methods.includes("turn/completed")) {
+    return "Artifacts";
+  }
+  if (methods.some((method) => method?.includes("diff") || method?.includes("completed"))) {
+    return "Execution";
+  }
+  if (methods.some((method) => method?.includes("started"))) {
+    return "Preparation";
+  }
+  return "Waiting";
+}
+
+function eventMethod(event: RunEvent): string | undefined {
+  if (typeof event !== "object" || event === null || Array.isArray(event)) {
+    return undefined;
+  }
+  const value = (event as { method?: unknown }).method;
+  return typeof value === "string" ? value : undefined;
 }
 
 function Field({ label, value }: { label: string; value: string }) {

@@ -93,6 +93,45 @@ export type ReviewResponse = {
   recovery_action: RecoveryAction | null;
 };
 
+export type ContextResponse = {
+  story_id: string;
+  content: string;
+};
+
+export type TraceItem = {
+  id: number;
+  story_id: string | null;
+  summary: string;
+  outcome: string;
+  created_at: string;
+  duration_seconds: number | null;
+  harness_friction: string | null;
+};
+
+export type TraceResponse = {
+  traces: TraceItem[];
+  total: number;
+};
+
+export type ToolItem = {
+  provider: string;
+  name: string;
+  kind: string;
+  capability: string | null;
+  status: string;
+  description: string;
+  responsibility: string;
+  command: string;
+  source: string;
+  since: string;
+  scan_target: string | null;
+  checked_at: string | null;
+};
+
+export type ToolsResponse = {
+  tools: ToolItem[];
+};
+
 export type SyncResponse = {
   run_id: string;
   applied: boolean;
@@ -107,4 +146,10 @@ export type PrRetryResponse = {
   run_id: string;
   pr_status: string;
   pr_url: string | null;
+};
+
+export type RejectRunResponse = {
+  run_id: string;
+  status: string;
+  next_action: string;
 };

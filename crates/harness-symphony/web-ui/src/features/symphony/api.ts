@@ -3,16 +3,22 @@ import type {
   BoardItem,
   BoardResponse,
   BoardState,
+  ContextResponse,
   CreatedStoryResponse,
   EventsResponse,
   FailureSummary,
   GuidedIntakeDraft,
   PrMergedResponse,
   PrRetryResponse,
+  RejectRunResponse,
   RecoveryAction,
   ReviewResponse,
   SettingsResponse,
-  SyncResponse
+  SyncResponse,
+  ToolItem,
+  ToolsResponse,
+  TraceItem,
+  TraceResponse
 } from "./types";
 
 const boardStates: BoardState[] = ["Ready", "Blocked", "In Progress", "Review", "Needs Attention", "Done"];
@@ -40,6 +46,34 @@ export async function fetchEvents(runId: string, options?: { signal?: AbortSigna
 export async function fetchReview(runId: string, options?: { signal?: AbortSignal }): Promise<ReviewResponse> {
   const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/review`, { signal: options?.signal });
   return readJson(response, parseReviewResponse, "Review request failed");
+}
+
+export async function fetchContext(storyId: string, options?: { signal?: AbortSignal }): Promise<ContextResponse> {
+  const response = await fetch(`/api/tasks/${encodeURIComponent(storyId)}/context`, { signal: options?.signal });
+  return readJson(response, parseContextResponse, "Context request failed");
+}
+
+export async function fetchTraces(filters?: { storyId?: string; outcome?: string }, options?: { signal?: AbortSignal }): Promise<TraceResponse> {
+  const params = new URLSearchParams();
+  if (filters?.storyId) {
+    params.set("story_id", filters.storyId);
+  }
+  if (filters?.outcome) {
+    params.set("outcome", filters.outcome);
+  }
+  const query = params.toString();
+  const response = await fetch(query ? `/api/traces?${query}` : "/api/traces", { signal: options?.signal });
+  return readJson(response, parseTraceResponse, "Trace request failed");
+}
+
+export async function fetchTools(options?: { signal?: AbortSignal }): Promise<ToolsResponse> {
+  const response = await fetch("/api/tools", { signal: options?.signal });
+  return readJson(response, parseToolsResponse, "Tool request failed");
+}
+
+export async function postCheckTools(): Promise<void> {
+  const response = await fetch("/api/tools/check", { method: "POST" });
+  await readJson(response, parseToolCheckResponse, "Tool check failed");
 }
 
 export async function postStartTask(storyId: string, agent?: AgentId): Promise<void> {
@@ -92,6 +126,15 @@ export async function postMarkPrMerged(runId: string): Promise<PrMergedResponse>
 export async function postRetryPr(action: RecoveryAction): Promise<PrRetryResponse> {
   const response = await fetch(action.endpoint, { method: "POST" });
   return readJson(response, parsePrRetryResponse, "PR retry failed");
+}
+
+export async function postRejectRun(runId: string, reason: string): Promise<RejectRunResponse> {
+  const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/reject`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason })
+  });
+  return readJson(response, parseRejectRunResponse, "Reject failed");
 }
 
 export async function postCreateGuidedIntake(draft: GuidedIntakeDraft): Promise<CreatedStoryResponse> {
@@ -219,6 +262,63 @@ function parseReviewResponse(value: unknown): ReviewResponse {
   };
 }
 
+function parseContextResponse(value: unknown): ContextResponse {
+  const record = expectRecord(value, "context response");
+  return {
+    story_id: expectString(record.story_id, "story_id"),
+    content: expectString(record.content, "content")
+  };
+}
+
+function parseTraceResponse(value: unknown): TraceResponse {
+  const record = expectRecord(value, "trace response");
+  return {
+    traces: expectArray(record.traces, "traces").map(parseTraceItem),
+    total: typeof record.total === "number" ? record.total : expectArray(record.traces, "traces").length
+  };
+}
+
+function parseTraceItem(value: unknown): TraceItem {
+  const record = expectRecord(value, "trace item");
+  return {
+    id: expectNumber(record.id, "id"),
+    story_id: parseNullableString(record.story_id, "story_id"),
+    summary: expectString(record.summary, "summary"),
+    outcome: expectString(record.outcome, "outcome"),
+    created_at: expectString(record.created_at, "created_at"),
+    duration_seconds: parseNullableNumber(record.duration_seconds, "duration_seconds"),
+    harness_friction: parseNullableString(record.harness_friction, "harness_friction")
+  };
+}
+
+function parseToolsResponse(value: unknown): ToolsResponse {
+  const record = expectRecord(value, "tools response");
+  return { tools: expectArray(record.tools, "tools").map(parseToolItem) };
+}
+
+function parseToolCheckResponse(value: unknown): { tools: unknown[] } {
+  const record = expectRecord(value, "tool check response");
+  return { tools: expectArray(record.tools, "tools") };
+}
+
+function parseToolItem(value: unknown): ToolItem {
+  const record = expectRecord(value, "tool item");
+  return {
+    provider: expectString(record.provider ?? "custom", "provider"),
+    name: expectString(record.name, "name"),
+    kind: expectString(record.kind, "kind"),
+    capability: parseNullableString(record.capability, "capability"),
+    status: expectString(record.status, "status"),
+    description: expectString(record.description ?? "", "description"),
+    responsibility: expectString(record.responsibility ?? "", "responsibility"),
+    command: expectString(record.command ?? "", "command"),
+    source: expectString(record.source ?? "registered", "source"),
+    since: expectString(record.since ?? "", "since"),
+    scan_target: parseNullableString(record.scan_target, "scan_target"),
+    checked_at: parseNullableString(record.checked_at, "checked_at")
+  };
+}
+
 function parseSyncResponse(value: unknown): SyncResponse {
   const record = expectRecord(value, "sync response");
   return { run_id: expectString(record.run_id, "run_id"), applied: Boolean(record.applied) };
@@ -235,6 +335,15 @@ function parsePrRetryResponse(value: unknown): PrRetryResponse {
     run_id: expectString(record.run_id, "run_id"),
     pr_status: expectString(record.pr_status, "pr_status"),
     pr_url: parseNullableString(record.pr_url, "pr_url")
+  };
+}
+
+function parseRejectRunResponse(value: unknown): RejectRunResponse {
+  const record = expectRecord(value, "reject run response");
+  return {
+    run_id: expectString(record.run_id, "run_id"),
+    status: expectString(record.status, "status"),
+    next_action: expectString(record.next_action, "next_action")
   };
 }
 
@@ -258,6 +367,13 @@ function parseNullableString(value: unknown, field: string): string | null {
   return expectString(value, field);
 }
 
+function parseNullableNumber(value: unknown, field: string): number | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  return expectNumber(value, field);
+}
+
 function parseStringArray(value: unknown, field: string): string[] {
   return expectArray(value, field).map((entry, index) => expectString(entry, `${field}[${index}]`));
 }
@@ -273,6 +389,13 @@ function expectBoardState(value: unknown): BoardState {
 function expectString(value: unknown, field: string): string {
   if (typeof value !== "string") {
     throw new Error(`${field} must be a string`);
+  }
+  return value;
+}
+
+function expectNumber(value: unknown, field: string): number {
+  if (typeof value !== "number") {
+    throw new Error(`${field} must be a number`);
   }
   return value;
 }

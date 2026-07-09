@@ -2,6 +2,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -147,6 +148,18 @@ struct PrRetryResponse {
     pr_url: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct RejectRunRequest {
+    reason: String,
+}
+
+#[derive(Debug, Serialize)]
+struct RejectRunResponse {
+    run_id: String,
+    status: String,
+    next_action: String,
+}
+
 #[derive(Debug, Serialize)]
 struct RetireTaskResponse {
     story_id: String,
@@ -236,6 +249,51 @@ struct SyncChangeResponse {
     operations: usize,
 }
 
+// New API response structures
+#[derive(Debug, Serialize)]
+struct ContextResponse {
+    story_id: String,
+    content: String,
+}
+
+#[derive(Debug, Serialize)]
+struct TraceResponse {
+    traces: Vec<TraceItem>,
+    total: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct TraceItem {
+    id: i64,
+    story_id: Option<String>,
+    summary: String,
+    outcome: String,
+    created_at: String,
+    duration_seconds: Option<i64>,
+    harness_friction: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ToolsResponse {
+    tools: Vec<ToolItem>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ToolItem {
+    provider: String,
+    name: String,
+    kind: String,
+    capability: Option<String>,
+    status: String,
+    description: String,
+    responsibility: String,
+    command: String,
+    source: String,
+    since: String,
+    scan_target: Option<String>,
+    checked_at: Option<String>,
+}
+
 pub fn run_web_server(config: &ResolvedConfig, options: WebServerOptions) -> Result<(), WebError> {
     let listener = TcpListener::bind(format!("{}:{}", options.host, options.port))?;
     let address = listener.local_addr()?;
@@ -281,6 +339,16 @@ fn handle_request(config: &ResolvedConfig, request: &str) -> Result<HttpResponse
         (Some("POST"), Some("/api/intake")) => create_guided_intake_response(config, request),
         (Some("GET"), Some("/api/settings")) => settings_response(config),
         (Some("PUT"), Some("/api/settings")) => update_settings_response(config, request),
+        (Some("GET"), Some(path)) if context_path_story_id(path).is_some() => {
+            let story_id = context_path_story_id(path).unwrap_or_default();
+            context_response(config, &story_id)
+        }
+        (Some("GET"), Some(path)) if traces_path_query(path).is_some() => {
+            let query = traces_path_query(path).unwrap_or_default();
+            traces_response(config, &query)
+        }
+        (Some("GET"), Some("/api/tools")) => tools_response(config),
+        (Some("POST"), Some("/api/tools/check")) => tools_check_response(config),
         (Some("POST"), Some(path)) if start_path_story_id(path).is_some() => {
             let story_id = start_path_story_id(path).unwrap_or_default();
             start_run_response(config, &story_id, request)
@@ -313,6 +381,10 @@ fn handle_request(config: &ResolvedConfig, request: &str) -> Result<HttpResponse
             let run_id = pr_retry_path_run_id(path).unwrap_or_default();
             pr_retry_response(config, &run_id)
         }
+        (Some("POST"), Some(path)) if reject_path_run_id(path).is_some() => {
+            let run_id = reject_path_run_id(path).unwrap_or_default();
+            reject_run_response(config, &run_id, request)
+        }
         (Some("GET"), Some(path)) => static_response(config, path),
         (Some(_), Some("/health" | "/api/board" | "/api/intake" | "/api/settings")) => {
             json_response(
@@ -326,11 +398,15 @@ fn handle_request(config: &ResolvedConfig, request: &str) -> Result<HttpResponse
             if start_path_story_id(path).is_some()
                 || recover_path_story_id(path).is_some()
                 || retire_path_story_id(path).is_some()
+                || context_path_story_id(path).is_some()
+                || traces_path_query(path).is_some()
                 || events_path_run_id(path).is_some()
                 || review_path_run_id(path).is_some()
                 || sync_path_run_id(path).is_some()
                 || pr_merged_path_run_id(path).is_some()
-                || pr_retry_path_run_id(path).is_some() =>
+                || pr_retry_path_run_id(path).is_some()
+                || reject_path_run_id(path).is_some()
+                || matches!(path, "/api/tools" | "/api/tools/check") =>
         {
             json_response(
                 405,
@@ -1459,6 +1535,20 @@ fn retire_path_story_id(path: &str) -> Option<String> {
     safe_identifier(story_id).then(|| story_id.to_owned())
 }
 
+fn context_path_story_id(path: &str) -> Option<String> {
+    let path = path.trim_end_matches('/');
+    let story_id = path.strip_prefix("/api/tasks/")?.strip_suffix("/context")?;
+    safe_identifier(story_id).then(|| story_id.to_owned())
+}
+
+fn traces_path_query(path: &str) -> Option<String> {
+    if path == "/api/traces" {
+        Some(String::new())
+    } else {
+        path.strip_prefix("/api/traces?").map(str::to_owned)
+    }
+}
+
 fn events_path_run_id(path: &str) -> Option<String> {
     let path = path.trim_end_matches('/');
     let run_id = path.strip_prefix("/api/runs/")?.strip_suffix("/events")?;
@@ -1491,11 +1581,248 @@ fn pr_retry_path_run_id(path: &str) -> Option<String> {
     safe_identifier(run_id).then(|| run_id.to_owned())
 }
 
+fn reject_path_run_id(path: &str) -> Option<String> {
+    let path = path.trim_end_matches('/');
+    let run_id = path.strip_prefix("/api/runs/")?.strip_suffix("/reject")?;
+    safe_identifier(run_id).then(|| run_id.to_owned())
+}
+
 fn safe_identifier(value: &str) -> bool {
     !value.is_empty()
         && value
             .chars()
             .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+}
+
+fn context_response(config: &ResolvedConfig, story_id: &str) -> Result<HttpResponse, WebError> {
+    let output = Command::new(harness_cli_path(config))
+        .args(["context", "--story", story_id])
+        .env("HARNESS_DB_PATH", &config.harness_db)
+        .current_dir(&config.repo_root)
+        .output()?;
+
+    if !output.status.success() {
+        return command_error_response(output);
+    }
+
+    json_response(
+        200,
+        &ContextResponse {
+            story_id: story_id.to_owned(),
+            content: String::from_utf8_lossy(&output.stdout).to_string(),
+        },
+    )
+}
+
+fn traces_response(config: &ResolvedConfig, query: &str) -> Result<HttpResponse, WebError> {
+    use rusqlite::{params, Connection, Row};
+
+    let story_id = match validated_identifier_query_param(query, "story_id") {
+        Ok(value) => value,
+        Err(error) => {
+            return json_response(400, &ErrorResponse { error });
+        }
+    };
+    let outcome = match validated_outcome_query_param(query) {
+        Ok(value) => value,
+        Err(error) => {
+            return json_response(400, &ErrorResponse { error });
+        }
+    };
+    let limit = query_param(query, "limit")
+        .map(|value| {
+            value
+                .parse::<i64>()
+                .ok()
+                .filter(|parsed| *parsed > 0)
+                .unwrap_or(50)
+        })
+        .unwrap_or(50)
+        .min(200);
+    let connection = Connection::open(&config.harness_db).map_err(sqlite_web_error)?;
+
+    fn trace_item_from_row(row: &Row<'_>) -> rusqlite::Result<TraceItem> {
+        Ok(TraceItem {
+            id: row.get(0)?,
+            story_id: row.get(1)?,
+            summary: row.get(2)?,
+            outcome: row
+                .get::<_, Option<String>>(3)?
+                .unwrap_or_else(|| "unknown".to_owned()),
+            created_at: row.get(4)?,
+            duration_seconds: row.get(5)?,
+            harness_friction: row.get(6)?,
+        })
+    }
+
+    let select = "SELECT id, story_id, task_summary, outcome, created_at, duration_seconds, harness_friction FROM trace";
+    let traces = match (&story_id, &outcome) {
+        (Some(story_id), Some(outcome)) => {
+            let mut statement = connection
+                .prepare(&format!(
+                    "{select} WHERE story_id=?1 AND outcome=?2 ORDER BY id DESC LIMIT ?3"
+                ))
+                .map_err(sqlite_web_error)?;
+            let rows = statement
+                .query_map(params![story_id, outcome, limit], trace_item_from_row)
+                .map_err(sqlite_web_error)?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(sqlite_web_error)?
+        }
+        (Some(story_id), None) => {
+            let mut statement = connection
+                .prepare(&format!(
+                    "{select} WHERE story_id=?1 ORDER BY id DESC LIMIT ?2"
+                ))
+                .map_err(sqlite_web_error)?;
+            let rows = statement
+                .query_map(params![story_id, limit], trace_item_from_row)
+                .map_err(sqlite_web_error)?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(sqlite_web_error)?
+        }
+        (None, Some(outcome)) => {
+            let mut statement = connection
+                .prepare(&format!(
+                    "{select} WHERE outcome=?1 ORDER BY id DESC LIMIT ?2"
+                ))
+                .map_err(sqlite_web_error)?;
+            let rows = statement
+                .query_map(params![outcome, limit], trace_item_from_row)
+                .map_err(sqlite_web_error)?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(sqlite_web_error)?
+        }
+        (None, None) => {
+            let mut statement = connection
+                .prepare(&format!("{select} ORDER BY id DESC LIMIT ?1"))
+                .map_err(sqlite_web_error)?;
+            let rows = statement
+                .query_map(params![limit], trace_item_from_row)
+                .map_err(sqlite_web_error)?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(sqlite_web_error)?
+        }
+    };
+    let total = traces.len();
+
+    json_response(200, &TraceResponse { traces, total })
+}
+
+fn tools_response(config: &ResolvedConfig) -> Result<HttpResponse, WebError> {
+    let output = Command::new(harness_cli_path(config))
+        .args(["query", "tools", "--json"])
+        .env("HARNESS_DB_PATH", &config.harness_db)
+        .current_dir(&config.repo_root)
+        .output()?;
+
+    if !output.status.success() {
+        return command_error_response(output);
+    }
+
+    let tools = serde_json::from_slice::<Vec<ToolItem>>(&output.stdout)?;
+    json_response(200, &ToolsResponse { tools })
+}
+
+fn tools_check_response(config: &ResolvedConfig) -> Result<HttpResponse, WebError> {
+    let output = Command::new(harness_cli_path(config))
+        .args(["tool", "check", "--json"])
+        .env("HARNESS_DB_PATH", &config.harness_db)
+        .current_dir(&config.repo_root)
+        .output()?;
+
+    if !output.status.success() {
+        return command_error_response(output);
+    }
+
+    let tools = serde_json::from_slice::<serde_json::Value>(&output.stdout)?;
+    json_response(200, &serde_json::json!({ "tools": tools }))
+}
+
+fn reject_run_response(
+    config: &ResolvedConfig,
+    run_id: &str,
+    request: &str,
+) -> Result<HttpResponse, WebError> {
+    let body: RejectRunRequest =
+        serde_json::from_str(request_body(request)).map_err(WebError::Json)?;
+    let reason = body.reason.trim();
+    if reason.is_empty() || reason.len() > 500 {
+        return json_response(
+            400,
+            &ErrorResponse {
+                error: "reject reason must be 1-500 characters".to_owned(),
+            },
+        );
+    }
+    let next_action = format!("review rejected: {reason}");
+    RunStateStore::new(config.state_db.clone()).update_status(run_id, "rejected", &next_action)?;
+
+    json_response(
+        200,
+        &RejectRunResponse {
+            run_id: run_id.to_owned(),
+            status: "rejected".to_owned(),
+            next_action,
+        },
+    )
+}
+
+fn harness_cli_path(config: &ResolvedConfig) -> PathBuf {
+    config
+        .repo_root
+        .join("scripts")
+        .join("bin")
+        .join(if cfg!(windows) {
+            "harness-cli.exe"
+        } else {
+            "harness-cli"
+        })
+}
+
+fn command_error_response(output: std::process::Output) -> Result<HttpResponse, WebError> {
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    json_response(
+        500,
+        &ErrorResponse {
+            error: if stderr.is_empty() { stdout } else { stderr },
+        },
+    )
+}
+
+fn query_param(query: &str, name: &str) -> Option<String> {
+    query.split('&').find_map(|pair| {
+        let (key, value) = pair.split_once('=')?;
+        (key == name && !value.is_empty()).then(|| value.to_owned())
+    })
+}
+
+fn validated_identifier_query_param(query: &str, name: &str) -> Result<Option<String>, String> {
+    match query_param(query, name) {
+        Some(value) if safe_identifier(&value) => Ok(Some(value)),
+        Some(_) => Err(format!("invalid {name}")),
+        None => Ok(None),
+    }
+}
+
+fn validated_outcome_query_param(query: &str) -> Result<Option<String>, String> {
+    match query_param(query, "outcome") {
+        Some(value)
+            if matches!(
+                value.as_str(),
+                "completed" | "blocked" | "partial" | "failed"
+            ) =>
+        {
+            Ok(Some(value))
+        }
+        Some(_) => Err("invalid outcome".to_owned()),
+        None => Ok(None),
+    }
+}
+
+fn sqlite_web_error(error: rusqlite::Error) -> WebError {
+    WebError::Io(std::io::Error::other(error))
 }
 
 fn json_response<T: Serialize>(status: u16, body: &T) -> Result<HttpResponse, WebError> {
@@ -1844,6 +2171,83 @@ mod tests {
 
     #[cfg(not(unix))]
     fn make_executable(_path: &std::path::Path) {}
+
+    fn write_fake_harness_cli(config: &ResolvedConfig) {
+        let bin_dir = config.repo_root.join("scripts").join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        let script = bin_dir.join(if cfg!(windows) {
+            "harness-cli.exe"
+        } else {
+            "harness-cli"
+        });
+        fs::write(
+            &script,
+            r#"#!/usr/bin/env sh
+if [ "$1" = "context" ]; then
+  printf '# Context\n\nStory %s ready.\n' "$3"
+  exit 0
+fi
+if [ "$1" = "query" ] && [ "$2" = "tools" ]; then
+  printf '[{"provider":"builtin","name":"query tools","command":"query tools","description":"Show tool entries.","responsibility":"Tool access","source":"compiled","since":"built-in","kind":"cli","capability":"tool-access","scan_target":null,"status":"present","checked_at":null}]'
+  exit 0
+fi
+if [ "$1" = "tool" ] && [ "$2" = "check" ]; then
+  printf '[{"name":"query tools","kind":"cli","capability":"tool-access","status":"present","detail":"ok"}]'
+  exit 0
+fi
+printf 'unsupported harness-cli call\n' >&2
+exit 1
+"#,
+        )
+        .unwrap();
+        make_executable(&script);
+    }
+
+    fn seed_trace_table(db_path: &std::path::Path) {
+        let connection = Connection::open(db_path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE trace (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    task_summary TEXT NOT NULL,
+                    intake_id INTEGER,
+                    story_id TEXT,
+                    agent TEXT,
+                    actions_taken TEXT,
+                    files_read TEXT,
+                    files_changed TEXT,
+                    decisions_made TEXT,
+                    errors TEXT,
+                    outcome TEXT,
+                    duration_seconds INTEGER,
+                    token_estimate INTEGER,
+                    harness_friction TEXT,
+                    notes TEXT
+                );",
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO trace (task_summary, story_id, outcome, duration_seconds, harness_friction)
+                 VALUES (?1, ?2, ?3, ?4, ?5);",
+                params![
+                    "Trace target",
+                    "US-TRACE",
+                    "completed",
+                    12_i64,
+                    "manual review needed"
+                ],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO trace (task_summary, story_id, outcome)
+                 VALUES (?1, ?2, ?3);",
+                params!["Trace other", "US-OTHER", "failed"],
+            )
+            .unwrap();
+    }
 
     #[test]
     fn health_request_returns_ok_json() {
@@ -2866,6 +3270,92 @@ mod tests {
         );
         let active = store.active_run().unwrap().unwrap();
         assert_eq!(active.agent, "opencode");
+    }
+
+    #[test]
+    fn context_endpoint_returns_harness_context_pack() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = test_config(&temp_dir);
+        write_fake_harness_cli(&config);
+
+        let response = handle_request(
+            &config,
+            "GET /api/tasks/US-CONTEXT/context HTTP/1.1\r\n\r\n",
+        )
+        .unwrap();
+
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
+        assert!(response.contains(r#""story_id":"US-CONTEXT""#));
+        assert!(response.contains("Story US-CONTEXT ready."));
+    }
+
+    #[test]
+    fn traces_endpoint_filters_harness_trace_records() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = test_config(&temp_dir);
+        seed_trace_table(&config.harness_db);
+
+        let response = handle_request(
+            &config,
+            "GET /api/traces?story_id=US-TRACE&outcome=completed HTTP/1.1\r\n\r\n",
+        )
+        .unwrap();
+
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
+        assert!(response.contains(r#""total":1"#));
+        assert!(response.contains(r#""summary":"Trace target""#));
+        assert!(response.contains(r#""duration_seconds":12"#));
+        assert!(response.contains(r#""harness_friction":"manual review needed""#));
+        assert!(!response.contains("Trace other"));
+    }
+
+    #[test]
+    fn tools_endpoint_returns_cli_registry_json() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = test_config(&temp_dir);
+        write_fake_harness_cli(&config);
+
+        let response = handle_request(&config, "GET /api/tools HTTP/1.1\r\n\r\n").unwrap();
+
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
+        assert!(response.contains(r#""name":"query tools""#));
+        assert!(response.contains(r#""capability":"tool-access""#));
+        assert!(response.contains(r#""source":"compiled""#));
+    }
+
+    #[test]
+    fn tools_check_endpoint_returns_scan_result() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = test_config(&temp_dir);
+        write_fake_harness_cli(&config);
+
+        let response = handle_request(&config, "POST /api/tools/check HTTP/1.1\r\n\r\n").unwrap();
+
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
+        assert!(response.contains(r#""tools":["#));
+        assert!(response.contains(r#""name":"query tools""#));
+        assert!(response.contains(r#""detail":"ok""#));
+    }
+
+    #[test]
+    fn reject_run_endpoint_records_review_reason() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = test_config(&temp_dir);
+        add_test_run(&config, "run_reject", "completed");
+
+        let response = handle_request(
+            &config,
+            "POST /api/runs/run_reject/reject HTTP/1.1\r\n\r\n{\"reason\":\"Needs tests\"}",
+        )
+        .unwrap();
+
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
+        assert!(response.contains(r#""status":"rejected""#));
+        let run = RunStateStore::new(config.state_db.clone())
+            .show_run("run_reject")
+            .unwrap();
+        assert_eq!(run.status, "rejected");
+        assert_eq!(run.next_action, "review rejected: Needs tests");
     }
 
     #[test]
