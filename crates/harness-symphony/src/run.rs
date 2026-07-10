@@ -31,6 +31,8 @@ pub enum RunError {
     GitWorktree(String),
     #[error("run result validation failed: {0}")]
     InvalidResult(String),
+    #[error("request changes feedback is invalid: {0}")]
+    InvalidFeedback(String),
     #[error("{0}")]
     Agent(#[from] AgentError),
     #[error("{0}")]
@@ -56,6 +58,7 @@ pub struct PreparedRun {
     pub contract_path: PathBuf,
     pub harness_db_path: PathBuf,
     pub lightweight: bool,
+    pub request_changes: Option<RequestChangesContract>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,7 +69,7 @@ pub struct CompletedRun {
     pub result_path: PathBuf,
 }
 
-#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct RunContract {
     pub version: u32,
     pub run_id: String,
@@ -80,13 +83,35 @@ pub struct RunContract {
     pub result_json_schema: Value,
     pub forbidden_paths: Vec<String>,
     pub agent_instructions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_changes: Option<RequestChangesContract>,
 }
 
-#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct RunEnvironment {
     pub harness_db_path: String,
     pub harness_run_id: String,
     pub harness_run_mode: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct RequestChangesContract {
+    pub source_run_id: String,
+    pub reason_path: String,
+    pub evidence_paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplacementFeedback {
+    pub source_run_id: String,
+    pub reason: String,
+    pub evidence: Vec<FeedbackFile>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FeedbackFile {
+    pub extension: String,
+    pub bytes: Vec<u8>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -161,7 +186,223 @@ pub fn prepare_run(config: &ResolvedConfig, story_id: &str) -> Result<PreparedRu
         contract_path,
         harness_db_path,
         lightweight: false,
+        request_changes: None,
     })
+}
+
+pub fn prepare_replacement_run(
+    config: &ResolvedConfig,
+    story_id: &str,
+    feedback: ReplacementFeedback,
+) -> Result<PreparedRun, RunError> {
+    let source_run_id = feedback.source_run_id.clone();
+    let rejection_reason = feedback.reason.clone();
+    let prepared = prepare_replacement_files(config, story_id, feedback)?;
+    finalize_replacement_run(config, &source_run_id, &rejection_reason, prepared)
+}
+
+fn prepare_replacement_files(
+    config: &ResolvedConfig,
+    story_id: &str,
+    mut feedback: ReplacementFeedback,
+) -> Result<PreparedRun, RunError> {
+    validate_replacement_feedback(&mut feedback)?;
+    ensure_no_active_run(config)?;
+    let store = RunStateStore::new(config.state_db.clone());
+    let source = store.show_run(&feedback.source_run_id)?;
+    if source.status != "completed" {
+        return Err(StateError::RunNotReplaceable {
+            id: source.run_id,
+            status: source.status,
+        }
+        .into());
+    }
+    if source.story_id != story_id {
+        return Err(StateError::ReplacementStoryMismatch {
+            source_run_id: source.run_id,
+            source_story_id: source.story_id,
+            replacement_story_id: story_id.to_owned(),
+        }
+        .into());
+    }
+
+    refresh_checkout_from_upstream(config)?;
+    let story = load_runnable_story(&config.harness_db, story_id)?;
+    let run_id = generate_run_id();
+    let branch = format!("symphony/{run_id}");
+    let worktree = config.worktrees_dir.join(&run_id);
+    let run_dir = config.runs_dir.join(&run_id);
+    let contract_path = run_dir.join("RUN_CONTRACT.json");
+    let harness_db_path = worktree.join("harness.db");
+    let request_changes = request_changes_contract(&run_id, &feedback);
+    let prepared = PreparedRun {
+        run_id: run_id.clone(),
+        story_id: story.id,
+        branch: Some(branch.clone()),
+        worktree: worktree.clone(),
+        contract_path: contract_path.clone(),
+        harness_db_path: harness_db_path.clone(),
+        lightweight: false,
+        request_changes: Some(request_changes.clone()),
+    };
+
+    let preparation = (|| -> Result<(), RunError> {
+        fs::create_dir_all(&config.worktrees_dir)?;
+        fs::create_dir_all(&run_dir)?;
+        create_worktree(&config.repo_root, &branch, &worktree)?;
+        fs::copy(&config.harness_db, &harness_db_path)?;
+
+        let worktree_run_dir = worktree.join(".harness/runs").join(&run_id);
+        fs::create_dir_all(&worktree_run_dir)?;
+        write_feedback_directory(&run_dir, &feedback)?;
+        write_feedback_directory(&worktree_run_dir, &feedback)?;
+
+        let mut contract = build_contract(
+            config,
+            &run_id,
+            story_id,
+            false,
+            &worktree,
+            &harness_db_path,
+        );
+        contract.request_changes = Some(request_changes);
+        write_contract(&contract_path, &contract)?;
+        write_agents_shim(&worktree.join("AGENTS.md"), &contract_path, &contract)?;
+        Ok(())
+    })();
+    if let Err(error) = preparation {
+        cleanup_replacement_files(config, &prepared);
+        return Err(error);
+    }
+    Ok(prepared)
+}
+
+fn finalize_replacement_run(
+    config: &ResolvedConfig,
+    source_run_id: &str,
+    rejection_reason: &str,
+    prepared: PreparedRun,
+) -> Result<PreparedRun, RunError> {
+    let replacement = NewRunRecord {
+        run_id: prepared.run_id.clone(),
+        story_id: prepared.story_id.clone(),
+        branch: prepared.branch.clone(),
+        worktree: prepared.worktree.clone(),
+        lightweight: false,
+        status: "prepared".to_owned(),
+        result_path: Some(PathBuf::from(format!(
+            ".harness/runs/{}/RESULT.json",
+            prepared.run_id
+        ))),
+        sync_status: "not_applied".to_owned(),
+        next_action: format!(
+            "Launch replacement agent for {} or inspect {:?}",
+            prepared.story_id, prepared.contract_path
+        ),
+    };
+    let store = RunStateStore::new(config.state_db.clone());
+    if let Err(error) = store.replace_run_with_agent(
+        source_run_id,
+        rejection_reason,
+        replacement,
+        &config.agent_adapter,
+    ) {
+        cleanup_replacement_files(config, &prepared);
+        return Err(error.into());
+    }
+    Ok(prepared)
+}
+
+fn validate_replacement_feedback(feedback: &mut ReplacementFeedback) -> Result<(), RunError> {
+    feedback.reason = feedback.reason.trim().to_owned();
+    let reason_chars = feedback.reason.chars().count();
+    if reason_chars == 0 || reason_chars > crate::upload::MAX_REASON_CHARS {
+        return Err(RunError::InvalidFeedback(
+            "reason must be 1-2000 characters".to_owned(),
+        ));
+    }
+    if feedback.evidence.len() > crate::upload::MAX_EVIDENCE_FILES {
+        return Err(RunError::InvalidFeedback(
+            "at most 3 evidence images are allowed".to_owned(),
+        ));
+    }
+    for file in &feedback.evidence {
+        if !matches!(file.extension.as_str(), "png" | "jpg" | "webp") {
+            return Err(RunError::InvalidFeedback(
+                "evidence extension must be png, jpg, or webp".to_owned(),
+            ));
+        }
+        if file.bytes.is_empty() || file.bytes.len() > crate::upload::MAX_EVIDENCE_BYTES {
+            return Err(RunError::InvalidFeedback(
+                "evidence image must be 1 byte to 5 MB".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn request_changes_contract(
+    run_id: &str,
+    feedback: &ReplacementFeedback,
+) -> RequestChangesContract {
+    RequestChangesContract {
+        source_run_id: feedback.source_run_id.clone(),
+        reason_path: format!(".harness/runs/{run_id}/feedback/reason.md"),
+        evidence_paths: feedback
+            .evidence
+            .iter()
+            .enumerate()
+            .map(|(index, file)| {
+                format!(
+                    ".harness/runs/{run_id}/feedback/evidence-{:02}.{}",
+                    index + 1,
+                    file.extension
+                )
+            })
+            .collect(),
+    }
+}
+
+fn write_feedback_directory(
+    run_dir: &Path,
+    feedback: &ReplacementFeedback,
+) -> Result<(), RunError> {
+    let staging = run_dir.join("feedback.staging");
+    let destination = run_dir.join("feedback");
+    if staging.exists() {
+        fs::remove_dir_all(&staging)?;
+    }
+    fs::create_dir_all(&staging)?;
+    fs::write(staging.join("reason.md"), format!("{}\n", feedback.reason))?;
+    for (index, file) in feedback.evidence.iter().enumerate() {
+        fs::write(
+            staging.join(format!("evidence-{:02}.{}", index + 1, file.extension)),
+            &file.bytes,
+        )?;
+    }
+    fs::rename(staging, destination)?;
+    Ok(())
+}
+
+fn cleanup_replacement_files(config: &ResolvedConfig, prepared: &PreparedRun) {
+    if let Some(branch) = prepared.branch.as_deref() {
+        let _ = Command::new("git")
+            .args(["worktree", "remove", "--force"])
+            .arg(&prepared.worktree)
+            .current_dir(&config.repo_root)
+            .output();
+        if prepared.worktree.exists() {
+            let _ = fs::remove_dir_all(&prepared.worktree);
+        }
+        let _ = Command::new("git")
+            .args(["branch", "-D", branch])
+            .current_dir(&config.repo_root)
+            .output();
+    }
+    let run_dir = config.runs_dir.join(&prepared.run_id);
+    if run_dir.exists() {
+        let _ = fs::remove_dir_all(run_dir);
+    }
 }
 
 pub fn prepare_here_run(config: &ResolvedConfig, story_id: &str) -> Result<PreparedRun, RunError> {
@@ -220,6 +461,7 @@ pub fn prepare_here_run(config: &ResolvedConfig, story_id: &str) -> Result<Prepa
         contract_path,
         harness_db_path,
         lightweight: true,
+        request_changes: None,
     })
 }
 
@@ -376,6 +618,7 @@ fn build_contract(
             "Run the configured verification command when available.".to_owned(),
             "Write RESULT.json with a top-level validation object, not validation_evidence. Use validation.commands[].result values pass, fail, or unavailable.".to_owned(),
         ],
+        request_changes: None,
     }
 }
 
@@ -724,6 +967,61 @@ mod tests {
             .unwrap();
     }
 
+    fn init_git_repo(path: &Path) {
+        for args in [
+            vec!["init"],
+            vec!["config", "user.email", "test@example.invalid"],
+            vec!["config", "user.name", "Test User"],
+        ] {
+            let output = Command::new("git")
+                .args(args)
+                .current_dir(path)
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+        }
+        fs::write(path.join("README.md"), "test\n").unwrap();
+        assert!(Command::new("git")
+            .args(["add", "README.md"])
+            .current_dir(path)
+            .status()
+            .unwrap()
+            .success());
+        assert!(Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(path)
+            .status()
+            .unwrap()
+            .success());
+    }
+
+    fn replacement_feedback() -> ReplacementFeedback {
+        ReplacementFeedback {
+            source_run_id: "run_old".to_owned(),
+            reason: "Fix mobile spacing".to_owned(),
+            evidence: vec![FeedbackFile {
+                extension: "png".to_owned(),
+                bytes: vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a],
+            }],
+        }
+    }
+
+    fn add_completed_source(config: &ResolvedConfig) {
+        RunStateStore::new(config.state_db.clone())
+            .add_run(NewRunRecord {
+                run_id: "run_old".to_owned(),
+                story_id: "US-084".to_owned(),
+                branch: Some("symphony/run_old".to_owned()),
+                worktree: config.worktrees_dir.join("run_old"),
+                lightweight: false,
+                status: "completed".to_owned(),
+                result_path: Some(PathBuf::from(".harness/runs/run_old/RESULT.json")),
+                sync_status: "not_applied".to_owned(),
+                next_action: "review run result".to_owned(),
+            })
+            .unwrap();
+    }
+
     #[test]
     fn contract_contains_required_run_fields() {
         let config = config();
@@ -759,6 +1057,100 @@ mod tests {
                 && instruction.contains("not validation_evidence")
         }));
         assert!(!contract.lightweight);
+    }
+
+    #[test]
+    fn request_changes_contract_contains_feedback_paths() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = config_for_root(temp_dir.path());
+        init_git_repo(temp_dir.path());
+        write_story_db(&config.harness_db, "US-084", "planned", "high-risk");
+        add_completed_source(&config);
+
+        let prepared = prepare_replacement_run(&config, "US-084", replacement_feedback()).unwrap();
+        let contract: RunContract =
+            serde_json::from_str(&fs::read_to_string(&prepared.contract_path).unwrap()).unwrap();
+        let feedback = contract.request_changes.unwrap();
+
+        assert_eq!(feedback.source_run_id, "run_old");
+        assert!(feedback.reason_path.ends_with("/feedback/reason.md"));
+        assert_eq!(feedback.evidence_paths.len(), 1);
+        assert!(feedback.evidence_paths[0].ends_with("/feedback/evidence-01.png"));
+        assert_eq!(
+            fs::read_to_string(
+                config
+                    .runs_dir
+                    .join(&prepared.run_id)
+                    .join("feedback/reason.md")
+            )
+            .unwrap(),
+            "Fix mobile spacing\n"
+        );
+        assert!(prepared
+            .worktree
+            .join(format!(
+                ".harness/runs/{}/feedback/evidence-01.png",
+                prepared.run_id
+            ))
+            .exists());
+        assert_eq!(
+            RunStateStore::new(config.state_db.clone())
+                .show_run("run_old")
+                .unwrap()
+                .status,
+            "rejected"
+        );
+    }
+
+    #[test]
+    fn request_changes_failed_state_commit_removes_prepared_files() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = config_for_root(temp_dir.path());
+        init_git_repo(temp_dir.path());
+        write_story_db(&config.harness_db, "US-084", "planned", "high-risk");
+        add_completed_source(&config);
+
+        let prepared =
+            prepare_replacement_files(&config, "US-084", replacement_feedback()).unwrap();
+        RunStateStore::new(config.state_db.clone())
+            .add_run(NewRunRecord {
+                run_id: "run_active".to_owned(),
+                story_id: "US-ACTIVE".to_owned(),
+                branch: Some("symphony/run_active".to_owned()),
+                worktree: config.worktrees_dir.join("run_active"),
+                lightweight: false,
+                status: "prepared".to_owned(),
+                result_path: Some(PathBuf::from(".harness/runs/run_active/RESULT.json")),
+                sync_status: "not_applied".to_owned(),
+                next_action: "continue run".to_owned(),
+            })
+            .unwrap();
+        let run_id = prepared.run_id.clone();
+        let worktree = prepared.worktree.clone();
+        let branch = prepared.branch.clone().unwrap();
+
+        let error = finalize_replacement_run(&config, "run_old", "Fix mobile spacing", prepared)
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            RunError::State(StateError::ActiveRunExists(id)) if id == "run_active"
+        ));
+        assert!(!config.runs_dir.join(&run_id).exists());
+        assert!(!worktree.exists());
+        let branches = Command::new("git")
+            .args(["branch", "--list", &branch])
+            .current_dir(&config.repo_root)
+            .output()
+            .unwrap();
+        assert!(String::from_utf8_lossy(&branches.stdout).trim().is_empty());
+        assert_eq!(
+            RunStateStore::new(config.state_db.clone())
+                .show_run("run_old")
+                .unwrap()
+                .status,
+            "completed"
+        );
     }
 
     #[test]
@@ -970,6 +1362,7 @@ mod tests {
             contract_path: run_dir.join("RUN_CONTRACT.json"),
             harness_db_path: run_dir.join("harness.db"),
             lightweight: true,
+            request_changes: None,
         };
 
         let completed = validate_finished_run(&config, prepared).unwrap();
@@ -1028,6 +1421,7 @@ mod tests {
                 .path()
                 .join(".symphony/worktrees/run_full/harness.db"),
             lightweight: false,
+            request_changes: None,
         };
 
         let completed = validate_finished_run(&config, prepared).unwrap();
@@ -1087,6 +1481,7 @@ mod tests {
                 .path()
                 .join(".symphony/worktrees/run_invalid/harness.db"),
             lightweight: false,
+            request_changes: None,
         };
 
         let error = validate_finished_run(&config, prepared).unwrap_err();
