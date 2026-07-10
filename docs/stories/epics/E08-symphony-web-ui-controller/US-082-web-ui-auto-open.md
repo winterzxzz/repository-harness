@@ -74,11 +74,13 @@ required.
   actual address, including ephemeral `--port 0` assignments.
 - Added `--no-open` for headless callers and made launch failures warn without
   terminating the bound server.
+- Browser launch URLs map unspecified IPv4 and IPv6 bind addresses to their
+  loopback equivalents, and listener binding accepts IPv6 literals directly.
 - Added Electron backend argument construction that defaults child Web servers
   to `--no-open`, preserving the existing single `BrowserWindow` behavior.
-- `cargo test -p harness-symphony web_auto_open -- --nocapture` passed: 5 tests.
+- `cargo test -p harness-symphony web_auto_open -- --nocapture` passed: 7 tests.
 - `cargo test -p harness-symphony web -- --nocapture` passed: 47 tests.
-- `cargo test --workspace` passed: 183 tests across workspace targets.
+- `cargo test --workspace` passed: 185 tests across workspace targets.
 - `cargo fmt --check` and `cargo clippy --workspace -- -D warnings` passed.
 - `npm --prefix crates/harness-symphony/web-ui run desktop:smoke` passed.
 - Manual macOS smoke started browser mode on `http://127.0.0.1:50154` without a
