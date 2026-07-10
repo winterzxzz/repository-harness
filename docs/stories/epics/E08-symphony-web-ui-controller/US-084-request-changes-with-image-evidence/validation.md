@@ -42,4 +42,25 @@ scripts/bin/harness-cli story verify US-084
 
 ## Acceptance Evidence
 
-No implementation evidence exists yet; US-084 is planned.
+- Focused Rust proof: 25 `request_changes` tests passed, covering bounded HTTP
+  reads, multipart limits/signatures, atomic state replacement, filesystem
+  rollback, feedback contracts, agent prompts, endpoint conflicts, review
+  metadata, exact binary serving, and traversal rejection.
+- Browser proof: production TypeScript/Vite build passed and all 35 Playwright
+  tests passed, including multipart submission, preview/removal, type/size/count
+  guards, historical evidence rendering, Ready-to-Active transition, and the
+  Done-task guard.
+- Platform proof: Electron desktop smoke passed at a local ephemeral backend.
+  In the linked worktree the ignored durable `harness.db` was provided through
+  a temporary symlink to the checkout-root database, then removed after proof.
+- Workspace proof: 17 `harness-bench` unit tests, 3 score CLI integration tests,
+  41 `harness-cli` tests, and 149 `harness-symphony` tests passed with zero
+  failures; doc tests also passed.
+- Static proof: `cargo fmt --check`, `cargo clippy --workspace -- -D warnings`,
+  and `git diff --check` passed.
+- Durable proof: `harness-cli story verify US-084` passed after executing the
+  complete configured verification command.
+- Decision proof: durable decision `0008` remains `accepted`. The current record
+  has no `verify_command`, so `decision verify 0008` reports that configuration
+  gap; `query decisions` confirms the accepted decision record without mutating
+  it.

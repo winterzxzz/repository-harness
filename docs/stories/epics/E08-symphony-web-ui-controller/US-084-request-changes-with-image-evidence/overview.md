@@ -2,7 +2,7 @@
 
 ## Status
 
-planned
+implemented
 
 ## Lane
 
@@ -10,13 +10,15 @@ high-risk
 
 ## Current Behavior
 
-Completed agent work appears in the Ready bucket. The review panel can record a
-text rejection on the completed run, but it does not immediately start a new
-attempt, accept visual evidence, or pass structured feedback into the next run
-contract.
+Eligible completed agent work in the Ready bucket now exposes an inline
+`Request changes` form. The user must enter a reason and may attach up to three
+validated PNG, JPEG, or WebP images before Symphony prepares and starts a
+replacement run for the same story.
 
-The local HTTP server reads a single fixed 8 KB buffer, which is not a safe or
-complete upload boundary for binary screenshots.
+The local HTTP server uses a bounded binary reader and multipart parser instead
+of the legacy fixed 8 KB string buffer. Feedback is written to durable root and
+replacement-worktree run directories, referenced by the run contract and agent
+prompt, and served back only through scoped generated evidence paths.
 
 ## Target Behavior
 
