@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -14,6 +14,7 @@ use crate::pr::{create_pr, PrError};
 use crate::run::{execute_prepared_run, prepare_run, PreparedRun, RunError};
 use crate::state::{RunStateStore, StateError};
 use crate::sync::{sync_changeset, SyncChange, SyncError};
+use crate::upload::{HttpRequest, UploadError};
 use crate::work::{
     create_story_from_guided_intake, list_board, retire_story, BoardItem, BoardState, CreatedStory,
     GuidedIntakeDraft, WorkError,
@@ -35,6 +36,8 @@ pub enum WebError {
     Pr(#[from] PrError),
     #[error("{0}")]
     Sync(#[from] SyncError),
+    #[error("{0}")]
+    Upload(#[from] UploadError),
     #[error("web server io error: {0}")]
     Io(#[from] std::io::Error),
     #[error("json error: {0}")]
@@ -343,10 +346,18 @@ fn handle_stream(
     config: &ResolvedConfig,
     stream: &mut TcpStream,
 ) -> Result<HttpResponse, WebError> {
-    let mut buffer = [0_u8; 8192];
-    let bytes = stream.read(&mut buffer)?;
-    let request = String::from_utf8_lossy(&buffer[..bytes]);
-    match handle_request(config, &request) {
+    let request = match crate::upload::read_http_request(stream) {
+        Ok(request) => request,
+        Err(error) => {
+            return json_response(
+                400,
+                &ErrorResponse {
+                    error: error.to_string(),
+                },
+            );
+        }
+    };
+    match handle_http_request(config, &request) {
         Ok(response) => Ok(response),
         Err(error) => json_response(
             500,
@@ -357,11 +368,21 @@ fn handle_stream(
     }
 }
 
+#[cfg(test)]
 fn handle_request(config: &ResolvedConfig, request: &str) -> Result<HttpResponse, WebError> {
-    let (method, path) = parse_request_line(request);
-    match (method.as_deref(), path.as_deref()) {
-        (Some("GET"), Some("/health")) => json_response(200, &serde_json::json!({"ok": true})),
-        (Some("GET"), Some("/api/board")) => {
+    let request = crate::upload::parse_http_request(request.as_bytes())?;
+    handle_http_request(config, &request)
+}
+
+fn handle_http_request(
+    config: &ResolvedConfig,
+    request: &HttpRequest,
+) -> Result<HttpResponse, WebError> {
+    let method = request.method.as_str();
+    let path = request.path.as_str();
+    match (method, path) {
+        ("GET", "/health") => json_response(200, &serde_json::json!({"ok": true})),
+        ("GET", "/api/board") => {
             let items = list_board(&config.harness_db, &config.state_db)?;
             let items = items
                 .into_iter()
@@ -369,65 +390,63 @@ fn handle_request(config: &ResolvedConfig, request: &str) -> Result<HttpResponse
                 .collect::<Vec<_>>();
             json_response(200, &BoardResponse { items })
         }
-        (Some("POST"), Some("/api/intake")) => create_guided_intake_response(config, request),
-        (Some("GET"), Some("/api/settings")) => settings_response(config),
-        (Some("PUT"), Some("/api/settings")) => update_settings_response(config, request),
-        (Some("GET"), Some(path)) if context_path_story_id(path).is_some() => {
+        ("POST", "/api/intake") => create_guided_intake_response(config, request),
+        ("GET", "/api/settings") => settings_response(config),
+        ("PUT", "/api/settings") => update_settings_response(config, request),
+        ("GET", path) if context_path_story_id(path).is_some() => {
             let story_id = context_path_story_id(path).unwrap_or_default();
             context_response(config, &story_id)
         }
-        (Some("GET"), Some(path)) if traces_path_query(path).is_some() => {
+        ("GET", path) if traces_path_query(path).is_some() => {
             let query = traces_path_query(path).unwrap_or_default();
             traces_response(config, &query)
         }
-        (Some("GET"), Some("/api/tools")) => tools_response(config),
-        (Some("POST"), Some("/api/tools/check")) => tools_check_response(config),
-        (Some("POST"), Some(path)) if start_path_story_id(path).is_some() => {
+        ("GET", "/api/tools") => tools_response(config),
+        ("POST", "/api/tools/check") => tools_check_response(config),
+        ("POST", path) if start_path_story_id(path).is_some() => {
             let story_id = start_path_story_id(path).unwrap_or_default();
             start_run_response(config, &story_id, request)
         }
-        (Some("POST"), Some(path)) if recover_path_story_id(path).is_some() => {
+        ("POST", path) if recover_path_story_id(path).is_some() => {
             let story_id = recover_path_story_id(path).unwrap_or_default();
             recover_run_response(config, &story_id)
         }
-        (Some("POST"), Some(path)) if retire_path_story_id(path).is_some() => {
+        ("POST", path) if retire_path_story_id(path).is_some() => {
             let story_id = retire_path_story_id(path).unwrap_or_default();
             retire_task_response(config, &story_id)
         }
-        (Some("GET"), Some(path)) if events_path_run_id(path).is_some() => {
+        ("GET", path) if events_path_run_id(path).is_some() => {
             let run_id = events_path_run_id(path).unwrap_or_default();
             events_response(config, &run_id)
         }
-        (Some("GET"), Some(path)) if review_path_run_id(path).is_some() => {
+        ("GET", path) if review_path_run_id(path).is_some() => {
             let run_id = review_path_run_id(path).unwrap_or_default();
             review_response(config, &run_id)
         }
-        (Some("POST"), Some(path)) if sync_path_run_id(path).is_some() => {
+        ("POST", path) if sync_path_run_id(path).is_some() => {
             let run_id = sync_path_run_id(path).unwrap_or_default();
             sync_run_response(config, &run_id)
         }
-        (Some("POST"), Some(path)) if pr_merged_path_run_id(path).is_some() => {
+        ("POST", path) if pr_merged_path_run_id(path).is_some() => {
             let run_id = pr_merged_path_run_id(path).unwrap_or_default();
             pr_merged_response(config, &run_id)
         }
-        (Some("POST"), Some(path)) if pr_retry_path_run_id(path).is_some() => {
+        ("POST", path) if pr_retry_path_run_id(path).is_some() => {
             let run_id = pr_retry_path_run_id(path).unwrap_or_default();
             pr_retry_response(config, &run_id)
         }
-        (Some("POST"), Some(path)) if reject_path_run_id(path).is_some() => {
+        ("POST", path) if reject_path_run_id(path).is_some() => {
             let run_id = reject_path_run_id(path).unwrap_or_default();
             reject_run_response(config, &run_id, request)
         }
-        (Some("GET"), Some(path)) => static_response(config, path),
-        (Some(_), Some("/health" | "/api/board" | "/api/intake" | "/api/settings")) => {
-            json_response(
-                405,
-                &ErrorResponse {
-                    error: "method not allowed".to_owned(),
-                },
-            )
-        }
-        (Some(_), Some(path))
+        ("GET", path) => static_response(config, path),
+        (_, "/health" | "/api/board" | "/api/intake" | "/api/settings") => json_response(
+            405,
+            &ErrorResponse {
+                error: "method not allowed".to_owned(),
+            },
+        ),
+        (_, path)
             if start_path_story_id(path).is_some()
                 || recover_path_story_id(path).is_some()
                 || retire_path_story_id(path).is_some()
@@ -459,10 +478,9 @@ fn handle_request(config: &ResolvedConfig, request: &str) -> Result<HttpResponse
 
 fn create_guided_intake_response(
     config: &ResolvedConfig,
-    request: &str,
+    request: &HttpRequest,
 ) -> Result<HttpResponse, WebError> {
-    let body = request_body(request);
-    let payload = match serde_json::from_str::<GuidedIntakeRequest>(body) {
+    let payload = match serde_json::from_slice::<GuidedIntakeRequest>(&request.body) {
         Ok(payload) => payload,
         Err(error) => {
             return json_response(
@@ -769,9 +787,9 @@ fn settings_response(config: &ResolvedConfig) -> Result<HttpResponse, WebError> 
 
 fn update_settings_response(
     config: &ResolvedConfig,
-    request: &str,
+    request: &HttpRequest,
 ) -> Result<HttpResponse, WebError> {
-    let payload = match serde_json::from_str::<SettingsPayload>(request_body(request)) {
+    let payload = match serde_json::from_slice::<SettingsPayload>(&request.body) {
         Ok(payload) => payload,
         Err(error) => {
             return json_response(
@@ -811,13 +829,12 @@ fn config_for_agent(config: &ResolvedConfig, agent: &str) -> ResolvedConfig {
 fn start_run_response(
     config: &ResolvedConfig,
     story_id: &str,
-    request: &str,
+    request: &HttpRequest,
 ) -> Result<HttpResponse, WebError> {
-    let body = request_body(request);
-    let payload = if body.trim().is_empty() {
+    let payload = if request.body.iter().all(u8::is_ascii_whitespace) {
         StartRunRequest::default()
     } else {
-        match serde_json::from_str::<StartRunRequest>(body) {
+        match serde_json::from_slice::<StartRunRequest>(&request.body) {
             Ok(payload) => payload,
             Err(error) => {
                 return json_response(
@@ -1534,22 +1551,6 @@ fn review_next_action(
     }
 }
 
-fn parse_request_line(request: &str) -> (Option<String>, Option<String>) {
-    let mut parts = request
-        .lines()
-        .next()
-        .unwrap_or_default()
-        .split_whitespace();
-    (
-        parts.next().map(str::to_owned),
-        parts.next().map(str::to_owned),
-    )
-}
-
-fn request_body(request: &str) -> &str {
-    request.split_once("\r\n\r\n").map_or("", |(_, body)| body)
-}
-
 fn start_path_story_id(path: &str) -> Option<String> {
     let path = path.trim_end_matches('/');
     let story_id = path.strip_prefix("/api/tasks/")?.strip_suffix("/start")?;
@@ -1775,10 +1776,9 @@ fn tools_check_response(config: &ResolvedConfig) -> Result<HttpResponse, WebErro
 fn reject_run_response(
     config: &ResolvedConfig,
     run_id: &str,
-    request: &str,
+    request: &HttpRequest,
 ) -> Result<HttpResponse, WebError> {
-    let body: RejectRunRequest =
-        serde_json::from_str(request_body(request)).map_err(WebError::Json)?;
+    let body: RejectRunRequest = serde_json::from_slice(&request.body).map_err(WebError::Json)?;
     let reason = body.reason.trim();
     if reason.is_empty() || reason.len() > 500 {
         return json_response(
@@ -2394,6 +2394,18 @@ exit 1
         let config = test_config(&temp_dir);
 
         let response = handle_request(&config, "GET /health HTTP/1.1\r\n\r\n").unwrap();
+
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
+        assert!(response.ends_with(r#"{"ok":true}"#));
+    }
+
+    #[test]
+    fn request_changes_binary_http_request_routes_without_string_conversion() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = test_config(&temp_dir);
+        let request = crate::upload::parse_http_request(b"GET /health HTTP/1.1\r\n\r\n").unwrap();
+
+        let response = handle_http_request(&config, &request).unwrap();
 
         assert!(response.starts_with("HTTP/1.1 200 OK"));
         assert!(response.ends_with(r#"{"ok":true}"#));

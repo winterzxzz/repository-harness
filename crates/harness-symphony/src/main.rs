@@ -9,6 +9,7 @@ mod retention;
 mod run;
 mod state;
 mod sync;
+mod upload;
 mod web;
 mod work;
 
