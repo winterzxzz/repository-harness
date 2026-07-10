@@ -11,7 +11,10 @@ use thiserror::Error;
 use crate::changeset::{render_changeset, render_markdown, ChangesetError};
 use crate::config::ResolvedConfig;
 use crate::pr::{create_pr, PrError};
-use crate::run::{execute_prepared_run, prepare_run, PreparedRun, RunError};
+use crate::run::{
+    execute_prepared_run, prepare_replacement_run, prepare_run, FeedbackFile, PreparedRun,
+    ReplacementFeedback, RunContract, RunError,
+};
 use crate::state::{RunStateStore, StateError};
 use crate::sync::{sync_changeset, SyncChange, SyncError};
 use crate::upload::{HttpRequest, UploadError};
@@ -165,6 +168,21 @@ struct RejectRunResponse {
 }
 
 #[derive(Debug, Serialize)]
+struct RequestChangesResponse {
+    source_run_id: String,
+    run_id: String,
+    story_id: String,
+    status: String,
+    feedback: RequestChangesPaths,
+}
+
+#[derive(Debug, Serialize)]
+struct RequestChangesPaths {
+    reason_path: String,
+    evidence_paths: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
 struct RetireTaskResponse {
     story_id: String,
     status: String,
@@ -211,6 +229,22 @@ struct ReviewResponse {
     suggested_next_action: String,
     failure_summary: Option<FailureSummary>,
     recovery_action: Option<RecoveryAction>,
+    request_changes: Option<ReviewFeedback>,
+}
+
+#[derive(Debug, Serialize)]
+struct ReviewFeedback {
+    reason: String,
+    reason_path: String,
+    evidence: Vec<ReviewEvidence>,
+}
+
+#[derive(Debug, Serialize)]
+struct ReviewEvidence {
+    path: String,
+    url: String,
+    content_type: String,
+    size: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -435,9 +469,17 @@ fn handle_http_request(
             let run_id = pr_retry_path_run_id(path).unwrap_or_default();
             pr_retry_response(config, &run_id)
         }
+        ("POST", path) if request_changes_path_run_id(path).is_some() => {
+            let run_id = request_changes_path_run_id(path).unwrap_or_default();
+            request_changes_response(config, &run_id, request)
+        }
         ("POST", path) if reject_path_run_id(path).is_some() => {
             let run_id = reject_path_run_id(path).unwrap_or_default();
             reject_run_response(config, &run_id, request)
+        }
+        ("GET", path) if feedback_path_parts(path).is_some() => {
+            let (run_id, filename) = feedback_path_parts(path).unwrap_or_default();
+            feedback_evidence_response(config, &run_id, &filename)
         }
         ("GET", path) => static_response(config, path),
         (_, "/health" | "/api/board" | "/api/intake" | "/api/settings") => json_response(
@@ -457,7 +499,9 @@ fn handle_http_request(
                 || sync_path_run_id(path).is_some()
                 || pr_merged_path_run_id(path).is_some()
                 || pr_retry_path_run_id(path).is_some()
+                || request_changes_path_run_id(path).is_some()
                 || reject_path_run_id(path).is_some()
+                || feedback_path_parts(path).is_some()
                 || matches!(path, "/api/tools" | "/api/tools/check") =>
         {
             json_response(
@@ -951,6 +995,216 @@ fn events_response(config: &ResolvedConfig, run_id: &str) -> Result<HttpResponse
     )
 }
 
+fn request_changes_response(
+    config: &ResolvedConfig,
+    run_id: &str,
+    request: &HttpRequest,
+) -> Result<HttpResponse, WebError> {
+    request_changes_response_with_spawn(config, run_id, request, spawn_run)
+}
+
+fn request_changes_response_with_spawn<F>(
+    config: &ResolvedConfig,
+    run_id: &str,
+    request: &HttpRequest,
+    spawn: F,
+) -> Result<HttpResponse, WebError>
+where
+    F: FnOnce(ResolvedConfig, PreparedRun),
+{
+    let submission = match crate::upload::parse_request_changes(request) {
+        Ok(submission) => submission,
+        Err(error) => {
+            return json_response(
+                400,
+                &ErrorResponse {
+                    error: error.to_string(),
+                },
+            );
+        }
+    };
+    let store = RunStateStore::new(config.state_db.clone());
+    let source = match store.show_run(run_id) {
+        Ok(run) => run,
+        Err(StateError::RunNotFound(_)) => {
+            return json_response(
+                404,
+                &ErrorResponse {
+                    error: "run not found".to_owned(),
+                },
+            );
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let item = match list_board(&config.harness_db, &config.state_db)?
+        .into_iter()
+        .find(|item| item.id == source.story_id)
+    {
+        Some(item) => item,
+        None => {
+            return json_response(
+                409,
+                &ErrorResponse {
+                    error: "source story is not available on the board".to_owned(),
+                },
+            );
+        }
+    };
+    if item.run_id.as_deref() != Some(run_id) {
+        return json_response(
+            409,
+            &ErrorResponse {
+                error: "run is stale; request changes from the latest Ready result".to_owned(),
+            },
+        );
+    }
+    let is_review = item.board_state == BoardState::Review
+        || (item.board_state == BoardState::NeedsAttention
+            && local_review_without_pr(config, &source));
+    if !is_review
+        || source.status != "completed"
+        || is_synced(&source)
+        || !matches!(item.story_status.as_str(), "planned" | "in_progress")
+    {
+        return json_response(
+            409,
+            &ErrorResponse {
+                error: "request changes is available only for the latest unsynced Ready result"
+                    .to_owned(),
+            },
+        );
+    }
+    if let Some(active) = store.active_run()? {
+        return json_response(
+            409,
+            &ErrorResponse {
+                error: format!("active run already exists: {}", active.run_id),
+            },
+        );
+    }
+
+    let agent = default_agent(config)?;
+    let effective_config = config_for_agent(config, &agent);
+    let prepared = match prepare_replacement_run(
+        &effective_config,
+        &source.story_id,
+        ReplacementFeedback {
+            source_run_id: source.run_id.clone(),
+            reason: submission.reason,
+            evidence: submission
+                .evidence
+                .into_iter()
+                .map(|file| FeedbackFile {
+                    extension: file.extension,
+                    bytes: file.bytes,
+                })
+                .collect(),
+        },
+    ) {
+        Ok(prepared) => prepared,
+        Err(RunError::State(StateError::ActiveRunExists(run_id))) => {
+            return json_response(
+                409,
+                &ErrorResponse {
+                    error: format!("active run already exists: {run_id}"),
+                },
+            );
+        }
+        Err(
+            error @ (RunError::State(StateError::RunNotReplaceable { .. })
+            | RunError::State(StateError::ReplacementStoryMismatch { .. })
+            | RunError::StoryNotRunnable { .. }),
+        ) => {
+            return json_response(
+                409,
+                &ErrorResponse {
+                    error: error.to_string(),
+                },
+            );
+        }
+        Err(error @ RunError::InvalidFeedback(_)) => {
+            return json_response(
+                400,
+                &ErrorResponse {
+                    error: error.to_string(),
+                },
+            );
+        }
+        Err(error) => {
+            return json_response(
+                400,
+                &ErrorResponse {
+                    error: error.to_string(),
+                },
+            );
+        }
+    };
+    let Some(feedback) = prepared.request_changes.as_ref() else {
+        return json_response(
+            500,
+            &ErrorResponse {
+                error: "replacement run is missing request changes metadata".to_owned(),
+            },
+        );
+    };
+    let response = RequestChangesResponse {
+        source_run_id: source.run_id,
+        run_id: prepared.run_id.clone(),
+        story_id: prepared.story_id.clone(),
+        status: "prepared".to_owned(),
+        feedback: RequestChangesPaths {
+            reason_path: feedback.reason_path.clone(),
+            evidence_paths: feedback.evidence_paths.clone(),
+        },
+    };
+    spawn(effective_config, prepared);
+    json_response(202, &response)
+}
+
+fn feedback_evidence_response(
+    config: &ResolvedConfig,
+    run_id: &str,
+    filename: &str,
+) -> Result<HttpResponse, WebError> {
+    if !safe_identifier(run_id) || generated_evidence_content_type(filename).is_none() {
+        return json_response(
+            400,
+            &ErrorResponse {
+                error: "invalid feedback evidence path".to_owned(),
+            },
+        );
+    }
+    let feedback = match review_feedback(config, run_id)? {
+        Some(feedback) => feedback,
+        None => {
+            return json_response(
+                404,
+                &ErrorResponse {
+                    error: "feedback evidence not found".to_owned(),
+                },
+            );
+        }
+    };
+    let evidence = match feedback
+        .evidence
+        .iter()
+        .find(|evidence| evidence.url.ends_with(&format!("/{filename}")))
+    {
+        Some(evidence) => evidence,
+        None => {
+            return json_response(
+                404,
+                &ErrorResponse {
+                    error: "feedback evidence not found".to_owned(),
+                },
+            );
+        }
+    };
+    let path = config.runs_dir.join(run_id).join("feedback").join(filename);
+    let bytes = fs::read(path)?;
+    binary_response(200, &evidence.content_type, bytes)
+}
+
 fn review_response(config: &ResolvedConfig, run_id: &str) -> Result<HttpResponse, WebError> {
     if !safe_identifier(run_id) {
         return json_response(
@@ -1040,6 +1294,7 @@ fn review_response(config: &ResolvedConfig, run_id: &str) -> Result<HttpResponse
     } else {
         recovery_action_for_review(config, &run)?
     };
+    let request_changes = review_feedback(config, run_id)?;
 
     json_response(
         200,
@@ -1061,8 +1316,61 @@ fn review_response(config: &ResolvedConfig, run_id: &str) -> Result<HttpResponse
             suggested_next_action,
             failure_summary,
             recovery_action,
+            request_changes,
         },
     )
+}
+
+fn review_feedback(
+    config: &ResolvedConfig,
+    run_id: &str,
+) -> Result<Option<ReviewFeedback>, WebError> {
+    let run_dir = config.runs_dir.join(run_id);
+    let contract_path = run_dir.join("RUN_CONTRACT.json");
+    if !contract_path.exists() {
+        return Ok(None);
+    }
+    let contract: RunContract = serde_json::from_slice(&fs::read(contract_path)?)?;
+    let Some(feedback) = contract.request_changes else {
+        return Ok(None);
+    };
+    let expected_reason_path = format!(".harness/runs/{run_id}/feedback/reason.md");
+    if contract.run_id != run_id || feedback.reason_path != expected_reason_path {
+        return Ok(None);
+    }
+    let feedback_dir = run_dir.join("feedback");
+    let reason = fs::read_to_string(feedback_dir.join("reason.md"))?
+        .trim()
+        .to_owned();
+    let expected_prefix = format!(".harness/runs/{run_id}/feedback/");
+    let mut evidence = Vec::new();
+    for path in feedback.evidence_paths {
+        let Some(filename) = path.strip_prefix(&expected_prefix).map(str::to_owned) else {
+            return Ok(None);
+        };
+        let Some(content_type) = generated_evidence_content_type(&filename) else {
+            return Ok(None);
+        };
+        let file_path = feedback_dir.join(&filename);
+        if !file_path.is_file() {
+            continue;
+        }
+        let metadata = fs::metadata(&file_path)?;
+        if metadata.len() > crate::upload::MAX_EVIDENCE_BYTES as u64 {
+            continue;
+        }
+        evidence.push(ReviewEvidence {
+            path,
+            url: format!("/api/runs/{run_id}/feedback/{filename}"),
+            content_type: content_type.to_owned(),
+            size: metadata.len(),
+        });
+    }
+    Ok(Some(ReviewFeedback {
+        reason,
+        reason_path: feedback.reason_path,
+        evidence,
+    }))
 }
 
 fn changeset_display_path(repo_root: &Path, path: &Path) -> String {
@@ -1621,6 +1929,37 @@ fn reject_path_run_id(path: &str) -> Option<String> {
     safe_identifier(run_id).then(|| run_id.to_owned())
 }
 
+fn request_changes_path_run_id(path: &str) -> Option<String> {
+    let path = path.trim_end_matches('/');
+    let run_id = path
+        .strip_prefix("/api/runs/")?
+        .strip_suffix("/request-changes")?;
+    safe_identifier(run_id).then(|| run_id.to_owned())
+}
+
+fn feedback_path_parts(path: &str) -> Option<(String, String)> {
+    let tail = path.strip_prefix("/api/runs/")?;
+    let (run_id, filename) = tail.split_once("/feedback/")?;
+    Some((run_id.to_owned(), filename.to_owned()))
+}
+
+fn generated_evidence_content_type(filename: &str) -> Option<&'static str> {
+    let (stem, extension) = filename.rsplit_once('.')?;
+    let number = stem.strip_prefix("evidence-")?;
+    if number.len() != 2
+        || !number.bytes().all(|byte| byte.is_ascii_digit())
+        || !matches!(number.parse::<u8>().ok(), Some(1..=3))
+    {
+        return None;
+    }
+    match extension {
+        "png" => Some("image/png"),
+        "jpg" => Some("image/jpeg"),
+        "webp" => Some("image/webp"),
+        _ => None,
+    }
+}
+
 fn safe_identifier(value: &str) -> bool {
     !value.is_empty()
         && value
@@ -1873,6 +2212,25 @@ fn json_response<T: Serialize>(status: u16, body: &T) -> Result<HttpResponse, We
     let body = serde_json::to_vec(body)?;
     let mut response = format!(
         "HTTP/1.1 {status} {status_text}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    response.extend_from_slice(&body);
+    Ok(HttpResponse::new(response))
+}
+
+fn binary_response(
+    status: u16,
+    content_type: &str,
+    body: Vec<u8>,
+) -> Result<HttpResponse, WebError> {
+    let status_text = match status {
+        200 => "OK",
+        404 => "Not Found",
+        _ => "Internal Server Error",
+    };
+    let mut response = format!(
+        "HTTP/1.1 {status} {status_text}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     )
     .into_bytes();
@@ -2263,6 +2621,54 @@ mod tests {
             .unwrap();
     }
 
+    fn add_story_run(config: &ResolvedConfig, run_id: &str, story_id: &str, status: &str) {
+        RunStateStore::new(config.state_db.clone())
+            .add_run(crate::state::NewRunRecord {
+                run_id: run_id.to_owned(),
+                story_id: story_id.to_owned(),
+                branch: Some(format!("symphony/{run_id}")),
+                worktree: config.repo_root.join(".symphony/worktrees").join(run_id),
+                lightweight: false,
+                status: status.to_owned(),
+                result_path: Some(PathBuf::from(format!(".harness/runs/{run_id}/RESULT.json"))),
+                sync_status: "not_applied".to_owned(),
+                next_action: "review run result".to_owned(),
+            })
+            .unwrap();
+    }
+
+    fn request_changes_http_request(
+        run_id: &str,
+        reason: &str,
+        evidence: &[(&str, &str, &[u8])],
+    ) -> crate::upload::HttpRequest {
+        let boundary = "request-changes-boundary";
+        let mut body = Vec::new();
+        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        body.extend_from_slice(b"Content-Disposition: form-data; name=\"reason\"\r\n\r\n");
+        body.extend_from_slice(reason.as_bytes());
+        body.extend_from_slice(b"\r\n");
+        for (filename, content_type, bytes) in evidence {
+            body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+            body.extend_from_slice(
+                format!(
+                    "Content-Disposition: form-data; name=\"evidence\"; filename=\"{filename}\"\r\nContent-Type: {content_type}\r\n\r\n"
+                )
+                .as_bytes(),
+            );
+            body.extend_from_slice(bytes);
+            body.extend_from_slice(b"\r\n");
+        }
+        body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+        let mut request = format!(
+            "POST /api/runs/{run_id}/request-changes HTTP/1.1\r\nContent-Type: multipart/form-data; boundary={boundary}\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        request.extend_from_slice(&body);
+        crate::upload::parse_http_request(&request).unwrap()
+    }
+
     fn test_run_record(status: &str) -> crate::state::RunRecord {
         crate::state::RunRecord {
             run_id: format!("run_{status}"),
@@ -2409,6 +2815,169 @@ exit 1
 
         assert!(response.starts_with("HTTP/1.1 200 OK"));
         assert!(response.ends_with(r#"{"ok":true}"#));
+    }
+
+    #[test]
+    fn request_changes_creates_replacement_and_preserves_source() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut config = test_config(&temp_dir);
+        config.pull_request_create = "disabled".to_owned();
+        init_git_repo(temp_dir.path());
+        seed_runnable_story(&config.harness_db, "US-084");
+        add_story_run(&config, "run_old", "US-084", "completed");
+        let png = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 1];
+        let request = request_changes_http_request(
+            "run_old",
+            "Fix spacing",
+            &[("proof.png", "image/png", &png)],
+        );
+
+        let response =
+            request_changes_response_with_spawn(&config, "run_old", &request, |_, _| {}).unwrap();
+
+        assert!(response.starts_with("HTTP/1.1 202 Accepted"));
+        let body: Value = serde_json::from_slice(response.body()).unwrap();
+        let replacement_run_id = body["run_id"].as_str().unwrap();
+        let store = RunStateStore::new(config.state_db.clone());
+        assert_eq!(store.show_run("run_old").unwrap().status, "rejected");
+        assert_eq!(
+            store.show_run(replacement_run_id).unwrap().story_id,
+            "US-084"
+        );
+        assert_eq!(
+            body["feedback"]["evidence_paths"].as_array().unwrap().len(),
+            1
+        );
+    }
+
+    #[test]
+    fn request_changes_invalid_image_leaves_source_completed() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut config = test_config(&temp_dir);
+        config.pull_request_create = "disabled".to_owned();
+        init_git_repo(temp_dir.path());
+        seed_runnable_story(&config.harness_db, "US-084");
+        add_story_run(&config, "run_old", "US-084", "completed");
+        let request = request_changes_http_request(
+            "run_old",
+            "Fix spacing",
+            &[("proof.png", "image/png", b"not png")],
+        );
+
+        let response = handle_http_request(&config, &request).unwrap();
+
+        assert!(response.starts_with("HTTP/1.1 400 Bad Request"));
+        let store = RunStateStore::new(config.state_db.clone());
+        assert_eq!(store.show_run("run_old").unwrap().status, "completed");
+        assert_eq!(store.list_runs().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn request_changes_refuses_done_stale_and_active_conflicts() {
+        let png = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+
+        let done_dir = tempfile::tempdir().unwrap();
+        let done_config = test_config(&done_dir);
+        init_git_repo(done_dir.path());
+        seed_story_with_status(
+            &done_config.harness_db,
+            "US-084",
+            "Done story",
+            "implemented",
+        );
+        add_story_run(&done_config, "run_done", "US-084", "completed");
+        let done_request =
+            request_changes_http_request("run_done", "Try again", &[("a.png", "image/png", &png)]);
+        let done =
+            request_changes_response_with_spawn(&done_config, "run_done", &done_request, |_, _| {})
+                .unwrap();
+        assert!(done.starts_with("HTTP/1.1 409 Conflict"));
+
+        let stale_dir = tempfile::tempdir().unwrap();
+        let mut stale_config = test_config(&stale_dir);
+        stale_config.pull_request_create = "disabled".to_owned();
+        init_git_repo(stale_dir.path());
+        seed_runnable_story(&stale_config.harness_db, "US-084");
+        add_story_run(&stale_config, "run_old", "US-084", "completed");
+        add_story_run(&stale_config, "run_znew", "US-084", "completed");
+        let stale_request =
+            request_changes_http_request("run_old", "Try again", &[("a.png", "image/png", &png)]);
+        let stale = request_changes_response_with_spawn(
+            &stale_config,
+            "run_old",
+            &stale_request,
+            |_, _| {},
+        )
+        .unwrap();
+        assert!(stale.starts_with("HTTP/1.1 409 Conflict"));
+
+        let active_dir = tempfile::tempdir().unwrap();
+        let mut active_config = test_config(&active_dir);
+        active_config.pull_request_create = "disabled".to_owned();
+        init_git_repo(active_dir.path());
+        seed_runnable_story(&active_config.harness_db, "US-084");
+        add_story_run(&active_config, "run_old", "US-084", "completed");
+        add_story_run(&active_config, "run_active", "US-ACTIVE", "prepared");
+        let active_request =
+            request_changes_http_request("run_old", "Try again", &[("a.png", "image/png", &png)]);
+        let active = request_changes_response_with_spawn(
+            &active_config,
+            "run_old",
+            &active_request,
+            |_, _| {},
+        )
+        .unwrap();
+        assert!(active.starts_with("HTTP/1.1 409 Conflict"));
+        assert_eq!(
+            RunStateStore::new(active_config.state_db.clone())
+                .show_run("run_old")
+                .unwrap()
+                .status,
+            "completed"
+        );
+    }
+
+    #[test]
+    fn request_changes_review_metadata_and_scoped_evidence_are_safe() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut config = test_config(&temp_dir);
+        config.pull_request_create = "disabled".to_owned();
+        init_git_repo(temp_dir.path());
+        seed_runnable_story(&config.harness_db, "US-084");
+        add_story_run(&config, "run_old", "US-084", "completed");
+        let png = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 4, 2];
+        let request = request_changes_http_request(
+            "run_old",
+            "Fix spacing",
+            &[("proof.png", "image/png", &png)],
+        );
+        let response =
+            request_changes_response_with_spawn(&config, "run_old", &request, |_, _| {}).unwrap();
+        let body: Value = serde_json::from_slice(response.body()).unwrap();
+        let run_id = body["run_id"].as_str().unwrap();
+
+        let review = handle_request(
+            &config,
+            &format!("GET /api/runs/{run_id}/review HTTP/1.1\r\n\r\n"),
+        )
+        .unwrap();
+        assert!(review.contains(r#""reason":"Fix spacing""#));
+        assert!(review.contains(&format!("/api/runs/{run_id}/feedback/evidence-01.png")));
+
+        let evidence = handle_request(
+            &config,
+            &format!("GET /api/runs/{run_id}/feedback/evidence-01.png HTTP/1.1\r\n\r\n"),
+        )
+        .unwrap();
+        assert!(evidence.starts_with("HTTP/1.1 200 OK"));
+        assert_eq!(evidence.body(), png);
+
+        let traversal = handle_request(
+            &config,
+            &format!("GET /api/runs/{run_id}/feedback/../RUN_CONTRACT.json HTTP/1.1\r\n\r\n"),
+        )
+        .unwrap();
+        assert!(traversal.starts_with("HTTP/1.1 400 Bad Request"));
     }
 
     #[test]
