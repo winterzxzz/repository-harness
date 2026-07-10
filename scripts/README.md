@@ -99,6 +99,44 @@ docs.
 
 ## Installer
 
+### macOS Homebrew bootstrap
+
+For the short macOS workflow, install the global bootstrap once and initialize
+each project from its own directory:
+
+```bash
+brew install winterzxzz/tap/harness
+harness init
+```
+
+The Homebrew Formula pins a versioned macOS kit and SHA-256 checksums. The
+global command passes its bundled, verified CLI binary to the local installer;
+it does not fetch a payload or executable code during `harness init`.
+
+Use the same Formula on multiple Macs through a Brewfile:
+
+```ruby
+tap "winterzxzz/tap"
+brew "harness"
+```
+
+Run `brew bundle` to apply it, then update in two explicit stages:
+
+```bash
+brew update && brew upgrade harness
+harness update
+```
+
+`harness update` reads `.harness/install-state.tsv`, an ignored installer
+metadata file. It replaces only files that still match the recorded Harness
+hashes, creates new managed files, and leaves local edits untouched. Pass
+`--force` to back up then replace a modified managed file. Legacy projects can
+run `harness update --adopt` once to record their current Harness files without
+overwriting them. A symlinked managed path is refused rather than followed
+outside the project.
+
+### Direct installer fallback
+
 The upstream installer applies the Harness v0 operating files and folder
 structure to a target project directory. It defaults to the current directory,
 accepts a target path, and asks interactive users whether to `1. Merge`,
@@ -113,27 +151,27 @@ shim. Use `--override` only when replacing the protected Harness surface is
 intentional.
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/hoangnb24/repository-harness/main/scripts/install-harness.sh?$(date +%s)" | bash -s -- --yes
+curl -fsSL "https://raw.githubusercontent.com/winterzxzz/repository-harness/main/scripts/install-harness.sh?$(date +%s)" | bash -s -- --yes
 ```
 
 ```powershell
-& ([scriptblock]::Create((irm "https://raw.githubusercontent.com/hoangnb24/repository-harness/main/scripts/install-harness.ps1"))) -Yes
+& ([scriptblock]::Create((irm "https://raw.githubusercontent.com/winterzxzz/repository-harness/main/scripts/install-harness.ps1"))) -Yes
 ```
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/hoangnb24/repository-harness/main/scripts/install-harness.sh?$(date +%s)" | bash -s -- --merge --yes
+curl -fsSL "https://raw.githubusercontent.com/winterzxzz/repository-harness/main/scripts/install-harness.sh?$(date +%s)" | bash -s -- --merge --yes
 ```
 
 ```powershell
-& ([scriptblock]::Create((irm "https://raw.githubusercontent.com/hoangnb24/repository-harness/main/scripts/install-harness.ps1"))) -Merge -Yes
+& ([scriptblock]::Create((irm "https://raw.githubusercontent.com/winterzxzz/repository-harness/main/scripts/install-harness.ps1"))) -Merge -Yes
 ```
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/hoangnb24/repository-harness/main/scripts/install-harness.sh?$(date +%s)" | bash -s -- --merge --refresh-agent-shim --yes
+curl -fsSL "https://raw.githubusercontent.com/winterzxzz/repository-harness/main/scripts/install-harness.sh?$(date +%s)" | bash -s -- --merge --refresh-agent-shim --yes
 ```
 
 ```powershell
-& ([scriptblock]::Create((irm "https://raw.githubusercontent.com/hoangnb24/repository-harness/main/scripts/install-harness.ps1"))) -Merge -RefreshAgentShim -Yes
+& ([scriptblock]::Create((irm "https://raw.githubusercontent.com/winterzxzz/repository-harness/main/scripts/install-harness.ps1"))) -Merge -RefreshAgentShim -Yes
 ```
 
 `--refresh-agent-shim` backs up `AGENTS.md` before changing it. If the existing
@@ -223,9 +261,10 @@ scripts/build-harness-cli-release.sh --target x86_64-unknown-linux-gnu
 ```
 
 GitHub releases are produced by
-`.github/workflows/harness-cli-release.yml`. Push a tag matching `v*` or
-`harness-cli-v*` to run the verification job, build all supported targets on
-native hosted runners, and upload these release assets:
+`.github/workflows/harness-cli-release.yml`. Post-merge maintenance calls this
+reusable workflow for the tagged ref; operators can also run it manually with
+**Run workflow**. It verifies, builds on native hosted runners, and uploads
+these release assets:
 
 - `harness-cli-macos-arm64`
 - `harness-cli-macos-arm64.sha256`

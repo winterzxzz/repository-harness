@@ -264,8 +264,7 @@ fn run_changeset_apply(
 }
 
 fn changeset_apply_rejected_json_flag(output: &std::process::Output) -> bool {
-    !output.status.success()
-        && String::from_utf8_lossy(&output.stderr).contains("--json")
+    !output.status.success() && String::from_utf8_lossy(&output.stderr).contains("--json")
 }
 
 fn parse_apply_result(stdout: &str) -> Option<ApplyResult> {
@@ -317,7 +316,9 @@ mod tests {
             })
         );
         assert_eq!(
-            parse_apply_result("warning: noise\n{\"id\":\"run_1\",\"applied\":false,\"operations\":0}\n"),
+            parse_apply_result(
+                "warning: noise\n{\"id\":\"run_1\",\"applied\":false,\"operations\":0}\n"
+            ),
             Some(ApplyResult {
                 applied: false,
                 operations: 0

@@ -45,6 +45,26 @@ function Get-SourceMode {
     return @{ Mode = "remote"; Root = "" }
 }
 
+function Read-UpstreamRepository {
+    if ($script:Source.Mode -eq "local") {
+        $path = Join-Path $script:Source.Root "scripts/harness-upstream-repository"
+        if (Test-Path $path) {
+            $repository = Get-Content -LiteralPath $path |
+                Where-Object { $_ -match "\S" -and $_ -notmatch "^\s*#" } |
+                Select-Object -First 1
+            if (![string]::IsNullOrWhiteSpace($repository)) {
+                $repository = $repository.Trim()
+                if ($repository -match "^[^/\s]+/[^/\s]+$") {
+                    return $repository
+                }
+                Fail "Invalid Harness upstream repository: $repository"
+            }
+        }
+    }
+
+    return "winterzxzz/repository-harness"
+}
+
 function Read-RemoteText([string]$Url) {
     return (Invoke-WebRequest -UseBasicParsing -Uri $Url).Content
 }
@@ -281,9 +301,9 @@ function Get-DefaultCliBaseUrl {
         $tag = Read-CliReleaseTag
     }
     if (![string]::IsNullOrWhiteSpace($tag) -and $tag -ne "latest") {
-        return "https://github.com/hoangnb24/repository-harness/releases/download/$tag"
+        return "https://github.com/$($script:UpstreamRepository)/releases/download/$tag"
     }
-    return "https://github.com/hoangnb24/repository-harness/releases/latest/download"
+    return "https://github.com/$($script:UpstreamRepository)/releases/latest/download"
 }
 
 function Install-HarnessCliBinary {
@@ -351,7 +371,8 @@ $script:Created = 0
 $script:Updated = 0
 $script:Skipped = 0
 $script:Source = Get-SourceMode
-$script:SourceBaseUrl = if ($env:HARNESS_SOURCE_BASE_URL) { $env:HARNESS_SOURCE_BASE_URL.TrimEnd("/") } else { "https://raw.githubusercontent.com/hoangnb24/repository-harness/main" }
+$script:UpstreamRepository = if ($env:HARNESS_UPSTREAM_REPOSITORY) { $env:HARNESS_UPSTREAM_REPOSITORY } else { Read-UpstreamRepository }
+$script:SourceBaseUrl = if ($env:HARNESS_SOURCE_BASE_URL) { $env:HARNESS_SOURCE_BASE_URL.TrimEnd("/") } else { "https://raw.githubusercontent.com/$($script:UpstreamRepository)/main" }
 $script:PayloadManifest = "scripts/harness-install-files.txt"
 $script:SchemaDir = "scripts/schema"
 $script:CliBaseUrl = if ($env:HARNESS_CLI_BASE_URL) { $env:HARNESS_CLI_BASE_URL.TrimEnd("/") } else { Get-DefaultCliBaseUrl }

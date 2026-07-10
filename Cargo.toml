@@ -5,4 +5,4 @@ members = ["crates/harness-cli", "crates/harness-symphony", "crates/harness-benc
 [workspace.package]
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/hoangnb24/repository-harness"
+repository = "https://github.com/winterzxzz/repository-harness"

@@ -17,11 +17,13 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       cli_changed: ${{ steps.maintenance.outputs.cli_changed }}
-      release_tag: ${{ steps.maintenance.outputs.release_tag }}
+      kit_changed: ${{ steps.maintenance.outputs.kit_changed }}
+      cli_release_tag: ${{ steps.maintenance.outputs.cli_release_tag }}
+      kit_release_tag: ${{ steps.maintenance.outputs.kit_release_tag }}
       maintenance_ref: ${{ steps.maintenance.outputs.maintenance_ref }}
     steps:
       - name: Checkout main
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: main
           fetch-depth: 0
@@ -52,16 +54,41 @@ jobs:
             cli_changed=true
           fi
 
-          release_tag=""
+          kit_changed="$cli_changed"
+          if [ "$kit_changed" = false ] && grep -Eq '^(AGENTS\.md$|\.gitignore$|scripts/(install-harness\.sh|harness-install-files\.txt|harness-upstream-repository|harness-kit-version|harness$|build-harness-macos-kit\.sh|render-homebrew-formula\.sh|validate-harness-macos-kit\.sh)$|packaging/homebrew/)' <<<"$changed_files"; then
+            kit_changed=true
+          fi
+          if [ "$kit_changed" = false ]; then
+            while IFS= read -r payload_path || [ -n "$payload_path" ]; do
+              case "$payload_path" in
+                ""|\#*) continue ;;
+              esac
+              if grep -Fxq "$payload_path" <<<"$changed_files"; then
+                kit_changed=true
+                break
+              fi
+            done < scripts/harness-install-files.txt
+          fi
+
+          cli_release_tag=""
           if [ "$cli_changed" = true ]; then
             old_version="$(awk -F'"' '/^version = / { print $2; exit }' crates/harness-cli/Cargo.toml)"
             IFS=. read -r major minor patch <<<"$old_version"
             new_version="$major.$minor.$((patch + 1))"
-            release_tag="harness-cli-v$new_version"
+            cli_release_tag="harness-cli-v$new_version"
 
             NEW_VERSION="$new_version" perl -0pi -e 's/(\[package\]\s+name = "harness-cli"\s+version = ")[^"]+(")/$1$ENV{NEW_VERSION}$2/s' crates/harness-cli/Cargo.toml
             NEW_VERSION="$new_version" perl -0pi -e 's/(name = "harness-cli"\nversion = ")[^"]+(")/$1$ENV{NEW_VERSION}$2/' Cargo.lock
-            printf '%s\n' "$release_tag" > scripts/harness-cli-release-tag
+            printf '%s\n' "$cli_release_tag" > scripts/harness-cli-release-tag
+          fi
+
+          kit_release_tag=""
+          if [ "$kit_changed" = true ]; then
+            old_kit_version="$(awk 'NF && $1 !~ /^#/ { print $1; exit }' scripts/harness-kit-version)"
+            IFS=. read -r kit_major kit_minor kit_patch <<<"$old_kit_version"
+            new_kit_version="$kit_major.$kit_minor.$((kit_patch + 1))"
+            kit_release_tag="harness-kit-v$new_kit_version"
+            printf '%s\n' "$new_kit_version" > scripts/harness-kit-version
           fi
 
           date_utc="$(date -u +%Y-%m-%d)"
@@ -80,9 +107,14 @@ jobs:
               printf -- '- Merge commit: `%s`\n' "$merge_sha"
             fi
             if [ "$cli_changed" = true ]; then
-              printf -- '- Harness CLI release: `%s`\n' "$release_tag"
+              printf -- '- Harness CLI release: `%s`\n' "$cli_release_tag"
             else
               printf -- '- Harness CLI release: not required\n'
+            fi
+            if [ "$kit_changed" = true ]; then
+              printf -- '- Harness kit release: `%s`\n' "$kit_release_tag"
+            else
+              printf -- '- Harness kit release: not required\n'
             fi
             printf -- '- Changed files:\n'
             sed 's/^/  - `/' <<<"$changed_files" | sed 's/$/`/'
@@ -99,29 +131,36 @@ jobs:
           if git diff --quiet; then
             maintenance_ref="$(git rev-parse HEAD)"
           else
-            if [ "$cli_changed" = true ]; then
-              commit_message="chore(release): prepare $release_tag"
+            if [ "$cli_changed" = true ] && [ "$kit_changed" = true ]; then
+              commit_message="chore(release): prepare $cli_release_tag and $kit_release_tag"
+            elif [ "$cli_changed" = true ]; then
+              commit_message="chore(release): prepare $cli_release_tag"
+            elif [ "$kit_changed" = true ]; then
+              commit_message="chore(release): prepare $kit_release_tag"
             else
               commit_message="docs(changelog): record PR #$PR_NUMBER"
             fi
-            git add CHANGELOG.md Cargo.lock crates/harness-cli/Cargo.toml scripts/harness-cli-release-tag
+            git add CHANGELOG.md Cargo.lock crates/harness-cli/Cargo.toml scripts/harness-cli-release-tag scripts/harness-kit-version
             git commit -m "$commit_message"
             git push origin HEAD:main
             maintenance_ref="$(git rev-parse HEAD)"
           fi
 
-          if [ "$cli_changed" = true ]; then
+          for release_tag in "$cli_release_tag" "$kit_release_tag"; do
+            [ -n "$release_tag" ] || continue
             if git ls-remote --exit-code --tags origin "refs/tags/$release_tag" >/dev/null 2>&1; then
               echo "Tag $release_tag already exists."
             else
-              git tag -a "$release_tag" -m "Harness CLI $release_tag"
+              git tag -a "$release_tag" -m "Harness release $release_tag"
               git push origin "$release_tag"
             fi
-          fi
+          done
 
           {
             echo "cli_changed=$cli_changed"
-            echo "release_tag=$release_tag"
+            echo "kit_changed=$kit_changed"
+            echo "cli_release_tag=$cli_release_tag"
+            echo "kit_release_tag=$kit_release_tag"
             echo "maintenance_ref=$maintenance_ref"
           } >> "$GITHUB_OUTPUT"
 
@@ -133,5 +172,17 @@ jobs:
     permissions:
       contents: write
     with:
-      release_tag: ${{ needs.prepare.outputs.release_tag }}
-      checkout_ref: ${{ needs.prepare.outputs.release_tag }}
+      release_tag: ${{ needs.prepare.outputs.cli_release_tag }}
+      checkout_ref: ${{ needs.prepare.outputs.cli_release_tag }}
+
+  release-kit:
+    name: Build and publish Harness kit
+    needs: [prepare, release-cli]
+    if: ${{ needs.prepare.outputs.kit_changed == 'true' && (needs.release-cli.result == 'success' || needs.release-cli.result == 'skipped') }}
+    uses: ./.github/workflows/harness-kit-release.yml
+    permissions:
+      contents: write
+    secrets: inherit
+    with:
+      release_tag: ${{ needs.prepare.outputs.kit_release_tag }}
+      checkout_ref: ${{ needs.prepare.outputs.kit_release_tag }}

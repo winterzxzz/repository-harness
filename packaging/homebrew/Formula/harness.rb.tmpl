@@ -1,0 +1,26 @@
+class Harness < Formula
+  desc "Install and update the repository Harness operating kit"
+  homepage "https://github.com/winterzxzz/repository-harness"
+  version "@KIT_VERSION@"
+
+  on_macos do
+    on_arm do
+      url "@KIT_BASE_URL@/harness-macos-arm64.tar.gz"
+      sha256 "@ARM_SHA256@"
+    end
+
+    on_intel do
+      url "@KIT_BASE_URL@/harness-macos-x64.tar.gz"
+      sha256 "@INTEL_SHA256@"
+    end
+  end
+
+  def install
+    libexec.install Dir["*"]
+    bin.install_symlink libexec/"bin/harness"
+  end
+
+  test do
+    assert_match "Usage:", shell_output("#{bin}/harness --help")
+  end
+end
