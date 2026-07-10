@@ -526,11 +526,14 @@ GitHub Releases, Homebrew Formulae, GitHub CLI.
 
   In the publish job, only when `HOMEBREW_TAP_TOKEN` is non-empty, clone
   `https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/winterzxzz/homebrew-tap.git`,
-  render `Formula/harness.rb` from the uploaded checksum values, run:
+  render `Formula/harness.rb` from the uploaded checksum values in the local
+  Homebrew tap checkout, then run on a macOS runner:
 
   ```bash
-  brew audit --strict --online Formula/harness.rb
-  HOMEBREW_NO_INSTALL_FROM_API=1 brew install --build-from-source Formula/harness.rb
+  HOMEBREW_NO_AUTO_UPDATE=1 brew install winterzxzz/tap/harness
+  harness --version
+  harness init --dry-run --yes "$(mktemp -d)"
+  HOMEBREW_NO_AUTO_UPDATE=1 brew uninstall harness
   ```
 
   Then commit and push the formula update. When the credential is absent, log a

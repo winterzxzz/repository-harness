@@ -117,7 +117,9 @@ semantics. It does not overwrite pre-existing files.
 3. A user-modified managed file is left untouched and reported. `--force`
    creates a timestamped backup before replacing it.
 4. New managed files are added; no target-owned file is deleted.
-5. Legacy installations without state receive additive `--merge` behavior and
+5. Symlinked managed paths are rejected before an update can follow them
+   outside the target project.
+6. Legacy installations without state receive additive `--merge` behavior and
    a clear `--adopt` path that begins tracking only confirmed Harness-owned
    files without overwriting them.
 
@@ -141,14 +143,15 @@ change must still reach Homebrew users.
    `scripts/harness-cli-release-tag`.
 3. A release automation job updates `Formula/harness.rb` in
    `winterzxzz/homebrew-tap` with the tag and architecture-specific checksums.
-4. The tap CI runs Homebrew audit and an install/init smoke test before the
-   formula change is merged.
+4. Before pushing the formula change, the release job installs it from the tap
+   on a macOS runner, checks `harness --version`, runs `harness init --dry-run`,
+   and uninstalls it.
 
 Cross-repository publishing requires a narrowly scoped GitHub token or GitHub
 App credential stored as `HOMEBREW_TAP_TOKEN` in the source repository. It
 needs access only to update the tap repository. Until that credential exists,
-the release process creates a formula-update pull request or documents the
-manual formula bump; it must never fall back to a mutable `latest` URL.
+the release process documents the manual formula bump; it must never fall back
+to a mutable `latest` URL.
 
 The installer receives one repository configuration source, rather than
 hard-coded owner names in multiple files. Bash, PowerShell, README examples,

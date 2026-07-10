@@ -1,9 +1,6 @@
 name: Harness Kit Release
 
 on:
-  push:
-    tags:
-      - "harness-kit-v*"
   workflow_dispatch:
     inputs:
       release_tag:
@@ -36,16 +33,19 @@ jobs:
     name: Verify kit inputs
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ inputs.checkout_ref || github.event.inputs.checkout_ref || github.ref }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # 2026-07-10
+        with:
+          toolchain: stable
 
       - name: Verify source checks
         run: |
           cargo fmt --check
           cargo test --workspace
+          cargo build -p harness-cli
           bash -n scripts/install-harness.sh scripts/harness scripts/build-harness-macos-kit.sh scripts/render-homebrew-formula.sh scripts/validate-harness-macos-kit.sh
           scripts/validate-install-payload.sh
 
@@ -64,7 +64,7 @@ jobs:
             runner: macos-15-intel
             cli_asset: harness-cli-macos-x64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ inputs.checkout_ref || github.event.inputs.checkout_ref || github.ref }}
 
@@ -85,7 +85,7 @@ jobs:
           scripts/validate-harness-macos-kit.sh
           shasum -a 256 "dist/harness-macos-${{ matrix.platform == 'macos-arm64' && 'arm64' || 'x64' }}.tar.gz" > "dist/harness-macos-${{ matrix.platform == 'macos-arm64' && 'arm64' || 'x64' }}.tar.gz.sha256"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: harness-kit-${{ matrix.platform }}
           path: |
@@ -98,18 +98,18 @@ jobs:
   publish:
     name: Publish kit release
     needs: build
-    runs-on: ubuntu-24.04
+    runs-on: macos-15
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.release_tag != '' }}
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ inputs.release_tag || github.event.inputs.release_tag || github.ref_name }}
       HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ inputs.checkout_ref || github.event.inputs.checkout_ref || github.ref }}
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: harness-kit-*
           merge-multiple: true
@@ -135,9 +135,17 @@ jobs:
           kit_version="${RELEASE_TAG#harness-kit-v}"
           arm_sha="$(awk '{ print $1; exit }' dist/harness-macos-arm64.tar.gz.sha256)"
           intel_sha="$(awk '{ print $1; exit }' dist/harness-macos-x64.tar.gz.sha256)"
-          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/winterzxzz/homebrew-tap.git" tap
-          scripts/render-homebrew-formula.sh --kit-version "$kit_version" --arm-sha "$arm_sha" --intel-sha "$intel_sha" --output tap/Formula/harness.rb
-          cd tap
+          tap_dir="$(brew --repository)/Library/Taps/winterzxzz/homebrew-tap"
+          mkdir -p "$(dirname "$tap_dir")"
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/winterzxzz/homebrew-tap.git" "$tap_dir"
+          scripts/render-homebrew-formula.sh --kit-version "$kit_version" --arm-sha "$arm_sha" --intel-sha "$intel_sha" --output "$tap_dir/Formula/harness.rb"
+          HOMEBREW_NO_AUTO_UPDATE=1 brew install winterzxzz/tap/harness
+          test "$(harness --version)" = "$kit_version"
+          smoke_target="$(mktemp -d)"
+          harness init --dry-run --yes "$smoke_target"
+          rm -rf "$smoke_target"
+          HOMEBREW_NO_AUTO_UPDATE=1 brew uninstall harness
+          cd "$tap_dir"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Formula/harness.rb
