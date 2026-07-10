@@ -25,6 +25,8 @@ Options:
       --override         On protected-path conflict, back up and replace
                          AGENTS.md, docs/, and scripts/.
       --force            Overwrite existing files after backing them up.
+      --update           Update tracked Harness files without replacing local edits.
+      --adopt            Record existing Harness files before a future --update.
       --dry-run          Show what would change without writing files.
   -h, --help             Show this help.
 
@@ -41,6 +43,8 @@ Examples:
   scripts/install-harness.sh
   scripts/install-harness.sh --directory /path/to/project --yes
   scripts/install-harness.sh ./my-project --force
+  scripts/install-harness.sh --update --yes
+  scripts/install-harness.sh --update --adopt --yes
   curl -fsSL https://raw.githubusercontent.com/winterzxzz/repository-harness/main/scripts/install-harness.sh | bash -s -- --yes
   curl -fsSL https://raw.githubusercontent.com/winterzxzz/repository-harness/main/scripts/install-harness.sh | bash -s -- --merge --yes
   curl -fsSL https://raw.githubusercontent.com/winterzxzz/repository-harness/main/scripts/install-harness.sh | bash -s -- --merge --refresh-agent-shim --yes
@@ -128,6 +132,7 @@ copy_file() {
         mkdir -p "$(dirname "$backup")"
         cp -p "$target" "$backup"
         write_source_file "$relative" "$target"
+        record_managed_file "$relative"
         log "updated $relative (backup: ${backup#$TARGET_DIR/})"
       fi
       UPDATED=$((UPDATED + 1))
@@ -143,6 +148,7 @@ copy_file() {
   else
     mkdir -p "$(dirname "$target")"
     write_source_file "$relative" "$target"
+    record_managed_file "$relative"
     log "created  $relative"
   fi
   CREATED=$((CREATED + 1))
@@ -273,6 +279,134 @@ EOF
   done <<EOF
 $(discover_schema_files)
 EOF
+
+  [ "$copied_schema" -gt 0 ] || fail "No schema migrations found in $SCHEMA_DIR"
+}
+
+list_payload_files() {
+  local manifest relative
+
+  manifest="$(read_payload_manifest)"
+  while IFS= read -r relative || [ -n "$relative" ]; do
+    relative="${relative%$'\r'}"
+    case "$relative" in
+      ""|\#*) continue ;;
+    esac
+    printf '%s\n' "$relative"
+  done <<EOF
+$manifest
+EOF
+
+  discover_schema_files
+}
+
+backup_target_file() {
+  local relative="$1"
+  local target="$TARGET_DIR/$relative"
+  local backup="$BACKUP_DIR/$relative"
+
+  mkdir -p "$(dirname "$backup")"
+  cp -p "$target" "$backup"
+}
+
+update_managed_file() {
+  local relative="$1"
+  local target="$TARGET_DIR/$relative"
+  local recorded_hash current_hash source_hash source_tmp
+
+  if [ ! -e "$target" ]; then
+    if [ "$DRY_RUN" -eq 1 ]; then
+      log "create   $relative"
+    else
+      mkdir -p "$(dirname "$target")"
+      write_source_file "$relative" "$target"
+      record_managed_file "$relative"
+      log "created  $relative"
+    fi
+    CREATED=$((CREATED + 1))
+    return 0
+  fi
+
+  recorded_hash="$(recorded_hash_for "$relative")"
+  if [ -z "$recorded_hash" ]; then
+    log "skip     $relative (untracked existing file)"
+    SKIPPED=$((SKIPPED + 1))
+    return 0
+  fi
+
+  current_hash="$(sha256_file "$target")"
+  if [ "$current_hash" != "$recorded_hash" ] && [ "$FORCE" -eq 0 ]; then
+    log "skip     $relative (modified locally)"
+    SKIPPED=$((SKIPPED + 1))
+    return 0
+  fi
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    if [ "$current_hash" != "$recorded_hash" ]; then
+      log "overwrite $relative (backup first)"
+    else
+      log "update   $relative"
+    fi
+    UPDATED=$((UPDATED + 1))
+    return 0
+  fi
+
+  source_tmp="$(mktemp)"
+  write_source_file "$relative" "$source_tmp"
+  source_hash="$(sha256_file "$source_tmp")"
+  if [ "$source_hash" = "$current_hash" ]; then
+    rm -f "$source_tmp"
+    log "skip     $relative (already current)"
+    SKIPPED=$((SKIPPED + 1))
+    return 0
+  fi
+
+  if [ "$current_hash" != "$recorded_hash" ]; then
+    backup_target_file "$relative"
+  fi
+  cp "$source_tmp" "$target"
+  rm -f "$source_tmp"
+  record_managed_file "$relative"
+  UPDATED=$((UPDATED + 1))
+  if [ "$current_hash" != "$recorded_hash" ]; then
+    log "updated  $relative (backup: ${BACKUP_DIR#$TARGET_DIR/}/$relative)"
+  else
+    log "updated  $relative"
+  fi
+}
+
+adopt_existing_files() {
+  local relative target adopted=0
+
+  while IFS= read -r relative || [ -n "$relative" ]; do
+    [ -n "$relative" ] || continue
+    target="$TARGET_DIR/$relative"
+    if [ -f "$target" ]; then
+      record_managed_file "$relative"
+      adopted=$((adopted + 1))
+      log "adopted  $relative"
+    fi
+  done < <(list_payload_files)
+
+  if [ -f "$TARGET_DIR/scripts/bin/harness-cli" ]; then
+    record_managed_file "scripts/bin/harness-cli"
+    adopted=$((adopted + 1))
+    log "adopted  scripts/bin/harness-cli"
+  fi
+
+  [ "$adopted" -gt 0 ] || fail "No Harness files are available to adopt in $TARGET_DIR"
+}
+
+update_payload_files() {
+  local relative copied_schema=0
+
+  while IFS= read -r relative || [ -n "$relative" ]; do
+    [ -n "$relative" ] || continue
+    update_managed_file "$relative"
+    case "$relative" in
+      "$SCHEMA_DIR"/*.sql) copied_schema=$((copied_schema + 1)) ;;
+    esac
+  done < <(list_payload_files)
 
   [ "$copied_schema" -gt 0 ] || fail "No schema migrations found in $SCHEMA_DIR"
 }
@@ -570,6 +704,108 @@ sha256_file() {
   fi
 }
 
+state_file() {
+  printf '%s\n' "$TARGET_DIR/.harness/install-state.tsv"
+}
+
+read_kit_version() {
+  local version_file="scripts/harness-kit-version"
+  local version=""
+
+  if [ "$SOURCE_MODE" = "local" ]; then
+    [ -f "$SOURCE_ROOT/$version_file" ] || fail "Harness kit version is missing: $SOURCE_ROOT/$version_file"
+    version="$(awk 'NF && $1 !~ /^#/ { print $1; exit }' "$SOURCE_ROOT/$version_file")"
+  else
+    version="$(curl -fsSL "$SOURCE_BASE_URL/$version_file" 2>/dev/null || true)"
+    version="$(printf '%s\n' "$version" | awk 'NF && $1 !~ /^#/ { print $1; exit }')"
+  fi
+
+  case "$version" in
+    [0-9]*.[0-9]*.[0-9]*)
+      printf '%s\n' "$version"
+      ;;
+    *)
+      fail "Invalid Harness kit version: ${version:-missing}"
+      ;;
+  esac
+}
+
+STATE_ENTRIES=()
+
+load_install_state() {
+  local file kind relative hash
+  file="$(state_file)"
+  STATE_ENTRIES=()
+  [ -f "$file" ] || return 0
+
+  while IFS=$'\t' read -r kind relative hash || [ -n "$kind" ]; do
+    [ "$kind" = "file" ] || continue
+    [ -n "$relative" ] && [ -n "$hash" ] || continue
+    STATE_ENTRIES+=("$relative"$'\t'"$hash")
+  done < "$file"
+}
+
+record_managed_file() {
+  local relative="$1"
+  local target="$TARGET_DIR/$relative"
+  local hash entry entry_relative entry_hash found=0
+  local updated_entries=()
+
+  [ -f "$target" ] || return 0
+  hash="$(sha256_file "$target")"
+
+  if [ "${#STATE_ENTRIES[@]}" -gt 0 ]; then
+    for entry in "${STATE_ENTRIES[@]}"; do
+      entry_relative="${entry%%$'\t'*}"
+      entry_hash="${entry#*$'\t'}"
+      if [ "$entry_relative" = "$relative" ]; then
+        updated_entries+=("$relative"$'\t'"$hash")
+        found=1
+      else
+        updated_entries+=("$entry_relative"$'\t'"$entry_hash")
+      fi
+    done
+  fi
+
+  if [ "$found" -eq 0 ]; then
+    updated_entries+=("$relative"$'\t'"$hash")
+  fi
+  STATE_ENTRIES=("${updated_entries[@]}")
+}
+
+recorded_hash_for() {
+  local relative="$1"
+  local entry entry_relative
+
+  if [ "${#STATE_ENTRIES[@]}" -gt 0 ]; then
+    for entry in "${STATE_ENTRIES[@]}"; do
+      entry_relative="${entry%%$'\t'*}"
+      if [ "$entry_relative" = "$relative" ]; then
+        printf '%s\n' "${entry#*$'\t'}"
+        return 0
+      fi
+    done
+  fi
+}
+
+write_install_state() {
+  local file tmp entry
+
+  [ "$DRY_RUN" -eq 0 ] || return 0
+  file="$(state_file)"
+  mkdir -p "$(dirname "$file")"
+  tmp="$(mktemp "${file}.tmp.XXXXXX")"
+  {
+    printf 'version\t%s\n' "$KIT_VERSION"
+    if [ "${#STATE_ENTRIES[@]}" -gt 0 ]; then
+      for entry in "${STATE_ENTRIES[@]}"; do
+        printf 'file\t%s\n' "$entry"
+      done
+    fi
+  } > "$tmp"
+  mv "$tmp" "$file"
+}
+
 download_file() {
   local url="$1"
   local target="$2"
@@ -634,14 +870,123 @@ default_cli_base_url() {
   fi
 }
 
-install_harness_cli_binary() {
-  [ "$INSTALL_RUST_CLI" -eq 1 ] || return 0
+PREPARED_CLI_DIR=""
+PREPARED_CLI_BINARY=""
 
-  local platform binary_name binary_url checksum_url target tmp_dir binary_tmp checksum_tmp expected actual
+prepare_harness_cli_binary() {
+  local platform binary_name binary_url checksum_url checksum_tmp expected actual
+
   platform="${HARNESS_CLI_PLATFORM:-$(detect_cli_platform)}"
   binary_name="harness-cli-$platform"
   binary_url="$CLI_BASE_URL/$binary_name"
   checksum_url="$binary_url.sha256"
+  PREPARED_CLI_DIR="$(mktemp -d)"
+  PREPARED_CLI_BINARY="$PREPARED_CLI_DIR/$binary_name"
+  checksum_tmp="$PREPARED_CLI_DIR/$binary_name.sha256"
+
+  if [ -n "$LOCAL_CLI_BINARY_PATH" ] || [ -n "$LOCAL_CLI_CHECKSUM_PATH" ]; then
+    [ -n "$LOCAL_CLI_BINARY_PATH" ] && [ -n "$LOCAL_CLI_CHECKSUM_PATH" ] || fail "HARNESS_CLI_BINARY_PATH and HARNESS_CLI_CHECKSUM_PATH must be set together"
+    [ -f "$LOCAL_CLI_BINARY_PATH" ] || fail "Local Harness CLI binary is missing: $LOCAL_CLI_BINARY_PATH"
+    [ -f "$LOCAL_CLI_CHECKSUM_PATH" ] || fail "Local Harness CLI checksum file is missing: $LOCAL_CLI_CHECKSUM_PATH"
+    cp "$LOCAL_CLI_BINARY_PATH" "$PREPARED_CLI_BINARY"
+    cp "$LOCAL_CLI_CHECKSUM_PATH" "$checksum_tmp"
+  else
+    command -v curl >/dev/null 2>&1 || fail "curl is required to download the Harness CLI"
+    download_file "$binary_url" "$PREPARED_CLI_BINARY"
+    download_file "$checksum_url" "$checksum_tmp"
+  fi
+
+  expected="$(awk '{ print $1; exit }' "$checksum_tmp")"
+  [ -n "$expected" ] || fail "Checksum file is empty: $checksum_url"
+  actual="$(sha256_file "$PREPARED_CLI_BINARY")"
+  [ "$actual" = "$expected" ] || fail "Checksum mismatch for $binary_name: expected $expected, got $actual"
+}
+
+discard_prepared_harness_cli() {
+  [ -n "$PREPARED_CLI_DIR" ] && rm -rf "$PREPARED_CLI_DIR"
+  PREPARED_CLI_DIR=""
+  PREPARED_CLI_BINARY=""
+}
+
+update_harness_cli_binary() {
+  local relative="scripts/bin/harness-cli"
+  local target="$TARGET_DIR/$relative"
+  local recorded_hash current_hash source_hash
+
+  if [ ! -e "$target" ]; then
+    if [ "$DRY_RUN" -eq 1 ]; then
+      log "create   $relative"
+    else
+      prepare_harness_cli_binary
+      mkdir -p "$(dirname "$target")"
+      cp "$PREPARED_CLI_BINARY" "$target"
+      chmod 755 "$target"
+      discard_prepared_harness_cli
+      record_managed_file "$relative"
+      log "created  $relative"
+    fi
+    CREATED=$((CREATED + 1))
+    return 0
+  fi
+
+  recorded_hash="$(recorded_hash_for "$relative")"
+  if [ -z "$recorded_hash" ]; then
+    log "skip     $relative (untracked existing file)"
+    SKIPPED=$((SKIPPED + 1))
+    return 0
+  fi
+
+  current_hash="$(sha256_file "$target")"
+  if [ "$current_hash" != "$recorded_hash" ] && [ "$FORCE" -eq 0 ]; then
+    log "skip     $relative (modified locally)"
+    SKIPPED=$((SKIPPED + 1))
+    return 0
+  fi
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    if [ "$current_hash" != "$recorded_hash" ]; then
+      log "overwrite $relative (backup first)"
+    else
+      log "update   $relative"
+    fi
+    UPDATED=$((UPDATED + 1))
+    return 0
+  fi
+
+  prepare_harness_cli_binary
+  source_hash="$(sha256_file "$PREPARED_CLI_BINARY")"
+  if [ "$source_hash" = "$current_hash" ]; then
+    discard_prepared_harness_cli
+    log "skip     $relative (already current)"
+    SKIPPED=$((SKIPPED + 1))
+    return 0
+  fi
+
+  if [ "$current_hash" != "$recorded_hash" ]; then
+    backup_target_file "$relative"
+  fi
+  cp "$PREPARED_CLI_BINARY" "$target"
+  chmod 755 "$target"
+  discard_prepared_harness_cli
+  record_managed_file "$relative"
+  UPDATED=$((UPDATED + 1))
+  if [ "$current_hash" != "$recorded_hash" ]; then
+    log "updated  $relative (backup: ${BACKUP_DIR#$TARGET_DIR/}/$relative)"
+  else
+    log "updated  $relative"
+  fi
+}
+
+install_harness_cli_binary() {
+  [ "$INSTALL_RUST_CLI" -eq 1 ] || return 0
+
+  if [ "$UPDATE_MODE" -eq 1 ]; then
+    update_harness_cli_binary
+    return 0
+  fi
+
+  local platform target
+  platform="${HARNESS_CLI_PLATFORM:-$(detect_cli_platform)}"
   target="$TARGET_DIR/scripts/bin/harness-cli"
 
   if [ -e "$target" ] && [ "$CONFLICT_ACTION" = "merge" ] && [ "$FORCE" -eq 0 ]; then
@@ -655,51 +1000,18 @@ install_harness_cli_binary() {
       log "copy     local Harness CLI -> scripts/bin/harness-cli"
       log "verify   local Harness CLI checksum"
     else
-      log "download $binary_name -> scripts/bin/harness-cli"
-      log "verify   $binary_name.sha256"
+      log "download harness-cli-$platform -> scripts/bin/harness-cli"
+      log "verify   harness-cli-$platform.sha256"
     fi
     CREATED=$((CREATED + 1))
     return 0
   fi
 
-  tmp_dir="$(mktemp -d)"
-  binary_tmp="$tmp_dir/$binary_name"
-  checksum_tmp="$tmp_dir/$binary_name.sha256"
-
-  if [ -n "$LOCAL_CLI_BINARY_PATH" ] || [ -n "$LOCAL_CLI_CHECKSUM_PATH" ]; then
-    [ -n "$LOCAL_CLI_BINARY_PATH" ] && [ -n "$LOCAL_CLI_CHECKSUM_PATH" ] || {
-      rm -rf "$tmp_dir"
-      fail "HARNESS_CLI_BINARY_PATH and HARNESS_CLI_CHECKSUM_PATH must be set together"
-    }
-    [ -f "$LOCAL_CLI_BINARY_PATH" ] || {
-      rm -rf "$tmp_dir"
-      fail "Local Harness CLI binary is missing: $LOCAL_CLI_BINARY_PATH"
-    }
-    [ -f "$LOCAL_CLI_CHECKSUM_PATH" ] || {
-      rm -rf "$tmp_dir"
-      fail "Local Harness CLI checksum file is missing: $LOCAL_CLI_CHECKSUM_PATH"
-    }
-    cp "$LOCAL_CLI_BINARY_PATH" "$binary_tmp"
-    cp "$LOCAL_CLI_CHECKSUM_PATH" "$checksum_tmp"
-  else
-    command -v curl >/dev/null 2>&1 || fail "curl is required to download the Harness CLI"
-    download_file "$binary_url" "$binary_tmp"
-    download_file "$checksum_url" "$checksum_tmp"
-  fi
-
-  expected="$(awk '{ print $1; exit }' "$checksum_tmp")"
-  [ -n "$expected" ] || fail "Checksum file is empty: $checksum_url"
-  actual="$(sha256_file "$binary_tmp")"
-  if [ "$actual" != "$expected" ]; then
-    rm -rf "$tmp_dir"
-    fail "Checksum mismatch for $binary_name: expected $expected, got $actual"
-  fi
-
+  prepare_harness_cli_binary
   mkdir -p "$(dirname "$target")"
   if [ -e "$target" ]; then
     if [ "$FORCE" -eq 1 ]; then
-      mkdir -p "$BACKUP_DIR/scripts/bin"
-      cp -p "$target" "$BACKUP_DIR/scripts/bin/harness-cli"
+      backup_target_file "scripts/bin/harness-cli"
     fi
     UPDATED=$((UPDATED + 1))
     log "updated  scripts/bin/harness-cli"
@@ -708,9 +1020,10 @@ install_harness_cli_binary() {
     log "created  scripts/bin/harness-cli"
   fi
 
-  cp "$binary_tmp" "$target"
+  cp "$PREPARED_CLI_BINARY" "$target"
   chmod 755 "$target"
-  rm -rf "$tmp_dir"
+  discard_prepared_harness_cli
+  record_managed_file "scripts/bin/harness-cli"
   log "verified scripts/bin/harness-cli ($platform)"
 }
 
@@ -808,6 +1121,8 @@ REFRESH_AGENT_SHIM=0
 INSTALL_CLAUDE_SHIM=0
 REQUESTED_CONFLICT_ACTION=""
 POSITIONAL_TARGET=""
+UPDATE_MODE=0
+ADOPT_MODE=0
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -822,6 +1137,15 @@ while [ "$#" -gt 0 ]; do
       ;;
     --force)
       FORCE=1
+      shift
+      ;;
+    --update)
+      UPDATE_MODE=1
+      shift
+      ;;
+    --adopt)
+      UPDATE_MODE=1
+      ADOPT_MODE=1
       shift
       ;;
     --merge)
@@ -875,6 +1199,10 @@ fi
 
 [ "$#" -eq 0 ] || fail "Unexpected extra arguments"
 
+if [ "$UPDATE_MODE" -eq 1 ] && [ -n "$REQUESTED_CONFLICT_ACTION" ]; then
+  fail "--update cannot be combined with --merge, --override, or --stop"
+fi
+
 if [ -n "$POSITIONAL_TARGET" ]; then
   TARGET_INPUT="$POSITIONAL_TARGET"
 fi
@@ -903,7 +1231,7 @@ if [ -z "$CLI_BASE_URL" ]; then
   CLI_BASE_URL="$(default_cli_base_url)"
 fi
 
-if [ "$YES" -eq 0 ] && can_prompt; then
+if [ "$UPDATE_MODE" -eq 0 ] && [ "$YES" -eq 0 ] && can_prompt; then
   prompt_tty "Install Harness v0 into [$TARGET_INPUT]: "
   REPLY_TARGET="$(read_tty)"
   if [ -n "$REPLY_TARGET" ]; then
@@ -917,8 +1245,12 @@ CREATED=0
 UPDATED=0
 SKIPPED=0
 CONFLICT_ACTION="install"
+KIT_VERSION="$(read_kit_version)"
+load_install_state
 
-if [ "$DRY_RUN" -eq 1 ]; then
+if [ "$UPDATE_MODE" -eq 1 ] && [ ! -d "$TARGET_DIR" ]; then
+  fail "Cannot update a missing target directory: $TARGET_DIR"
+elif [ "$DRY_RUN" -eq 1 ]; then
   log "Dry run: no files will be written."
 elif [ ! -d "$TARGET_DIR" ]; then
   mkdir -p "$TARGET_DIR"
@@ -935,7 +1267,7 @@ else
   [ -w "$(dirname "$TARGET_DIR")" ] || fail "Target parent directory is not writable: $(dirname "$TARGET_DIR")"
 fi
 
-if [ -d "$TARGET_DIR" ]; then
+if [ "$UPDATE_MODE" -eq 0 ] && [ -d "$TARGET_DIR" ]; then
   check_protected_target_paths
 fi
 
@@ -952,11 +1284,24 @@ else
 fi
 log "Target project: $TARGET_DIR"
 
-copy_payload_files
+if [ "$UPDATE_MODE" -eq 1 ]; then
+  if [ ! -f "$(state_file)" ] && [ "$ADOPT_MODE" -eq 0 ]; then
+    fail "Run 'harness update --adopt' to begin tracking this legacy installation."
+  fi
 
-refresh_agent_shim
-write_claude_shim
-install_harness_cli_binary
+  if [ "$ADOPT_MODE" -eq 1 ]; then
+    adopt_existing_files
+  else
+    update_payload_files
+    install_harness_cli_binary
+  fi
+else
+  copy_payload_files
+  refresh_agent_shim
+  write_claude_shim
+  install_harness_cli_binary
+fi
+write_install_state
 
 log ""
 log "Done. Created: $CREATED, updated: $UPDATED, skipped: $SKIPPED."

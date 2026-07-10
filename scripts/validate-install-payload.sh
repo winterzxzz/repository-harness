@@ -77,6 +77,8 @@ fi
 if grep -Eq 'docs/decisions/[0-9][0-9][0-9][0-9].*\.md' "$DRY_OUTPUT"; then
   fail "dry run includes numbered decision history"
 fi
+test ! -e "$DRY_TARGET/.harness/install-state.tsv" || \
+  fail "dry run created managed-file state"
 
 RELEASE_DIR="$TMP_DIR/release"
 mkdir -p "$RELEASE_DIR"
@@ -106,7 +108,10 @@ for decision_file in "$FRESH_TARGET/docs/decisions"/[0-9][0-9][0-9][0-9]*.md; do
   test ! -f "$decision_file" || fail "fresh install copied numbered decision history"
 done
 test ! -e "$FRESH_TARGET/harness.db" || fail "fresh install created operational database"
-test ! -e "$FRESH_TARGET/.harness" || fail "fresh install created runtime history"
+test -f "$FRESH_TARGET/.harness/install-state.tsv" || \
+  fail "fresh install omitted managed-file state"
+test ! -e "$FRESH_TARGET/.harness/changesets" || \
+  fail "fresh install created runtime history"
 
 LOCAL_CLI_TARGET="$TMP_DIR/local-cli-target"
 HARNESS_CLI_BINARY_PATH="$CLI_SOURCE" \
@@ -117,6 +122,76 @@ HARNESS_CLI_BASE_URL="file://$TMP_DIR/missing-cli-release" \
 
 cmp "$CLI_SOURCE" "$LOCAL_CLI_TARGET/scripts/bin/harness-cli" || \
   fail "local CLI source was not copied"
+
+UPDATE_SOURCE="$TMP_DIR/update-source"
+UPDATE_TARGET="$TMP_DIR/update-target"
+mkdir -p "$UPDATE_SOURCE/scripts"
+cp "$ROOT_DIR/scripts/install-harness.sh" "$UPDATE_SOURCE/scripts/install-harness.sh"
+cp "$ROOT_DIR/scripts/harness-install-files.txt" "$UPDATE_SOURCE/scripts/harness-install-files.txt"
+cp "$ROOT_DIR/scripts/harness-cli-release-tag" "$UPDATE_SOURCE/scripts/harness-cli-release-tag"
+cp "$ROOT_DIR/scripts/harness-kit-version" "$UPDATE_SOURCE/scripts/harness-kit-version"
+cp "$ROOT_DIR/scripts/harness-upstream-repository" "$UPDATE_SOURCE/scripts/harness-upstream-repository"
+while IFS= read -r relative || [ -n "$relative" ]; do
+  case "$relative" in
+    ""|\#*) continue ;;
+  esac
+  mkdir -p "$(dirname "$UPDATE_SOURCE/$relative")"
+  cp "$ROOT_DIR/$relative" "$UPDATE_SOURCE/$relative"
+done < "$ROOT_DIR/scripts/harness-install-files.txt"
+mkdir -p "$UPDATE_SOURCE/scripts/schema"
+cp "$ROOT_DIR"/scripts/schema/*.sql "$UPDATE_SOURCE/scripts/schema/"
+
+HARNESS_CLI_BINARY_PATH="$CLI_SOURCE" \
+HARNESS_CLI_CHECKSUM_PATH="$RELEASE_DIR/harness-cli-test-platform.sha256" \
+HARNESS_CLI_PLATFORM=test-platform \
+  "$UPDATE_SOURCE/scripts/install-harness.sh" --directory "$UPDATE_TARGET" --yes >/dev/null
+
+printf '\nHarness source revision one\n' >> "$UPDATE_SOURCE/docs/HARNESS.md"
+HARNESS_CLI_BINARY_PATH="$CLI_SOURCE" \
+HARNESS_CLI_CHECKSUM_PATH="$RELEASE_DIR/harness-cli-test-platform.sha256" \
+HARNESS_CLI_PLATFORM=test-platform \
+  "$UPDATE_SOURCE/scripts/install-harness.sh" --directory "$UPDATE_TARGET" --update --yes >/dev/null
+grep -Fq 'Harness source revision one' "$UPDATE_TARGET/docs/HARNESS.md" || \
+  fail "update did not replace an unchanged managed file"
+
+printf '\nProject-local customization\n' >> "$UPDATE_TARGET/docs/HARNESS.md"
+printf '\nHarness source revision two\n' >> "$UPDATE_SOURCE/docs/HARNESS.md"
+HARNESS_CLI_BINARY_PATH="$CLI_SOURCE" \
+HARNESS_CLI_CHECKSUM_PATH="$RELEASE_DIR/harness-cli-test-platform.sha256" \
+HARNESS_CLI_PLATFORM=test-platform \
+  "$UPDATE_SOURCE/scripts/install-harness.sh" --directory "$UPDATE_TARGET" --update --yes >/dev/null
+grep -Fq 'Project-local customization' "$UPDATE_TARGET/docs/HARNESS.md" || \
+  fail "update overwrote a locally modified managed file"
+if grep -Fq 'Harness source revision two' "$UPDATE_TARGET/docs/HARNESS.md"; then
+  fail "update applied a newer source revision over local customization"
+fi
+
+HARNESS_CLI_BINARY_PATH="$CLI_SOURCE" \
+HARNESS_CLI_CHECKSUM_PATH="$RELEASE_DIR/harness-cli-test-platform.sha256" \
+HARNESS_CLI_PLATFORM=test-platform \
+  "$UPDATE_SOURCE/scripts/install-harness.sh" --directory "$UPDATE_TARGET" --update --yes --force >/dev/null
+grep -Fq 'Harness source revision two' "$UPDATE_TARGET/docs/HARNESS.md" || \
+  fail "forced update did not replace a locally modified managed file"
+find "$UPDATE_TARGET/.harness-backup" -path '*/docs/HARNESS.md' -type f | \
+  grep -q . || fail "forced update omitted a backup for the modified managed file"
+
+rm "$UPDATE_TARGET/.harness/install-state.tsv"
+if HARNESS_CLI_BINARY_PATH="$CLI_SOURCE" \
+  HARNESS_CLI_CHECKSUM_PATH="$RELEASE_DIR/harness-cli-test-platform.sha256" \
+  HARNESS_CLI_PLATFORM=test-platform \
+  "$UPDATE_SOURCE/scripts/install-harness.sh" --directory "$UPDATE_TARGET" --update --yes \
+  >"$TMP_DIR/legacy-update.txt" 2>&1; then
+  fail "legacy update ran without explicit adoption"
+fi
+grep -Fq "harness update --adopt" "$TMP_DIR/legacy-update.txt" || \
+  fail "legacy update did not explain how to adopt existing Harness files"
+
+HARNESS_CLI_BINARY_PATH="$CLI_SOURCE" \
+HARNESS_CLI_CHECKSUM_PATH="$RELEASE_DIR/harness-cli-test-platform.sha256" \
+HARNESS_CLI_PLATFORM=test-platform \
+  "$UPDATE_SOURCE/scripts/install-harness.sh" --directory "$UPDATE_TARGET" --update --adopt --yes >/dev/null
+test -f "$UPDATE_TARGET/.harness/install-state.tsv" || \
+  fail "adoption did not create managed-file state"
 
 MERGE_TARGET="$TMP_DIR/merge-target"
 mkdir -p "$MERGE_TARGET/docs/decisions"
