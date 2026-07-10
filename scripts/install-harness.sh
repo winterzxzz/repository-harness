@@ -41,10 +41,10 @@ Examples:
   scripts/install-harness.sh
   scripts/install-harness.sh --directory /path/to/project --yes
   scripts/install-harness.sh ./my-project --force
-  curl -fsSL https://raw.githubusercontent.com/hoangnb24/repository-harness/main/scripts/install-harness.sh | bash -s -- --yes
-  curl -fsSL https://raw.githubusercontent.com/hoangnb24/repository-harness/main/scripts/install-harness.sh | bash -s -- --merge --yes
-  curl -fsSL https://raw.githubusercontent.com/hoangnb24/repository-harness/main/scripts/install-harness.sh | bash -s -- --merge --refresh-agent-shim --yes
-  curl -fsSL https://raw.githubusercontent.com/hoangnb24/repository-harness/main/scripts/install-harness.sh | bash -s -- --claude --yes
+  curl -fsSL https://raw.githubusercontent.com/winterzxzz/repository-harness/main/scripts/install-harness.sh | bash -s -- --yes
+  curl -fsSL https://raw.githubusercontent.com/winterzxzz/repository-harness/main/scripts/install-harness.sh | bash -s -- --merge --yes
+  curl -fsSL https://raw.githubusercontent.com/winterzxzz/repository-harness/main/scripts/install-harness.sh | bash -s -- --merge --refresh-agent-shim --yes
+  curl -fsSL https://raw.githubusercontent.com/winterzxzz/repository-harness/main/scripts/install-harness.sh | bash -s -- --claude --yes
 EOF
 }
 
@@ -596,6 +596,28 @@ read_cli_release_tag() {
   printf '%s\n' "$tag"
 }
 
+read_upstream_repository() {
+  local config="scripts/harness-upstream-repository"
+  local repository=""
+
+  if [ "$SOURCE_MODE" = "local" ] && [ -f "$SOURCE_ROOT/$config" ]; then
+    repository="$(awk 'NF && $1 !~ /^#/ { print $1; exit }' "$SOURCE_ROOT/$config")"
+  fi
+
+  if [ -z "$repository" ]; then
+    repository="winterzxzz/repository-harness"
+  fi
+
+  case "$repository" in
+    */*)
+      printf '%s\n' "$repository"
+      ;;
+    *)
+      fail "Invalid Harness upstream repository: $repository"
+      ;;
+  esac
+}
+
 default_cli_base_url() {
   local release_tag="${HARNESS_CLI_RELEASE_TAG:-}"
 
@@ -604,9 +626,11 @@ default_cli_base_url() {
   fi
 
   if [ -n "$release_tag" ] && [ "$release_tag" != "latest" ]; then
-    printf 'https://github.com/hoangnb24/repository-harness/releases/download/%s\n' "$release_tag"
+    printf 'https://github.com/%s/releases/download/%s\n' \
+      "$HARNESS_UPSTREAM_REPOSITORY" "$release_tag"
   else
-    printf 'https://github.com/hoangnb24/repository-harness/releases/latest/download\n'
+    printf 'https://github.com/%s/releases/latest/download\n' \
+      "$HARNESS_UPSTREAM_REPOSITORY"
   fi
 }
 
@@ -627,20 +651,41 @@ install_harness_cli_binary() {
   fi
 
   if [ "$DRY_RUN" -eq 1 ]; then
-    log "download $binary_name -> scripts/bin/harness-cli"
-    log "verify   $binary_name.sha256"
+    if [ -n "$LOCAL_CLI_BINARY_PATH" ]; then
+      log "copy     local Harness CLI -> scripts/bin/harness-cli"
+      log "verify   local Harness CLI checksum"
+    else
+      log "download $binary_name -> scripts/bin/harness-cli"
+      log "verify   $binary_name.sha256"
+    fi
     CREATED=$((CREATED + 1))
     return 0
   fi
-
-  command -v curl >/dev/null 2>&1 || fail "curl is required to download the Harness CLI"
 
   tmp_dir="$(mktemp -d)"
   binary_tmp="$tmp_dir/$binary_name"
   checksum_tmp="$tmp_dir/$binary_name.sha256"
 
-  download_file "$binary_url" "$binary_tmp"
-  download_file "$checksum_url" "$checksum_tmp"
+  if [ -n "$LOCAL_CLI_BINARY_PATH" ] || [ -n "$LOCAL_CLI_CHECKSUM_PATH" ]; then
+    [ -n "$LOCAL_CLI_BINARY_PATH" ] && [ -n "$LOCAL_CLI_CHECKSUM_PATH" ] || {
+      rm -rf "$tmp_dir"
+      fail "HARNESS_CLI_BINARY_PATH and HARNESS_CLI_CHECKSUM_PATH must be set together"
+    }
+    [ -f "$LOCAL_CLI_BINARY_PATH" ] || {
+      rm -rf "$tmp_dir"
+      fail "Local Harness CLI binary is missing: $LOCAL_CLI_BINARY_PATH"
+    }
+    [ -f "$LOCAL_CLI_CHECKSUM_PATH" ] || {
+      rm -rf "$tmp_dir"
+      fail "Local Harness CLI checksum file is missing: $LOCAL_CLI_CHECKSUM_PATH"
+    }
+    cp "$LOCAL_CLI_BINARY_PATH" "$binary_tmp"
+    cp "$LOCAL_CLI_CHECKSUM_PATH" "$checksum_tmp"
+  else
+    command -v curl >/dev/null 2>&1 || fail "curl is required to download the Harness CLI"
+    download_file "$binary_url" "$binary_tmp"
+    download_file "$checksum_url" "$checksum_tmp"
+  fi
 
   expected="$(awk '{ print $1; exit }' "$checksum_tmp")"
   [ -n "$expected" ] || fail "Checksum file is empty: $checksum_url"
@@ -838,17 +883,21 @@ SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" 2>/dev/null && pwd -P || printf '')"
 SOURCE_ROOT=""
 SOURCE_MODE="remote"
-SOURCE_BASE_URL="${HARNESS_SOURCE_BASE_URL:-https://raw.githubusercontent.com/hoangnb24/repository-harness/main}"
-SOURCE_BASE_URL="${SOURCE_BASE_URL%/}"
 PAYLOAD_MANIFEST="scripts/harness-install-files.txt"
 SCHEMA_DIR="scripts/schema"
-CLI_BASE_URL="${HARNESS_CLI_BASE_URL:-}"
-CLI_BASE_URL="${CLI_BASE_URL%/}"
 
 if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/../AGENTS.md" ] && [ -f "$SCRIPT_DIR/../docs/HARNESS.md" ]; then
   SOURCE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
   SOURCE_MODE="local"
 fi
+
+HARNESS_UPSTREAM_REPOSITORY="${HARNESS_UPSTREAM_REPOSITORY:-$(read_upstream_repository)}"
+SOURCE_BASE_URL="${HARNESS_SOURCE_BASE_URL:-https://raw.githubusercontent.com/$HARNESS_UPSTREAM_REPOSITORY/main}"
+SOURCE_BASE_URL="${SOURCE_BASE_URL%/}"
+CLI_BASE_URL="${HARNESS_CLI_BASE_URL:-}"
+CLI_BASE_URL="${CLI_BASE_URL%/}"
+LOCAL_CLI_BINARY_PATH="${HARNESS_CLI_BINARY_PATH:-}"
+LOCAL_CLI_CHECKSUM_PATH="${HARNESS_CLI_CHECKSUM_PATH:-}"
 
 if [ -z "$CLI_BASE_URL" ]; then
   CLI_BASE_URL="$(default_cli_base_url)"

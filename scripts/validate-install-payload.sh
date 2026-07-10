@@ -108,6 +108,16 @@ done
 test ! -e "$FRESH_TARGET/harness.db" || fail "fresh install created operational database"
 test ! -e "$FRESH_TARGET/.harness" || fail "fresh install created runtime history"
 
+LOCAL_CLI_TARGET="$TMP_DIR/local-cli-target"
+HARNESS_CLI_BINARY_PATH="$CLI_SOURCE" \
+HARNESS_CLI_CHECKSUM_PATH="$RELEASE_DIR/harness-cli-test-platform.sha256" \
+HARNESS_CLI_PLATFORM=test-platform \
+HARNESS_CLI_BASE_URL="file://$TMP_DIR/missing-cli-release" \
+  "$ROOT_DIR/scripts/install-harness.sh" --directory "$LOCAL_CLI_TARGET" --yes >/dev/null
+
+cmp "$CLI_SOURCE" "$LOCAL_CLI_TARGET/scripts/bin/harness-cli" || \
+  fail "local CLI source was not copied"
+
 MERGE_TARGET="$TMP_DIR/merge-target"
 mkdir -p "$MERGE_TARGET/docs/decisions"
 printf 'target readme\n' >"$MERGE_TARGET/README.md"
@@ -120,5 +130,13 @@ HARNESS_CLI_BASE_URL="file://$RELEASE_DIR" \
 test "$(cat "$MERGE_TARGET/README.md")" = 'target readme' || fail "merge changed target README"
 test "$(cat "$MERGE_TARGET/docs/decisions/0001-target.md")" = 'target decision' || \
   fail "merge changed target decision history"
+
+if rg -n 'hoangnb24/repository-harness' \
+  "$ROOT_DIR/README.md" \
+  "$ROOT_DIR/scripts/install-harness.sh" \
+  "$ROOT_DIR/scripts/install-harness.ps1" \
+  "$ROOT_DIR/scripts/README.md" >/dev/null; then
+  fail "legacy upstream repository identifier remains in public installer surfaces"
+fi
 
 printf 'install payload validation passed\n'

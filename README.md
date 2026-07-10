@@ -65,13 +65,13 @@ https://openai.com/index/harness-engineering/
 From a target project directory, run:
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/hoangnb24/repository-harness/main/scripts/install-harness.sh?$(date +%s)" | bash -s -- --yes
+curl -fsSL "https://raw.githubusercontent.com/winterzxzz/repository-harness/main/scripts/install-harness.sh?$(date +%s)" | bash -s -- --yes
 ```
 
 On Windows PowerShell, run:
 
 ```powershell
-& ([scriptblock]::Create((irm "https://raw.githubusercontent.com/hoangnb24/repository-harness/main/scripts/install-harness.ps1"))) -Yes
+& ([scriptblock]::Create((irm "https://raw.githubusercontent.com/winterzxzz/repository-harness/main/scripts/install-harness.ps1"))) -Yes
 ```
 
 A fresh install copies the reusable Harness operating kit, not this source
@@ -84,18 +84,18 @@ If the target already has `AGENTS.md`, `docs/`, or `scripts/`, choose one:
 
 ```bash
 # Update an existing Harness repo without moving existing files
-curl -fsSL "https://raw.githubusercontent.com/hoangnb24/repository-harness/main/scripts/install-harness.sh?$(date +%s)" | bash -s -- --merge --yes
+curl -fsSL "https://raw.githubusercontent.com/winterzxzz/repository-harness/main/scripts/install-harness.sh?$(date +%s)" | bash -s -- --merge --yes
 
 # Back up and replace AGENTS.md, docs/, and scripts/
-curl -fsSL "https://raw.githubusercontent.com/hoangnb24/repository-harness/main/scripts/install-harness.sh?$(date +%s)" | bash -s -- --override --yes
+curl -fsSL "https://raw.githubusercontent.com/winterzxzz/repository-harness/main/scripts/install-harness.sh?$(date +%s)" | bash -s -- --override --yes
 ```
 
 ```powershell
 # Update an existing Harness repo without moving existing files
-& ([scriptblock]::Create((irm "https://raw.githubusercontent.com/hoangnb24/repository-harness/main/scripts/install-harness.ps1"))) -Merge -Yes
+& ([scriptblock]::Create((irm "https://raw.githubusercontent.com/winterzxzz/repository-harness/main/scripts/install-harness.ps1"))) -Merge -Yes
 
 # Back up and replace AGENTS.md, docs/, and scripts/
-& ([scriptblock]::Create((irm "https://raw.githubusercontent.com/hoangnb24/repository-harness/main/scripts/install-harness.ps1"))) -Override -Yes
+& ([scriptblock]::Create((irm "https://raw.githubusercontent.com/winterzxzz/repository-harness/main/scripts/install-harness.ps1"))) -Override -Yes
 ```
 
 Use `--merge` when a project already has Harness and you want to append newly
@@ -107,7 +107,7 @@ For older Harness installs whose `AGENTS.md` still contains the full generated
 operating guide, refresh it into the small stable shim:
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/hoangnb24/repository-harness/main/scripts/install-harness.sh?$(date +%s)" | bash -s -- --merge --refresh-agent-shim --yes
+curl -fsSL "https://raw.githubusercontent.com/winterzxzz/repository-harness/main/scripts/install-harness.sh?$(date +%s)" | bash -s -- --merge --refresh-agent-shim --yes
 ```
 
 The refresh backs up the existing file. If it detects the old
@@ -123,17 +123,17 @@ session's context. An existing `CLAUDE.md` gets the block appended after a
 backup; plain installs without the flag never touch `CLAUDE.md`:
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/hoangnb24/repository-harness/main/scripts/install-harness.sh?$(date +%s)" | bash -s -- --claude --yes
+curl -fsSL "https://raw.githubusercontent.com/winterzxzz/repository-harness/main/scripts/install-harness.sh?$(date +%s)" | bash -s -- --claude --yes
 ```
 
 Or install into a specific path:
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/hoangnb24/repository-harness/main/scripts/install-harness.sh?$(date +%s)" | bash -s -- --directory /path/to/project --yes
+curl -fsSL "https://raw.githubusercontent.com/winterzxzz/repository-harness/main/scripts/install-harness.sh?$(date +%s)" | bash -s -- --directory /path/to/project --yes
 ```
 
 ```powershell
-& ([scriptblock]::Create((irm "https://raw.githubusercontent.com/hoangnb24/repository-harness/main/scripts/install-harness.ps1"))) -Directory C:\path\to\project -Yes
+& ([scriptblock]::Create((irm "https://raw.githubusercontent.com/winterzxzz/repository-harness/main/scripts/install-harness.ps1"))) -Directory C:\path\to\project -Yes
 ```
 
 Use `--dry-run` on Bash or `-DryRun` on PowerShell to preview changes before
