@@ -142,15 +142,23 @@ replaces it with the current shim. Otherwise it appends or replaces only the
 marked `<!-- HARNESS:BEGIN -->` block so project-specific instructions remain
 in place.
 
-The installer must stay limited to harness files. Do not use it to scaffold
-application source folders, package scripts, CI, tests, platform shells, or fake
-validation commands. The installer script is not part of the installed project
-payload.
+The installer must stay limited to the reusable Harness operating kit. It
+installs agent instructions, policy docs, empty project scaffolds, templates,
+schema migrations, and the platform CLI. It does not install the source
+repository's root `README.md`, numbered decision history, story packets,
+changesets, run artifacts, database, application source folders, package
+scripts, CI, tests, platform shells, or fake validation commands.
 
-The file payload is declared once in `scripts/harness-install-files.txt` and is
-read by both the Bash and PowerShell installers. Add new Harness docs,
-templates, or decisions there instead of duplicating file lists in each
-installer. Schema migrations are different: both installers discover
+Installed projects create their own product docs, stories, decisions, traces,
+changesets, and run artifacts as work happens. Existing target-owned files are
+preserved by `--merge`; removing a path from the source payload is not a cleanup
+instruction for already-installed projects.
+
+The stable file payload is declared once in
+`scripts/harness-install-files.txt` and is read by both the Bash and PowerShell
+installers. Keep reusable Harness policies, empty scaffolds, and templates in
+that allowlist. Validate changes with `scripts/validate-install-payload.sh`.
+Schema migrations are different: both installers discover
 `scripts/schema/*.sql` automatically from the source repository, so adding a
 new migration only requires committing the SQL file.
 
