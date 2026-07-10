@@ -2,7 +2,7 @@
 
 ## Status
 
-planned
+implemented
 
 ## Lane
 
@@ -70,5 +70,18 @@ required.
 
 ## Evidence
 
-No implementation evidence exists yet. The story is ready for implementation
-against the validation layers defined above.
+- Added default browser launch after the Web listener binds and resolves its
+  actual address, including ephemeral `--port 0` assignments.
+- Added `--no-open` for headless callers and made launch failures warn without
+  terminating the bound server.
+- Added Electron backend argument construction that defaults child Web servers
+  to `--no-open`, preserving the existing single `BrowserWindow` behavior.
+- `cargo test -p harness-symphony web_auto_open -- --nocapture` passed: 5 tests.
+- `cargo test -p harness-symphony web -- --nocapture` passed: 47 tests.
+- `cargo test --workspace` passed: 183 tests across workspace targets.
+- `cargo fmt --check` and `cargo clippy --workspace -- -D warnings` passed.
+- `npm --prefix crates/harness-symphony/web-ui run desktop:smoke` passed.
+- Manual macOS smoke started browser mode on `http://127.0.0.1:50154` without a
+  launch warning; `GET /health` returned `{"ok":true}` before shutdown.
+- `scripts/bin/harness-cli story verify US-082` passed.
+- `git diff --check` passed.
