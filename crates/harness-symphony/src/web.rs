@@ -1,6 +1,6 @@
 use std::fs;
 use std::io::Write;
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -153,18 +153,6 @@ struct PrRetryResponse {
     run_id: String,
     pr_status: String,
     pr_url: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RejectRunRequest {
-    reason: String,
-}
-
-#[derive(Debug, Serialize)]
-struct RejectRunResponse {
-    run_id: String,
-    status: String,
-    next_action: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -375,17 +363,83 @@ binding to {} exposes it beyond this machine. Use a loopback host unless you tru
 
 pub fn run_web_server(config: &ResolvedConfig, options: WebServerOptions) -> Result<(), WebError> {
     let listener = prepare_web_server(options, webbrowser::open)?;
+    serve(config, listener)
+}
+
+const CONNECTION_IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const MAX_CONCURRENT_CONNECTIONS: usize = 64;
+
+struct ConnectionSlot(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for ConnectionSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
+fn serve(config: &ResolvedConfig, listener: TcpListener) -> Result<(), WebError> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let active = std::sync::Arc::new(AtomicUsize::new(0));
     for stream in listener.incoming() {
-        let mut stream = stream?;
-        let response = handle_stream(config, &mut stream)?;
-        stream.write_all(response.as_bytes())?;
+        let mut stream = match stream {
+            Ok(stream) => stream,
+            Err(error) => {
+                eprintln!("warning: symphony web connection accept failed: {error}");
+                continue;
+            }
+        };
+        // Idle sockets (e.g. browser preconnects) must not hold a handler
+        // thread forever, and one slow connection must not block the rest.
+        if let Err(error) = stream.set_read_timeout(Some(CONNECTION_IO_TIMEOUT)) {
+            eprintln!("warning: symphony web failed to set read timeout: {error}");
+        }
+        if let Err(error) = stream.set_write_timeout(Some(CONNECTION_IO_TIMEOUT)) {
+            eprintln!("warning: symphony web failed to set write timeout: {error}");
+        }
+        // Bound handler threads so a connection flood sheds load with 503s
+        // instead of exhausting OS threads.
+        if active.fetch_add(1, Ordering::AcqRel) >= MAX_CONCURRENT_CONNECTIONS {
+            active.fetch_sub(1, Ordering::AcqRel);
+            if let Ok(response) = json_response(
+                503,
+                &ErrorResponse {
+                    error: "too many concurrent connections; retry shortly".to_owned(),
+                },
+            ) {
+                let _ = stream.write_all(response.as_bytes());
+            }
+            continue;
+        }
+        let slot = ConnectionSlot(std::sync::Arc::clone(&active));
+        let config = config.clone();
+        let spawned = std::thread::Builder::new().spawn(move || {
+            let _slot = slot;
+            handle_connection(&config, &mut stream);
+        });
+        if let Err(error) = spawned {
+            eprintln!("warning: symphony web failed to spawn connection thread: {error}");
+        }
     }
     Ok(())
 }
 
+fn handle_connection(config: &ResolvedConfig, stream: &mut (impl std::io::Read + Write)) {
+    let response = match handle_stream(config, stream) {
+        Ok(response) => response,
+        Err(error) => {
+            eprintln!("warning: symphony web request failed: {error}");
+            return;
+        }
+    };
+    if let Err(error) = stream.write_all(response.as_bytes()) {
+        eprintln!("warning: symphony web response write failed: {error}");
+    }
+}
+
 fn handle_stream(
     config: &ResolvedConfig,
-    stream: &mut TcpStream,
+    stream: &mut impl std::io::Read,
 ) -> Result<HttpResponse, WebError> {
     let request = match crate::upload::read_http_request(stream) {
         Ok(request) => request,
@@ -480,10 +534,6 @@ fn handle_http_request(
             let run_id = request_changes_path_run_id(path).unwrap_or_default();
             request_changes_response(config, &run_id, request)
         }
-        ("POST", path) if reject_path_run_id(path).is_some() => {
-            let run_id = reject_path_run_id(path).unwrap_or_default();
-            reject_run_response(config, &run_id, request)
-        }
         ("GET", path) if feedback_path_parts(path).is_some() => {
             let (run_id, filename) = feedback_path_parts(path).unwrap_or_default();
             feedback_evidence_response(config, &run_id, &filename)
@@ -507,7 +557,6 @@ fn handle_http_request(
                 || pr_merged_path_run_id(path).is_some()
                 || pr_retry_path_run_id(path).is_some()
                 || request_changes_path_run_id(path).is_some()
-                || reject_path_run_id(path).is_some()
                 || feedback_path_parts(path).is_some()
                 || matches!(path, "/api/tools" | "/api/tools/check") =>
         {
@@ -1931,12 +1980,6 @@ fn pr_retry_path_run_id(path: &str) -> Option<String> {
     safe_identifier(run_id).then(|| run_id.to_owned())
 }
 
-fn reject_path_run_id(path: &str) -> Option<String> {
-    let path = path.trim_end_matches('/');
-    let run_id = path.strip_prefix("/api/runs/")?.strip_suffix("/reject")?;
-    safe_identifier(run_id).then(|| run_id.to_owned())
-}
-
 fn request_changes_path_run_id(path: &str) -> Option<String> {
     let path = path.trim_end_matches('/');
     let run_id = path
@@ -2118,34 +2161,6 @@ fn tools_check_response(config: &ResolvedConfig) -> Result<HttpResponse, WebErro
 
     let tools = serde_json::from_slice::<serde_json::Value>(&output.stdout)?;
     json_response(200, &serde_json::json!({ "tools": tools }))
-}
-
-fn reject_run_response(
-    config: &ResolvedConfig,
-    run_id: &str,
-    request: &HttpRequest,
-) -> Result<HttpResponse, WebError> {
-    let body: RejectRunRequest = serde_json::from_slice(&request.body).map_err(WebError::Json)?;
-    let reason = body.reason.trim();
-    if reason.is_empty() || reason.len() > 500 {
-        return json_response(
-            400,
-            &ErrorResponse {
-                error: "reject reason must be 1-500 characters".to_owned(),
-            },
-        );
-    }
-    let next_action = format!("review rejected: {reason}");
-    RunStateStore::new(config.state_db.clone()).update_status(run_id, "rejected", &next_action)?;
-
-    json_response(
-        200,
-        &RejectRunResponse {
-            run_id: run_id.to_owned(),
-            status: "rejected".to_owned(),
-            next_action,
-        },
-    )
 }
 
 fn harness_cli_path(config: &ResolvedConfig) -> PathBuf {
@@ -4091,7 +4106,7 @@ exit 1
     }
 
     #[test]
-    fn reject_run_endpoint_records_review_reason() {
+    fn removed_reject_endpoint_returns_not_found_and_keeps_run_state() {
         let temp_dir = tempfile::tempdir().unwrap();
         let config = test_config(&temp_dir);
         add_test_run(&config, "run_reject", "completed");
@@ -4102,13 +4117,129 @@ exit 1
         )
         .unwrap();
 
-        assert!(response.starts_with("HTTP/1.1 200 OK"));
-        assert!(response.contains(r#""status":"rejected""#));
+        assert!(response.starts_with("HTTP/1.1 404 Not Found"));
         let run = RunStateStore::new(config.state_db.clone())
             .show_run("run_reject")
             .unwrap();
-        assert_eq!(run.status, "rejected");
-        assert_eq!(run.next_action, "review rejected: Needs tests");
+        assert_eq!(run.status, "completed");
+    }
+
+    fn spawn_test_server(config: ResolvedConfig) -> std::net::SocketAddr {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || serve(&config, listener));
+        address
+    }
+
+    fn fetch_health(address: std::net::SocketAddr) -> String {
+        use std::io::Read;
+
+        let mut stream = std::net::TcpStream::connect(address).unwrap();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        stream
+            .write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        response
+    }
+
+    #[test]
+    fn serve_answers_requests_while_another_connection_is_idle() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = test_config(&temp_dir);
+        let address = spawn_test_server(config);
+
+        let _idle = std::net::TcpStream::connect(address).unwrap();
+        let response = fetch_health(address);
+
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
+    }
+
+    #[test]
+    fn serve_sheds_connections_over_the_concurrency_limit_and_recovers() {
+        use std::io::Read;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = test_config(&temp_dir);
+        let address = spawn_test_server(config);
+
+        let mut held = Vec::new();
+        for _ in 0..MAX_CONCURRENT_CONNECTIONS {
+            held.push(std::net::TcpStream::connect(address).unwrap());
+        }
+        // Handler threads take a moment to claim their slots.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+
+        let mut over_limit = std::net::TcpStream::connect(address).unwrap();
+        over_limit
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        let mut response = String::new();
+        over_limit.read_to_string(&mut response).unwrap();
+        assert!(response.starts_with("HTTP/1.1 503 Service Unavailable"));
+
+        drop(held);
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let response = fetch_health(address);
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
+    }
+
+    #[test]
+    fn serve_survives_clients_that_disconnect_early() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = test_config(&temp_dir);
+        let address = spawn_test_server(config);
+
+        drop(std::net::TcpStream::connect(address).unwrap());
+        for _ in 0..3 {
+            let mut stream = std::net::TcpStream::connect(address).unwrap();
+            stream.write_all(b"GET /health HTTP/1.1\r\n\r\n").unwrap();
+            drop(stream);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        let response = fetch_health(address);
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
+    }
+
+    struct BrokenPipeStream {
+        request: std::io::Cursor<Vec<u8>>,
+    }
+
+    impl std::io::Read for BrokenPipeStream {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            std::io::Read::read(&mut self.request, buf)
+        }
+    }
+
+    impl Write for BrokenPipeStream {
+        fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "broken pipe",
+            ))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "broken pipe",
+            ))
+        }
+    }
+
+    #[test]
+    fn connection_handler_swallows_response_write_failures() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = test_config(&temp_dir);
+        let mut stream = BrokenPipeStream {
+            request: std::io::Cursor::new(b"GET /health HTTP/1.1\r\n\r\n".to_vec()),
+        };
+
+        handle_connection(&config, &mut stream);
     }
 
     #[test]
