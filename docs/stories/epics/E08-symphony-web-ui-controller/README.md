@@ -40,10 +40,14 @@ Symphony records.
 22. `US-068` - Bounded work item cards.
 23. `US-069` - Web UI design principles and validation.
 24. `US-070` - Readable Done column task cards.
+25. `US-082` - Open the browser controller automatically after the local Web UI
+    server binds, with a headless opt-out.
 
 ## Exit Criteria
 
 - `harness-symphony web` serves a local unauthenticated browser UI.
+- Browser mode opens the controller automatically after binding while
+  preserving an explicit headless opt-out for automation and Electron.
 - The UI shows all Harness stories with Ready, Blocked, In Progress, Review,
   Needs Attention, and Done states derived from durable data.
 - A user can start exactly one ready task, watch live Codex App Server events,
