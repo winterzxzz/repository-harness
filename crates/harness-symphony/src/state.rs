@@ -149,8 +149,8 @@ impl RunStateStore {
         let mut connection = Connection::open(&self.path)?;
         // IMMEDIATE takes the write lock up front so two concurrent prepares
         // (e.g. web UI and terminal) cannot both pass the active-run check.
-        let transaction = connection
-            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let transaction =
+            connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         if let Some(active) = active_run_id(&transaction)? {
             return Err(StateError::ActiveRunExists(active));
         }

@@ -546,7 +546,8 @@ mod tests {
         );
         assert!(!strip_symphony_shim(&double).contains("HARNESS-SYMPHONY"));
 
-        let mangled = "# Agents\n\n<!-- HARNESS-SYMPHONY:BEGIN -->\nagent text after a mangled block\n";
+        let mangled =
+            "# Agents\n\n<!-- HARNESS-SYMPHONY:BEGIN -->\nagent text after a mangled block\n";
         assert_eq!(strip_symphony_shim(mangled), mangled);
 
         let mid_file =
