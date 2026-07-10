@@ -2,7 +2,7 @@
 
 ## Status
 
-in-progress
+implemented
 
 ## Lane
 
@@ -66,4 +66,23 @@ Extends the US-086 macOS distribution channel with the Symphony runner binary.
 
 ## Evidence
 
-Pending implementation.
+- PR #13 (kit packaging, formula, workflow, validator, version 0.2.0) and
+  PR #14 (web UI dist + launcher wrapper) merged to main (66b8caa).
+- 2026-07-11 local verification: `cargo fmt --check`, `cargo test --workspace`
+  (all green, includes US-087 suite), `bash -n` on changed scripts,
+  `scripts/validate-harness-macos-kit.sh`,
+  `scripts/validate-install-payload.sh`, and
+  `scripts/validate-changeset-rebuild.sh` all passed.
+- 2026-07-11 release proof: `harness-kit-v0.2.0` published with arm64 and x64
+  archives plus SHA-256 assets, built from a verified local checkout of `main`
+  (66b8caa) because GitHub Actions remains locked by the account billing issue
+  (workflow_dispatch run 29111965885 failed with the billing lock).
+  `Formula/harness.rb` in `winterzxzz/homebrew-tap` (commit c2c3092) pins both
+  checksums.
+- 2026-07-11 E2E proof on macOS arm64: `brew upgrade winterzxzz/tap/harness`
+  moved 0.1.0 -> 0.2.0; `harness --version` printed 0.2.0;
+  `/opt/homebrew/bin/harness-symphony` on PATH; `harness-symphony web` from
+  the brew install served the packaged web UI with HTTP 200.
+- Platform proof: arm64 verified natively; the x64 kit is cross-compiled
+  (binary arch verified with `file`) and published without native execution,
+  matching the v0.1.0 precedent.
