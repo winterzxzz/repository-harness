@@ -96,6 +96,7 @@ HARNESS_CLI_BASE_URL="file://$RELEASE_DIR" \
 
 test -f "$FRESH_TARGET/docs/HARNESS.md" || fail "fresh install omitted core policy"
 test -f "$FRESH_TARGET/docs/decisions/README.md" || fail "fresh install omitted decision scaffold"
+test -f "$FRESH_TARGET/AGENTS.md" || fail "fresh install omitted AGENTS.md"
 grep -Fq '## Template Review Boundary' "$FRESH_TARGET/AGENTS.md" || \
   fail "fresh install omitted the template review boundary"
 grep -Fq 'scripts/harness-install-files.txt' "$FRESH_TARGET/AGENTS.md" || \
