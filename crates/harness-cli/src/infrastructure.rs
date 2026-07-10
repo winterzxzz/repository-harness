@@ -14,8 +14,8 @@ use crate::application::{
     BacklogAddInput, BacklogCloseInput, BrownfieldImportResult, ChangesetApplyResult,
     DbRebuildResult, DecisionAddInput, DecisionVerifyResult, HarnessContext, InitResult,
     IntakeInput, InterventionAddInput, InterventionFilter, MigrateResult, QueryTable,
-    StoryAddInput, StoryDependencyInput, StoryDependencyRecord, StoryUpdateInput,
-    StoryVerifyResult, ToolRegisterInput, TraceInput,
+    StoryAddInput, StoryBacklogLinkInput, StoryBacklogLinkRecord, StoryDependencyInput,
+    StoryDependencyRecord, StoryUpdateInput, StoryVerifyResult, ToolRegisterInput, TraceInput,
 };
 use crate::domain::{
     compiled_tool_registry, normalize_token, proposal_key, score_context, score_trace, sha256_hex,
@@ -46,6 +46,22 @@ pub enum HarnessInfraError {
     StoryDependencySelf(String),
     #[error("story dependency: adding '{0}' -> '{1}' would create a cycle")]
     StoryDependencyCycle(String, String),
+    #[error("story backlog: backlog item '{0}' not found")]
+    StoryBacklogNotFound(i64),
+    #[error(
+        "story backlog: backlog item '{0}' requires legacy reconciliation before it can be linked"
+    )]
+    StoryBacklogLegacy(i64),
+    #[error("story backlog: relationship must be resolves or references")]
+    StoryBacklogRelationship,
+    #[error("story backlog: resolver links require accepted backlog item '{0}'")]
+    StoryBacklogResolverRequiresAccepted(i64),
+    #[error("story backlog: story '{0}' is terminal and cannot change a resolver link")]
+    StoryBacklogTerminalStory(String),
+    #[error("story backlog: backlog item '{0}' already has resolver story '{1}'")]
+    StoryBacklogResolverExists(i64, String),
+    #[error("story backlog: resolver link for backlog item '{0}' is immutable after closure")]
+    StoryBacklogResolverImmutable(i64),
     #[error("tool register: tool '{0}' already exists with command '{1}'")]
     ToolAlreadyExists(String, String),
     #[error("tool remove: tool '{0}' not found")]
@@ -102,6 +118,13 @@ pub trait HarnessRepository {
     fn update_story(&self, input: StoryUpdateInput) -> Result<()>;
     fn add_story_dependency(&self, input: StoryDependencyInput) -> Result<bool>;
     fn remove_story_dependency(&self, input: StoryDependencyInput) -> Result<bool>;
+    fn link_story_backlog(&self, input: StoryBacklogLinkInput) -> Result<bool>;
+    fn unlink_story_backlog(&self, story_id: &str, backlog_id: i64) -> Result<bool>;
+    fn query_story_backlog_links(
+        &self,
+        story: Option<&str>,
+        backlog_id: Option<i64>,
+    ) -> Result<Vec<StoryBacklogLinkRecord>>;
     fn query_story_dependencies(&self, story: Option<&str>) -> Result<Vec<StoryDependencyRecord>>;
     fn verify_story(&self, id: &str) -> Result<StoryVerifyResult>;
     fn verify_all_stories(&self) -> Result<StoryVerifyAllResult>;
@@ -948,6 +971,61 @@ impl HarnessRepository for SqliteHarnessRepository {
             Ok(StoryDependencyRecord {
                 blocker: row.get(0)?,
                 blocked: row.get(1)?,
+            })
+        })?;
+        collect_rows(rows)
+    }
+
+    fn link_story_backlog(&self, input: StoryBacklogLinkInput) -> Result<bool> {
+        if !matches!(input.relationship.as_str(), "resolves" | "references") {
+            return Err(HarnessInfraError::StoryBacklogRelationship);
+        }
+        let mut connection = self.open_existing()?;
+        self.with_logged_write(&mut connection, |transaction| {
+            let (backlog_uid, backlog_status) = linked_backlog(transaction, input.backlog_id)?;
+            let story_status: String = transaction.query_row("SELECT status FROM story WHERE id=?1;", params![input.story_id], |row| row.get(0)).optional()?.ok_or_else(|| HarnessInfraError::StoryNotFound(input.story_id.clone()))?;
+            let previous: Option<String> = transaction.query_row("SELECT relationship FROM story_backlog_link WHERE story_id=?1 AND backlog_uid=?2;", params![input.story_id, backlog_uid], |row| row.get(0)).optional()?;
+            if previous.as_deref() == Some(&input.relationship) { return Ok((false, Vec::new())); }
+            if input.relationship == "resolves" || previous.as_deref() == Some("resolves") {
+                validate_resolver_mutation(transaction, &input.story_id, input.backlog_id, &backlog_status, &story_status, &backlog_uid)?;
+            }
+            transaction.execute("INSERT INTO story_backlog_link (story_id, backlog_uid, relationship, linked_at) VALUES (?1, ?2, ?3, datetime('now')) ON CONFLICT(story_id, backlog_uid) DO UPDATE SET relationship=excluded.relationship, linked_at=excluded.linked_at;", params![input.story_id, backlog_uid, input.relationship])?;
+            if input.relationship == "resolves" || previous.as_deref() == Some("resolves") {
+                transaction.execute("UPDATE story SET last_verified_at=NULL, last_verified_result=NULL WHERE id=?1;", params![input.story_id])?;
+            }
+            Ok((true, vec![json!({"op":"story.backlog.link","version":1,"id":input.story_id,"payload":{"backlog_uid":backlog_uid,"relationship":input.relationship}})]))
+        })
+    }
+
+    fn unlink_story_backlog(&self, story_id: &str, backlog_id: i64) -> Result<bool> {
+        let mut connection = self.open_existing()?;
+        self.with_logged_write(&mut connection, |transaction| {
+            let (backlog_uid, backlog_status) = linked_backlog(transaction, backlog_id)?;
+            let relationship: Option<String> = transaction.query_row("SELECT relationship FROM story_backlog_link WHERE story_id=?1 AND backlog_uid=?2;", params![story_id, backlog_uid], |row| row.get(0)).optional()?;
+            let Some(relationship) = relationship else { return Ok((false, Vec::new())); };
+            if relationship == "resolves" {
+                let story_status: String = transaction.query_row("SELECT status FROM story WHERE id=?1;", params![story_id], |row| row.get(0)).optional()?.ok_or_else(|| HarnessInfraError::StoryNotFound(story_id.to_owned()))?;
+                validate_resolver_mutation(transaction, story_id, backlog_id, &backlog_status, &story_status, &backlog_uid)?;
+            }
+            transaction.execute("DELETE FROM story_backlog_link WHERE story_id=?1 AND backlog_uid=?2;", params![story_id, backlog_uid])?;
+            if relationship == "resolves" { transaction.execute("UPDATE story SET last_verified_at=NULL, last_verified_result=NULL WHERE id=?1;", params![story_id])?; }
+            Ok((true, vec![json!({"op":"story.backlog.unlink","version":1,"id":story_id,"payload":{"backlog_uid":backlog_uid}})]))
+        })
+    }
+
+    fn query_story_backlog_links(
+        &self,
+        story: Option<&str>,
+        backlog_id: Option<i64>,
+    ) -> Result<Vec<StoryBacklogLinkRecord>> {
+        let connection = self.open_existing()?;
+        let mut statement = connection.prepare("SELECT link.story_id, backlog.id, link.backlog_uid, link.relationship FROM story_backlog_link AS link JOIN backlog ON backlog.uid=link.backlog_uid WHERE (?1 IS NULL OR link.story_id=?1) AND (?2 IS NULL OR backlog.id=?2) ORDER BY backlog.id, link.relationship, link.story_id;")?;
+        let rows = statement.query_map(params![story, backlog_id], |row| {
+            Ok(StoryBacklogLinkRecord {
+                story_id: row.get(0)?,
+                backlog_id: row.get(1)?,
+                backlog_uid: row.get(2)?,
+                relationship: row.get(3)?,
             })
         })?;
         collect_rows(rows)
@@ -2997,6 +3075,31 @@ fn apply_changeset_operation(
                 required_string(payload, "blocked")?,
             ],
         )?,
+        "story.backlog.link" => {
+            let story_id = required_string(operation, "id")?;
+            let backlog_uid = required_uid(payload, "backlog_uid", "blg")?;
+            let relationship = required_string(payload, "relationship")?;
+            let (backlog_id, backlog_status): (i64, String) = transaction.query_row("SELECT id, status FROM backlog WHERE uid=?1;", params![backlog_uid], |row| Ok((row.get(0)?, row.get(1)?))).optional()?.ok_or_else(|| HarnessInfraError::InvalidChangeset(format!("story backlog link references missing backlog uid '{backlog_uid}'")))?;
+            let story_status: String = transaction.query_row("SELECT status FROM story WHERE id=?1;", params![story_id], |row| row.get(0)).optional()?.ok_or_else(|| HarnessInfraError::StoryNotFound(story_id.clone()))?;
+            let previous: Option<String> = transaction.query_row("SELECT relationship FROM story_backlog_link WHERE story_id=?1 AND backlog_uid=?2;", params![story_id, backlog_uid], |row| row.get(0)).optional()?;
+            if previous.as_deref() != Some(&relationship) {
+                if relationship == "resolves" || previous.as_deref() == Some("resolves") { validate_resolver_mutation(transaction, &story_id, backlog_id, &backlog_status, &story_status, &backlog_uid)?; }
+                if !matches!(relationship.as_str(), "resolves" | "references") { return Err(HarnessInfraError::StoryBacklogRelationship); }
+                transaction.execute("INSERT INTO story_backlog_link (story_id, backlog_uid, relationship, linked_at) VALUES (?1, ?2, ?3, datetime('now')) ON CONFLICT(story_id, backlog_uid) DO UPDATE SET relationship=excluded.relationship, linked_at=excluded.linked_at;", params![story_id, backlog_uid, relationship])?;
+                if relationship == "resolves" || previous.as_deref() == Some("resolves") { transaction.execute("UPDATE story SET last_verified_at=NULL, last_verified_result=NULL WHERE id=?1;", params![story_id])?; }
+            }
+            1
+        }
+        "story.backlog.unlink" => {
+            let story_id = required_string(operation, "id")?;
+            let backlog_uid = required_uid(payload, "backlog_uid", "blg")?;
+            let linked: Option<(i64, String, String)> = transaction.query_row("SELECT backlog.id, backlog.status, link.relationship FROM story_backlog_link AS link JOIN backlog ON backlog.uid=link.backlog_uid WHERE link.story_id=?1 AND link.backlog_uid=?2;", params![story_id, backlog_uid], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).optional()?;
+            if let Some((backlog_id, backlog_status, relationship)) = linked {
+                if relationship == "resolves" { let story_status: String = transaction.query_row("SELECT status FROM story WHERE id=?1;", params![story_id], |row| row.get(0))?; validate_resolver_mutation(transaction, &story_id, backlog_id, &backlog_status, &story_status, &backlog_uid)?; transaction.execute("UPDATE story SET last_verified_at=NULL, last_verified_result=NULL WHERE id=?1;", params![story_id])?; }
+                transaction.execute("DELETE FROM story_backlog_link WHERE story_id=?1 AND backlog_uid=?2;", params![story_id, backlog_uid])?;
+            }
+            1
+        }
         "story.verify" => transaction.execute(
             "UPDATE story
              SET last_verified_at=datetime('now'), last_verified_result=?1
@@ -3208,6 +3311,51 @@ fn ensure_story_exists(transaction: &Transaction<'_>, id: &str) -> Result<()> {
     }
 }
 
+fn linked_backlog(transaction: &Transaction<'_>, backlog_id: i64) -> Result<(String, String)> {
+    let row: Option<(Option<String>, String)> = transaction
+        .query_row(
+            "SELECT uid, status FROM backlog WHERE id=?1;",
+            params![backlog_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    match row {
+        None => Err(HarnessInfraError::StoryBacklogNotFound(backlog_id)),
+        Some((None, _)) => Err(HarnessInfraError::StoryBacklogLegacy(backlog_id)),
+        Some((Some(uid), status)) => Ok((uid, status)),
+    }
+}
+
+fn validate_resolver_mutation(
+    transaction: &Transaction<'_>,
+    story_id: &str,
+    backlog_id: i64,
+    backlog_status: &str,
+    story_status: &str,
+    backlog_uid: &str,
+) -> Result<()> {
+    if matches!(story_status, "implemented" | "retired") {
+        return Err(HarnessInfraError::StoryBacklogTerminalStory(
+            story_id.to_owned(),
+        ));
+    }
+    if backlog_status != "accepted" {
+        if matches!(backlog_status, "implemented" | "rejected") {
+            return Err(HarnessInfraError::StoryBacklogResolverImmutable(backlog_id));
+        }
+        return Err(HarnessInfraError::StoryBacklogResolverRequiresAccepted(
+            backlog_id,
+        ));
+    }
+    let resolver: Option<String> = transaction.query_row("SELECT story_id FROM story_backlog_link WHERE backlog_uid=?1 AND relationship='resolves' AND story_id<>?2;", params![backlog_uid, story_id], |row| row.get(0)).optional()?;
+    if let Some(resolver) = resolver {
+        return Err(HarnessInfraError::StoryBacklogResolverExists(
+            backlog_id, resolver,
+        ));
+    }
+    Ok(())
+}
+
 fn dependency_path_exists(transaction: &Transaction<'_>, from: &str, to: &str) -> Result<bool> {
     transaction
         .query_row(
@@ -3342,7 +3490,7 @@ mod tests {
         assert_eq!(repository.query_stats().unwrap().intakes, 0);
         let connection = repository.open_existing().unwrap();
         let schema_version = SqliteHarnessRepository::schema_version(&connection).unwrap();
-        assert_eq!(schema_version, 9);
+        assert_eq!(schema_version, 10);
         let story_columns = story_columns(&connection);
         assert!(story_columns.contains(&"verify_command".to_owned()));
         assert!(story_columns.contains(&"last_verified_at".to_owned()));
@@ -3401,7 +3549,7 @@ mod tests {
         let header: Value = serde_json::from_str(lines[0]).unwrap();
         assert_eq!(header["op"], "changeset.header");
         assert_eq!(header["run_id"], "run_test");
-        assert_eq!(header["base_schema_version"], 9);
+        assert_eq!(header["base_schema_version"], 10);
         let operation: Value = serde_json::from_str(lines[1]).unwrap();
         assert_eq!(operation["op"], "intake.add");
         assert_eq!(operation["payload"]["summary"], "Logged write test");
@@ -3528,6 +3676,91 @@ mod tests {
     }
 
     #[test]
+    fn story_backlog_relationship_validates_authority_and_replays() {
+        let (temp_dir, repository) = isolated_test_repository();
+        repository.init().unwrap();
+        for id in ["US-A", "US-B", "US-C"] {
+            repository
+                .add_story(StoryAddInput {
+                    id: id.to_owned(),
+                    title: id.to_owned(),
+                    risk_lane: RiskLane::Normal,
+                    contract_doc: None,
+                    verify_command: Some("true".to_owned()),
+                    notes: None,
+                })
+                .unwrap();
+        }
+        let connection = repository.open_existing().unwrap();
+        connection.execute("INSERT INTO backlog (uid, title, status) VALUES ('blg_11111111111111111111111111111111', 'Accepted', 'accepted'), ('blg_22222222222222222222222222222222', 'Open', 'proposed');", []).unwrap();
+        let accepted_id: i64 = connection
+            .query_row(
+                "SELECT id FROM backlog WHERE uid='blg_11111111111111111111111111111111';",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let open_id: i64 = connection
+            .query_row(
+                "SELECT id FROM backlog WHERE uid='blg_22222222222222222222222222222222';",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(repository
+            .link_story_backlog(StoryBacklogLinkInput {
+                story_id: "US-A".to_owned(),
+                backlog_id: accepted_id,
+                relationship: "resolves".to_owned()
+            })
+            .unwrap());
+        assert!(!repository
+            .link_story_backlog(StoryBacklogLinkInput {
+                story_id: "US-A".to_owned(),
+                backlog_id: accepted_id,
+                relationship: "resolves".to_owned()
+            })
+            .unwrap());
+        assert!(
+            matches!(repository.link_story_backlog(StoryBacklogLinkInput { story_id: "US-B".to_owned(), backlog_id: accepted_id, relationship: "resolves".to_owned() }), Err(HarnessInfraError::StoryBacklogResolverExists(id, story)) if id == accepted_id && story == "US-A")
+        );
+        assert!(repository
+            .link_story_backlog(StoryBacklogLinkInput {
+                story_id: "US-B".to_owned(),
+                backlog_id: accepted_id,
+                relationship: "references".to_owned()
+            })
+            .unwrap());
+        assert!(
+            matches!(repository.link_story_backlog(StoryBacklogLinkInput { story_id: "US-C".to_owned(), backlog_id: open_id, relationship: "resolves".to_owned() }), Err(HarnessInfraError::StoryBacklogResolverRequiresAccepted(id)) if id == open_id)
+        );
+        assert_eq!(
+            repository
+                .query_story_backlog_links(None, Some(accepted_id))
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(repository
+            .unlink_story_backlog("US-B", accepted_id)
+            .unwrap());
+
+        let changeset_path = temp_dir.path().join("relationship.changeset.jsonl");
+        fs::write(&changeset_path, r#"{"op":"changeset.header","version":1,"run_id":"run_relationship","base_schema_version":10}
+{"op":"story.backlog.link","version":1,"id":"US-B","payload":{"backlog_uid":"blg_11111111111111111111111111111111","relationship":"references"}}
+"#).unwrap();
+        assert!(repository.apply_changeset(&changeset_path).unwrap().applied);
+        assert!(!repository.apply_changeset(&changeset_path).unwrap().applied);
+        assert_eq!(
+            repository
+                .query_story_backlog_links(Some("US-B"), Some(accepted_id))
+                .unwrap()[0]
+                .relationship,
+            "references"
+        );
+    }
+
+    #[test]
     fn failed_logged_write_rolls_back_without_changeset() {
         let (_temp_dir, repository) = isolated_test_repository();
         repository.init().unwrap();
@@ -3634,7 +3867,7 @@ mod tests {
         let connection = repository.open_existing().unwrap();
         assert_eq!(
             SqliteHarnessRepository::schema_version(&connection).unwrap(),
-            9
+            10
         );
         let applied = connection
             .query_row(
@@ -3745,11 +3978,11 @@ mod tests {
         let result = repository.migrate().unwrap();
 
         assert_eq!(result.current_version, 1);
-        assert_eq!(result.applied, vec![2, 3, 4, 5, 6, 7, 8, 9]);
+        assert_eq!(result.applied, vec![2, 3, 4, 5, 6, 7, 8, 9, 10]);
         let connection = repository.open_existing().unwrap();
         assert_eq!(
             SqliteHarnessRepository::schema_version(&connection).unwrap(),
-            9
+            10
         );
         let story_columns = story_columns(&connection);
         assert!(story_columns.contains(&"verify_command".to_owned()));
@@ -3799,7 +4032,10 @@ mod tests {
         drop(connection);
 
         // Upgrade: migration 005 must infer kind from the command prefix.
-        assert_eq!(repository.migrate().unwrap().applied, vec![5, 6, 7, 8, 9]);
+        assert_eq!(
+            repository.migrate().unwrap().applied,
+            vec![5, 6, 7, 8, 9, 10]
+        );
         let connection = repository.open_existing().unwrap();
         let kind_of = |name: &str| -> String {
             connection

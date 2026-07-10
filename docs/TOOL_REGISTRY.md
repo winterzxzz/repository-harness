@@ -155,6 +155,9 @@ without parsing the human table.
 | `story update` | Task state | Update story status, proof flags, evidence, or verification command. | `--id`, optional proof/status fields |
 | `story dependency add` | Task state | Add a cycle-safe durable dependency edge. | `--blocker`, `--blocked` |
 | `story dependency remove` | Task state | Remove a durable dependency edge; missing edges are unchanged. | `--blocker`, `--blocked` |
+| `story backlog link` | Task state | Add a replayable `resolves` or `references` link to a stable backlog occurrence. | `--story`, `--backlog`, `--relationship` |
+| `story backlog unlink` | Task state | Remove a relationship; closed resolver provenance remains immutable. | `--story`, `--backlog` |
+| `story backlog list` | Task state | Show story-to-backlog relationships. | optional `--story`, `--backlog` |
 | `story verify` | Verification | Run one story `verify_command` and record pass/fail. | story id |
 | `story verify-all` | Verification | Run all configured story verification commands and skip stories without one. | none |
 | `decision add` | Project memory | Create a durable decision record. | `--id`, `--title`, optional `--doc`, `--verify` |
@@ -172,7 +175,7 @@ without parsing the human table.
 | `propose` | Entropy auditing | Read deterministic improvement proposals, or explicitly accept/reject one stable key. | `--accept <key>` plus one outcome schedule, or `--reject <key> --reason <text>` |
 | `query matrix` | Task state | Show durable story proof matrix. | optional `--numeric` |
 | `query dependencies` | Task state | Show story dependency edges. | optional `--story` |
-| `query backlog` | Entropy auditing | Show harness improvement backlog. | optional `--open`, `--closed` |
+| `query backlog` | Entropy auditing | Show Harness improvement backlog and, with `--id`, its relationships. | optional `--open`, `--closed`, `--id` |
 | `query decisions` | Project memory | Show durable decision records. | none |
 | `query intakes` | Task specification | Show recent intake records. | none |
 | `query traces` | Observability | Show recent trace records. | none |

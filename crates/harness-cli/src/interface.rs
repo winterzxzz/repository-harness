@@ -9,7 +9,7 @@ use crate::application::{
     BacklogAddInput, BacklogCloseInput, BrownfieldImportResult, ChangesetApplyResult,
     DbRebuildResult, DecisionAddInput, HarnessContext, HarnessService, InitResult, IntakeInput,
     InterventionAddInput, InterventionFilter, MigrateResult, QueryTable, StoryAddInput,
-    StoryDependencyInput, StoryUpdateInput, ToolRegisterInput, TraceInput,
+    StoryBacklogLinkInput, StoryDependencyInput, StoryUpdateInput, ToolRegisterInput, TraceInput,
 };
 use crate::domain::{
     normalize_capability, parse_optional_integer, parse_tool_args, proof_display,
@@ -119,6 +119,8 @@ enum StoryAction {
     Update(StoryUpdateArgs),
     /// Add or remove a dependency edge where blocker -> blocked.
     Dependency(StoryDependencyArgs),
+    /// Link a story to a stable Harness backlog occurrence.
+    Backlog(StoryBacklogArgs),
     #[command(
         after_help = "story verify only accepts the story id. Configure proof with story add/update --verify, then record proof flags with story update."
     )]
@@ -142,6 +144,45 @@ enum StoryDependencyAction {
     Add(StoryDependencyMutationArgs),
     /// Remove a dependency edge; a missing edge is unchanged.
     Remove(StoryDependencyMutationArgs),
+}
+
+#[derive(Args, Debug)]
+struct StoryBacklogArgs {
+    #[command(subcommand)]
+    action: StoryBacklogAction,
+}
+
+#[derive(Subcommand, Debug)]
+enum StoryBacklogAction {
+    Link(StoryBacklogLinkArgs),
+    Unlink(StoryBacklogUnlinkArgs),
+    List(StoryBacklogListArgs),
+}
+
+#[derive(Args, Debug)]
+struct StoryBacklogLinkArgs {
+    #[arg(long)]
+    story: String,
+    #[arg(long)]
+    backlog: String,
+    #[arg(long, value_parser = ["resolves", "references"])]
+    relationship: String,
+}
+
+#[derive(Args, Debug)]
+struct StoryBacklogUnlinkArgs {
+    #[arg(long)]
+    story: String,
+    #[arg(long)]
+    backlog: String,
+}
+
+#[derive(Args, Debug)]
+struct StoryBacklogListArgs {
+    #[arg(long)]
+    story: Option<String>,
+    #[arg(long)]
+    backlog: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -446,6 +487,9 @@ struct BacklogQueryArgs {
     /// Show only implemented and rejected backlog items.
     #[arg(long)]
     closed: bool,
+    /// Also render relationships for one backlog occurrence.
+    #[arg(long)]
+    id: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -597,6 +641,48 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                         args.blocker,
                         args.blocked,
                         if changed { "removed" } else { "unchanged" }
+                    );
+                }
+            },
+            StoryAction::Backlog(args) => match args.action {
+                StoryBacklogAction::Link(args) => {
+                    let backlog_id = parse_optional_integer(
+                        "story backlog link: --backlog",
+                        Some(args.backlog),
+                    )?
+                    .expect("value provided");
+                    let changed = service.link_story_backlog(StoryBacklogLinkInput {
+                        story_id: args.story.clone(),
+                        backlog_id,
+                        relationship: args.relationship.clone(),
+                    })?;
+                    println!(
+                        "Story backlog link {} -> #{} ({}) {}.",
+                        args.story,
+                        backlog_id,
+                        args.relationship,
+                        if changed { "updated" } else { "unchanged" }
+                    );
+                }
+                StoryBacklogAction::Unlink(args) => {
+                    let backlog_id = parse_optional_integer(
+                        "story backlog unlink: --backlog",
+                        Some(args.backlog),
+                    )?
+                    .expect("value provided");
+                    let changed = service.unlink_story_backlog(&args.story, backlog_id)?;
+                    println!(
+                        "Story backlog link {} -> #{} {}.",
+                        args.story,
+                        backlog_id,
+                        if changed { "removed" } else { "unchanged" }
+                    );
+                }
+                StoryBacklogAction::List(args) => {
+                    let backlog_id =
+                        parse_optional_integer("story backlog list: --backlog", args.backlog)?;
+                    print_story_backlog_links(
+                        &service.query_story_backlog_links(args.story.as_deref(), backlog_id)?,
                     );
                 }
             },
@@ -834,7 +920,15 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                 print_dependencies(&service.query_story_dependencies(args.story.as_deref())?)
             }
             QueryView::Backlog(args) => {
-                print_backlog(&service.query_backlog(backlog_filter(&args))?)
+                let filter = backlog_filter(&args);
+                let id = parse_optional_integer("query backlog: --id", args.id)?;
+                if let Some(id) = id {
+                    print_query_table(&service.query_sql(&format!(
+                        "SELECT backlog.id, backlog.uid, backlog.status, backlog.proposal_key, backlog.predecessor_uid, backlog.resolution_evidence, (SELECT story_id FROM story_backlog_link WHERE backlog_uid=backlog.uid AND relationship='resolves') AS resolver, COALESCE((SELECT group_concat(story_id, ', ') FROM story_backlog_link WHERE backlog_uid=backlog.uid AND relationship='references'), '') AS reference_stories FROM backlog WHERE backlog.id={id};"
+                    ))?);
+                } else {
+                    print_backlog(&service.query_backlog(filter)?);
+                }
             }
             QueryView::Decisions => print_decisions(&service.query_decisions()?),
             QueryView::Intakes => print_intakes(&service.query_intakes()?),
@@ -1228,6 +1322,21 @@ fn print_dependencies(records: &[crate::application::StoryDependencyRecord]) {
         .map(|record| vec![record.blocker.clone(), record.blocked.clone()])
         .collect::<Vec<_>>();
     print_table(&["blocker", "blocked"], &rows);
+}
+
+fn print_story_backlog_links(records: &[crate::application::StoryBacklogLinkRecord]) {
+    let rows = records
+        .iter()
+        .map(|record| {
+            vec![
+                record.story_id.clone(),
+                record.backlog_id.to_string(),
+                record.backlog_uid.clone(),
+                record.relationship.clone(),
+            ]
+        })
+        .collect::<Vec<_>>();
+    print_table(&["story", "backlog", "backlog_uid", "relationship"], &rows);
 }
 
 fn print_backlog(records: &[BacklogRecord]) {

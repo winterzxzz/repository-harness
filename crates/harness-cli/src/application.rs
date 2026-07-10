@@ -62,6 +62,21 @@ pub struct StoryDependencyRecord {
 }
 
 #[derive(Debug)]
+pub struct StoryBacklogLinkInput {
+    pub story_id: String,
+    pub backlog_id: i64,
+    pub relationship: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoryBacklogLinkRecord {
+    pub story_id: String,
+    pub backlog_id: i64,
+    pub backlog_uid: String,
+    pub relationship: String,
+}
+
+#[derive(Debug)]
 pub struct DecisionAddInput {
     pub id: String,
     pub title: String,
@@ -203,6 +218,29 @@ impl HarnessService {
         input: StoryDependencyInput,
     ) -> crate::infrastructure::Result<bool> {
         self.repository.remove_story_dependency(input)
+    }
+
+    pub fn link_story_backlog(
+        &self,
+        input: StoryBacklogLinkInput,
+    ) -> crate::infrastructure::Result<bool> {
+        self.repository.link_story_backlog(input)
+    }
+
+    pub fn unlink_story_backlog(
+        &self,
+        story_id: &str,
+        backlog_id: i64,
+    ) -> crate::infrastructure::Result<bool> {
+        self.repository.unlink_story_backlog(story_id, backlog_id)
+    }
+
+    pub fn query_story_backlog_links(
+        &self,
+        story: Option<&str>,
+        backlog_id: Option<i64>,
+    ) -> crate::infrastructure::Result<Vec<StoryBacklogLinkRecord>> {
+        self.repository.query_story_backlog_links(story, backlog_id)
     }
 
     pub fn query_story_dependencies(
