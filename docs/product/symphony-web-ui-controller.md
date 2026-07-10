@@ -229,6 +229,34 @@ The direct run action must be explicit and guarded:
 - It must not bypass the active-run lock, dependency checks, review flow, PR
   creation rules, merge gate, or sync approval.
 
+## Request Changes From Ready
+
+Ready work is completed agent output awaiting human acceptance. When the result
+does not satisfy the user, the task detail review surface must support
+`Request changes` without creating another story or adding another board bucket.
+
+The request-changes flow must:
+
+- Require a trimmed textual reason from 1 to 2,000 characters.
+- Accept up to three optional PNG, JPEG, or WebP evidence images, with a 5 MB
+  limit per file.
+- Validate the complete reason and upload before changing run state or starting
+  another agent.
+- Preserve the completed source run, its artifacts, logs, PR state, and result.
+- Prepare a replacement run for the same story, store the feedback under that
+  run's local artifact directory, and include feedback paths in the run contract
+  and agent prompt.
+- Mark the source run rejected only after replacement preparation succeeds.
+- Move the board item directly from Ready to Active while the replacement run
+  executes, then return it to Ready for another human decision.
+- Refuse Done tasks, non-current Ready runs, non-runnable stories, unsupported or
+  oversized files, and requests while another run is active.
+
+Feedback artifacts are local runtime evidence and must not be committed to Git.
+They follow `.harness/runs/<run_id>/` retention and compaction. The server must
+generate safe evidence filenames and validate image signatures instead of
+trusting browser filenames or MIME declarations.
+
 ## Review Surface
 
 The review screen should expose enough information for the user to make an
@@ -248,6 +276,8 @@ It should include:
 - Run summary.
 - Approve/sync action after the PR is merged, or after local artifact review
   when PR creation is disabled.
+- Request-changes action with feedback reason and optional image evidence while
+  the task is Ready.
 - Retry or mark-needs-attention actions when review artifacts are incomplete.
 
 Raw artifacts should remain accessible from the review surface.
