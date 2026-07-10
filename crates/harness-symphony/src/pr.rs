@@ -243,24 +243,34 @@ fn strip_agents_shim_file(path: &Path) -> Result<(), PrError> {
 fn strip_symphony_shim(content: &str) -> String {
     const BEGIN: &str = "<!-- HARNESS-SYMPHONY:BEGIN -->";
     const END: &str = "<!-- HARNESS-SYMPHONY:END -->";
-    let mut result = content.to_owned();
-    while let Some(start) = result.find(BEGIN) {
+    let mut kept: Vec<&str> = Vec::new();
+    let mut in_block = false;
+    for line in content.lines() {
+        if in_block {
+            if line.contains(END) {
+                in_block = false;
+            }
+            continue;
+        }
+        if line.contains(BEGIN) {
+            in_block = true;
+            // Drop the single blank separator line the shim writer inserted
+            // before the block, without joining surrounding text lines.
+            if kept.last().is_some_and(|last| last.trim().is_empty()) {
+                kept.pop();
+            }
+            continue;
+        }
+        kept.push(line);
+    }
+    if in_block {
         // A mangled block without its END marker: keep the content rather
         // than risk dropping agent-authored text after the marker.
-        let Some(end_offset) = result[start..].find(END) else {
-            return result;
-        };
-        let mut end = start + end_offset + END.len();
-        if result[end..].starts_with('\n') {
-            end += 1;
-        }
-        // The shim writer inserted "\n" before the block; drop it with the block.
-        let head_end = if result[..start].ends_with('\n') {
-            start - 1
-        } else {
-            start
-        };
-        result.replace_range(head_end..end, "");
+        return content.to_owned();
+    }
+    let mut result = kept.join("\n");
+    if content.ends_with('\n') && !result.is_empty() {
+        result.push('\n');
     }
     result
 }
@@ -538,6 +548,10 @@ mod tests {
 
         let mangled = "# Agents\n\n<!-- HARNESS-SYMPHONY:BEGIN -->\nagent text after a mangled block\n";
         assert_eq!(strip_symphony_shim(mangled), mangled);
+
+        let mid_file =
+            "line1\n<!-- HARNESS-SYMPHONY:BEGIN -->\nblock\n<!-- HARNESS-SYMPHONY:END -->\nline2\n";
+        assert_eq!(strip_symphony_shim(mid_file), "line1\nline2\n");
     }
 
     #[test]
