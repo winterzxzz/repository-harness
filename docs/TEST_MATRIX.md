@@ -19,7 +19,7 @@ implemented until tests or validation evidence exist.
 
 | Story | Contract | Unit | Integration | E2E | Platform | Status | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| TBD | Add rows when story packets are created | no | no | no | no | planned | none |
+| US-086 | macOS Homebrew Harness bootstrap | no | no | no | no | in_progress | pending implementation and release validation |
 
 ## Evidence Rules
 
