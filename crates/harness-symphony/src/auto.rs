@@ -6,6 +6,7 @@ use thiserror::Error;
 use crate::config::ResolvedConfig;
 use crate::run::{execute_run, RunError};
 use crate::state::{RunStateStore, StateError};
+use crate::sync::refresh_checkout_from_upstream;
 use crate::work::{HarnessDbWorkSource, WorkError, WorkSource, EXTERNAL_WORK_SOURCE_BOUNDARIES};
 
 #[derive(Debug, Error)]
@@ -112,6 +113,14 @@ fn run_auto_mode_with_runner(
     };
 
     loop {
+        // Unattended polling is the one place a stale base compounds: without
+        // a refresh, days of auto runs would branch from an old HEAD. Prepare
+        // itself intentionally does not pull, so pull once per poll cycle
+        // here; a failed pull (offline, dirty checkout) degrades to running
+        // from the current HEAD instead of stopping the daemon.
+        if let Err(error) = refresh_checkout_from_upstream(config) {
+            eprintln!("warning: could not refresh checkout from upstream: {error}");
+        }
         for candidate in source.poll()? {
             let queued =
                 store.enqueue_work(&candidate.story_id, &candidate.source, options.max_attempts)?;

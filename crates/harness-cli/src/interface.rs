@@ -392,7 +392,12 @@ struct ChangesetArgs {
 #[derive(Subcommand, Debug)]
 enum ChangesetAction {
     /// Apply one semantic changeset file idempotently.
-    Apply { path: PathBuf },
+    Apply {
+        path: PathBuf,
+        /// Print the result as a machine-readable JSON object.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -705,8 +710,8 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
         Command::Propose(args) => print_proposals(&service.propose(args.commit)?),
         Command::Db(args) => match args.action {
             DbAction::Changeset(args) => match args.action {
-                ChangesetAction::Apply { path } => {
-                    print_changeset_apply_result(service.apply_changeset(&path)?)
+                ChangesetAction::Apply { path, json } => {
+                    print_changeset_apply_result(service.apply_changeset(&path)?, json)
                 }
             },
             DbAction::Rebuild { from } => print_db_rebuild_result(service.rebuild_db(&from)?),
@@ -928,7 +933,18 @@ fn print_proposals(proposals: &[ImprovementProposal]) {
     );
 }
 
-fn print_changeset_apply_result(result: ChangesetApplyResult) {
+fn print_changeset_apply_result(result: ChangesetApplyResult, json: bool) {
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "id": result.id,
+                "applied": result.applied,
+                "operations": result.operations,
+            })
+        );
+        return;
+    }
     if result.applied {
         println!(
             "Changeset {} applied ({} operation(s)).",

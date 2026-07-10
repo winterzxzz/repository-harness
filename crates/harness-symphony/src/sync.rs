@@ -58,6 +58,20 @@ pub fn sync_changeset(config: &ResolvedConfig, run_id: &str) -> Result<SyncResul
     let path = config
         .changeset_directory
         .join(format!("{run_id}.changeset.jsonl"));
+    // A run that wrote no durable Harness records has no changeset; there is
+    // nothing to apply, so the run must still be able to reach "synced".
+    if !path.exists() {
+        store.record_changeset_synced(run_id, &path, true)?;
+        let _ = store.update_sync_status(run_id, "synced", "done");
+        return Ok(SyncResult {
+            changes: vec![SyncChange {
+                id: run_id.to_owned(),
+                path,
+                applied: true,
+                operations: 0,
+            }],
+        });
+    }
     let change = apply_changeset_path(config, &store, path)?;
     Ok(SyncResult {
         changes: vec![change],
@@ -129,12 +143,14 @@ fn apply_changeset_path(
             operations: 0,
         });
     }
-    let output = Command::new(config.repo_root.join("scripts/bin/harness-cli"))
-        .args(["db", "changeset", "apply"])
-        .arg(&path)
-        .env("HARNESS_DB_PATH", &config.harness_db)
-        .current_dir(&config.repo_root)
-        .output()?;
+    let output = run_changeset_apply(config, &path, true)?;
+    let output = if changeset_apply_rejected_json_flag(&output) {
+        // Older released harness-cli binaries predate --json; fall back to
+        // the legacy text output rather than failing every sync.
+        run_changeset_apply(config, &path, false)?
+    } else {
+        output
+    };
     if !output.status.success() {
         return Err(SyncError::ApplyFailed {
             path: path.display().to_string(),
@@ -142,9 +158,14 @@ fn apply_changeset_path(
         });
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let applied = stdout.contains(" applied ");
-    let durable_applied = applied || harness_db_has_changeset(&config.harness_db, &id)?;
-    let operations = parse_operations(&stdout);
+    let result = parse_apply_result(&stdout)
+        .or_else(|| parse_legacy_apply_result(&stdout))
+        .ok_or_else(|| SyncError::ApplyFailed {
+            path: path.display().to_string(),
+            stderr: format!("harness-cli did not print a recognizable apply result: {stdout}"),
+        })?;
+    let durable_applied = result.applied || harness_db_has_changeset(&config.harness_db, &id)?;
+    let operations = result.operations;
     store.record_changeset_synced(&id, &path, durable_applied)?;
     if durable_applied {
         let _ = store.update_sync_status(&id, "synced", "done");
@@ -218,13 +239,65 @@ fn git_output(repo_root: &Path, args: &[&str]) -> Result<std::process::Output, S
         .map_err(SyncError::from)
 }
 
-fn parse_operations(stdout: &str) -> usize {
+#[derive(Debug, serde::Deserialize, PartialEq, Eq)]
+struct ApplyResult {
+    applied: bool,
+    #[serde(default)]
+    operations: usize,
+}
+
+fn run_changeset_apply(
+    config: &ResolvedConfig,
+    path: &Path,
+    json: bool,
+) -> Result<std::process::Output, SyncError> {
+    let mut command = Command::new(config.repo_root.join("scripts/bin/harness-cli"));
+    command
+        .args(["db", "changeset", "apply"])
+        .arg(path)
+        .env("HARNESS_DB_PATH", &config.harness_db)
+        .current_dir(&config.repo_root);
+    if json {
+        command.arg("--json");
+    }
+    command.output().map_err(SyncError::from)
+}
+
+fn changeset_apply_rejected_json_flag(output: &std::process::Output) -> bool {
+    !output.status.success()
+        && String::from_utf8_lossy(&output.stderr).contains("--json")
+}
+
+fn parse_apply_result(stdout: &str) -> Option<ApplyResult> {
     stdout
-        .split('(')
-        .nth(1)
-        .and_then(|value| value.split_whitespace().next())
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(0)
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| line.starts_with('{'))
+        .and_then(|line| serde_json::from_str(line).ok())
+}
+
+// Output shape of harness-cli releases that predate --json:
+// "Changeset <id> applied (N operation(s))." / "... already applied; skipped."
+fn parse_legacy_apply_result(stdout: &str) -> Option<ApplyResult> {
+    if stdout.contains(" applied ") {
+        let operations = stdout
+            .split('(')
+            .nth(1)
+            .and_then(|value| value.split_whitespace().next())
+            .and_then(|value| value.parse::<usize>().ok())?;
+        Some(ApplyResult {
+            applied: true,
+            operations,
+        })
+    } else if stdout.contains("already applied") {
+        Some(ApplyResult {
+            applied: false,
+            operations: 0,
+        })
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -235,14 +308,24 @@ mod tests {
     use std::process::Command;
 
     #[test]
-    fn parses_operation_count_from_cli_output() {
+    fn parses_json_apply_result_from_cli_output() {
         assert_eq!(
-            parse_operations("Changeset run_1 applied (3 operation(s))."),
-            3
+            parse_apply_result(r#"{"id":"run_1","applied":true,"operations":3}"#),
+            Some(ApplyResult {
+                applied: true,
+                operations: 3
+            })
         );
         assert_eq!(
-            parse_operations("Changeset run_1 already applied; skipped."),
-            0
+            parse_apply_result("warning: noise\n{\"id\":\"run_1\",\"applied\":false,\"operations\":0}\n"),
+            Some(ApplyResult {
+                applied: false,
+                operations: 0
+            })
+        );
+        assert_eq!(
+            parse_apply_result("Changeset run_1 applied (3 operation(s))."),
+            None
         );
     }
 
@@ -285,7 +368,7 @@ mod tests {
         let cli_path = temp_dir.path().join("scripts/bin/harness-cli");
         fs::write(
             &cli_path,
-            "#!/bin/sh\necho 'Changeset run_done already applied; skipped.'\n",
+            "#!/bin/sh\necho '{\"id\":\"run_done\",\"applied\":false,\"operations\":0}'\n",
         )
         .unwrap();
         make_executable(&cli_path);
@@ -370,6 +453,54 @@ mod tests {
     }
 
     #[test]
+    fn sync_changeset_without_changeset_file_marks_run_synced() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = config_for_root(temp_dir.path());
+        fs::create_dir_all(&config.changeset_directory).unwrap();
+        let store = RunStateStore::new(config.state_db.clone());
+        store
+            .add_run(crate::state::NewRunRecord {
+                run_id: "run_docs_only".to_owned(),
+                story_id: "US-DOCS".to_owned(),
+                branch: Some("symphony/run_docs_only".to_owned()),
+                worktree: temp_dir.path().join("worktree"),
+                lightweight: false,
+                status: "completed".to_owned(),
+                result_path: Some(PathBuf::from(".harness/runs/run_docs_only/RESULT.json")),
+                sync_status: "not_applied".to_owned(),
+                next_action: "approve sync".to_owned(),
+            })
+            .unwrap();
+
+        let result = sync_changeset(&config, "run_docs_only").unwrap();
+        let run = store.show_run("run_docs_only").unwrap();
+
+        assert!(result.changes[0].applied);
+        assert_eq!(result.changes[0].operations, 0);
+        assert_eq!(run.sync_status, "synced");
+        assert_eq!(run.next_action, "done");
+    }
+
+    #[test]
+    fn legacy_apply_output_is_parsed_when_json_is_unavailable() {
+        assert_eq!(
+            parse_legacy_apply_result("Changeset run_1 applied (3 operation(s))."),
+            Some(ApplyResult {
+                applied: true,
+                operations: 3
+            })
+        );
+        assert_eq!(
+            parse_legacy_apply_result("Changeset run_1 already applied; skipped."),
+            Some(ApplyResult {
+                applied: false,
+                operations: 0
+            })
+        );
+        assert_eq!(parse_legacy_apply_result("unrelated output"), None);
+    }
+
+    #[test]
     fn sync_changeset_applies_only_requested_run() {
         let temp_dir = tempfile::tempdir().unwrap();
         let config = config_for_root(temp_dir.path());
@@ -392,7 +523,7 @@ mod tests {
         let cli_path = temp_dir.path().join("scripts/bin/harness-cli");
         fs::write(
             &cli_path,
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" >> sync-args.log\necho 'Changeset run_one applied (2 operation(s)).'\n",
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" >> sync-args.log\necho '{\"id\":\"run_one\",\"applied\":true,\"operations\":2}'\n",
         )
         .unwrap();
         make_executable(&cli_path);
