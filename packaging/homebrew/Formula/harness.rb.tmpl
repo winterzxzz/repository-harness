@@ -18,9 +18,11 @@ class Harness < Formula
   def install
     libexec.install Dir["*"]
     bin.install_symlink libexec/"bin/harness"
+    bin.install_symlink libexec/"bin/harness-symphony"
   end
 
   test do
     assert_match "Usage:", shell_output("#{bin}/harness --help")
+    assert_match "Usage:", shell_output("#{bin}/harness-symphony --help")
   end
 end
