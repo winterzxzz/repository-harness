@@ -601,17 +601,15 @@ function RequestChangesForm({
   const [files, setFiles] = React.useState<File[]>([]);
   const [validationError, setValidationError] = React.useState<string | null>(null);
   const [dragging, setDragging] = React.useState(false);
-  const previews = React.useMemo(
-    () => files.map((file) => ({ file, url: URL.createObjectURL(file) })),
-    [files]
-  );
+  const [previews, setPreviews] = React.useState<{ file: File; url: string }[]>([]);
 
-  React.useEffect(
-    () => () => {
-      previews.forEach((preview) => URL.revokeObjectURL(preview.url));
-    },
-    [previews]
-  );
+  React.useEffect(() => {
+    const nextPreviews = files.map((file) => ({ file, url: URL.createObjectURL(file) }));
+    setPreviews(nextPreviews);
+    return () => {
+      nextPreviews.forEach((preview) => URL.revokeObjectURL(preview.url));
+    };
+  }, [files]);
 
   React.useEffect(() => {
     setReason("");

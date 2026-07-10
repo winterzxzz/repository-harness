@@ -1339,9 +1339,10 @@ fn review_feedback(
         return Ok(None);
     }
     let feedback_dir = run_dir.join("feedback");
-    let reason = fs::read_to_string(feedback_dir.join("reason.md"))?
-        .trim()
-        .to_owned();
+    let Ok(reason) = fs::read_to_string(feedback_dir.join("reason.md")) else {
+        return Ok(None);
+    };
+    let reason = reason.trim().to_owned();
     let expected_prefix = format!(".harness/runs/{run_id}/feedback/");
     let mut evidence = Vec::new();
     for path in feedback.evidence_paths {
@@ -2978,6 +2979,31 @@ exit 1
         )
         .unwrap();
         assert!(traversal.starts_with("HTTP/1.1 400 Bad Request"));
+    }
+
+    #[test]
+    fn request_changes_review_ignores_missing_reason_artifact() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut config = test_config(&temp_dir);
+        config.pull_request_create = "disabled".to_owned();
+        init_git_repo(temp_dir.path());
+        seed_runnable_story(&config.harness_db, "US-084");
+        add_story_run(&config, "run_old", "US-084", "completed");
+        let request = request_changes_http_request("run_old", "Fix spacing", &[]);
+        let response =
+            request_changes_response_with_spawn(&config, "run_old", &request, |_, _| {}).unwrap();
+        let body: Value = serde_json::from_slice(response.body()).unwrap();
+        let run_id = body["run_id"].as_str().unwrap();
+        fs::remove_file(config.runs_dir.join(run_id).join("feedback/reason.md")).unwrap();
+
+        let review = handle_request(
+            &config,
+            &format!("GET /api/runs/{run_id}/review HTTP/1.1\r\n\r\n"),
+        )
+        .unwrap();
+
+        assert!(review.starts_with("HTTP/1.1 200 OK"));
+        assert!(review.contains(r#""request_changes":null"#));
     }
 
     #[test]

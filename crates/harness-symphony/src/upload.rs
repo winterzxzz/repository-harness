@@ -380,8 +380,11 @@ fn disposition_parameters(value: &str) -> Result<HashMap<String, String>, Upload
     }
     let mut parameters = HashMap::new();
     for segment in segments {
+        let segment = segment.trim();
+        if segment.is_empty() {
+            continue;
+        }
         let (name, value) = segment
-            .trim()
             .split_once('=')
             .ok_or(UploadError::MalformedMultipartHeader)?;
         let name = name.trim().to_ascii_lowercase();
@@ -522,6 +525,22 @@ mod tests {
         assert_eq!(feedback.evidence[0].extension, "png");
         assert_eq!(feedback.evidence[0].content_type, "image/png");
         assert_eq!(feedback.evidence[0].bytes, png);
+    }
+
+    #[test]
+    fn request_changes_accepts_trailing_disposition_semicolon() {
+        let body = b"--boundary\r\nContent-Disposition: form-data; name=\"reason\";\r\n\r\nFix spacing\r\n--boundary--\r\n";
+        let request = parse_http_request(&request_bytes(
+            "POST",
+            "/upload",
+            "multipart/form-data; boundary=boundary",
+            body,
+        ))
+        .unwrap();
+
+        let feedback = parse_request_changes(&request).unwrap();
+
+        assert_eq!(feedback.reason, "Fix spacing");
     }
 
     #[test]
