@@ -69,11 +69,18 @@ pub fn plan_pr(config: &ResolvedConfig, run: &RunRecord) -> Result<PrPlan, PrErr
         ".harness/changesets/{}.changeset.jsonl",
         run.run_id
     ));
-    if !summary.exists() || !result.exists() || !changeset.exists() {
+    if !summary.exists() || !result.exists() {
         return Err(PrError::MissingArtifacts(run.run_id.clone()));
     }
+    // The changeset only exists when the run wrote durable Harness records;
+    // a code/docs-only run is still allowed to open a PR without one.
+    let files = if changeset.exists() {
+        vec![changeset]
+    } else {
+        Vec::new()
+    };
 
-    let base_branch = current_branch(&config.repo_root)?;
+    let base_branch = default_base_branch(&config.repo_root)?;
     let head_branch = run
         .branch
         .clone()
@@ -84,7 +91,7 @@ pub fn plan_pr(config: &ResolvedConfig, run: &RunRecord) -> Result<PrPlan, PrErr
         draft,
         title: format!("{}: {}", run.story_id, run.status),
         body_path: summary.clone(),
-        files: vec![changeset],
+        files,
         base_branch,
         head_branch,
     })
@@ -142,13 +149,35 @@ fn ensure_forbidden_files_not_staged(repo_root: &Path) -> Result<(), PrError> {
     }
     let staged = String::from_utf8_lossy(&output.stdout);
     for path in staged.lines().map(str::trim) {
-        if path == "harness.db" || path.starts_with(".symphony/") {
+        if is_forbidden_commit_path(path) {
             return Err(PrError::GitFailed(format!(
                 "forbidden file staged for PR: {path}"
             )));
         }
     }
     Ok(())
+}
+
+fn is_forbidden_commit_path(path: &str) -> bool {
+    path == "harness.db" || path.starts_with(".symphony/")
+}
+
+fn default_base_branch(repo_root: &Path) -> Result<String, PrError> {
+    // Prefer the remote default branch so the PR base does not depend on
+    // whichever branch the root checkout happens to be on at PR time.
+    let output = Command::new("git")
+        .args(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
+        .current_dir(repo_root)
+        .output()?;
+    if output.status.success() {
+        let full = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        if let Some(branch) = full.strip_prefix("origin/") {
+            if !branch.is_empty() {
+                return Ok(branch.to_owned());
+            }
+        }
+    }
+    current_branch(repo_root)
 }
 
 fn current_branch(repo_root: &Path) -> Result<String, PrError> {
@@ -177,6 +206,7 @@ fn prepare_review_branch(run: &RunRecord, plan: &PrPlan) -> Result<(), PrError> 
             run.worktree.display()
         )));
     }
+    strip_agents_shim_file(&run.worktree.join("AGENTS.md"))?;
     git(&run.worktree, &["add", "-A"])?;
     unstage_local_run_files(&run.worktree)?;
     ensure_forbidden_files_not_staged(&run.worktree)?;
@@ -186,15 +216,97 @@ fn prepare_review_branch(run: &RunRecord, plan: &PrPlan) -> Result<(), PrError> 
             &["commit", "-m", &format!("{}: {}", plan.run_id, plan.title)],
         )?;
     }
+    ensure_forbidden_files_not_committed(&run.worktree, &plan.base_branch)?;
     git(&run.worktree, &["push", "-u", "origin", &plan.head_branch])?;
     Ok(())
 }
 
 fn unstage_local_run_files(worktree: &Path) -> Result<(), PrError> {
-    git_allow_failure(
-        worktree,
-        &["reset", "--", "AGENTS.md", "harness.db", ".symphony"],
-    )?;
+    git_allow_failure(worktree, &["reset", "--", "harness.db", ".symphony"])?;
+    Ok(())
+}
+
+/// Remove the Symphony run block from AGENTS.md so the shim never reaches the
+/// PR while legitimate agent edits to AGENTS.md are preserved.
+fn strip_agents_shim_file(path: &Path) -> Result<(), PrError> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let content = std::fs::read_to_string(path)?;
+    let stripped = strip_symphony_shim(&content);
+    if stripped != content {
+        std::fs::write(path, stripped)?;
+    }
+    Ok(())
+}
+
+fn strip_symphony_shim(content: &str) -> String {
+    const BEGIN: &str = "<!-- HARNESS-SYMPHONY:BEGIN -->";
+    const END: &str = "<!-- HARNESS-SYMPHONY:END -->";
+    let mut kept: Vec<&str> = Vec::new();
+    let mut in_block = false;
+    for line in content.lines() {
+        if in_block {
+            if line.contains(END) {
+                in_block = false;
+            }
+            continue;
+        }
+        if line.contains(BEGIN) {
+            in_block = true;
+            // Drop the single blank separator line the shim writer inserted
+            // before the block, without joining surrounding text lines.
+            if kept.last().is_some_and(|last| last.trim().is_empty()) {
+                kept.pop();
+            }
+            continue;
+        }
+        kept.push(line);
+    }
+    if in_block {
+        // A mangled block without its END marker: keep the content rather
+        // than risk dropping agent-authored text after the marker.
+        return content.to_owned();
+    }
+    let mut result = kept.join("\n");
+    if content.ends_with('\n') && !result.is_empty() {
+        result.push('\n');
+    }
+    result
+}
+
+/// Refuse to push a review branch whose commits contain local runtime files.
+/// The staged-only check cannot see files the agent already committed.
+fn ensure_forbidden_files_not_committed(worktree: &Path, base_branch: &str) -> Result<(), PrError> {
+    let mut output = None;
+    for base in [base_branch.to_owned(), format!("origin/{base_branch}")] {
+        let candidate = Command::new("git")
+            .args(["diff", "--name-only", &format!("{base}...HEAD")])
+            .current_dir(worktree)
+            .output()?;
+        if candidate.status.success() {
+            output = Some(candidate);
+            break;
+        }
+    }
+    let Some(output) = output else {
+        // Neither ref resolved (e.g. detached setup without the base branch
+        // visible from the worktree). The staged-only check already ran, so
+        // degrade loudly instead of failing the PR.
+        eprintln!(
+            "warning: could not diff review branch against {base_branch}; \
+skipping the committed-files forbidden-path check"
+        );
+        return Ok(());
+    };
+    let committed = String::from_utf8_lossy(&output.stdout);
+    for path in committed.lines().map(str::trim) {
+        if is_forbidden_commit_path(path) {
+            return Err(PrError::GitFailed(format!(
+                "forbidden file committed on review branch: {path}"
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -387,6 +499,59 @@ mod tests {
         let plan = plan_pr(&config, &run("blocked", temp_dir.path())).unwrap();
 
         assert!(plan.draft);
+    }
+
+    #[test]
+    fn plan_allows_missing_changeset_for_docs_only_runs() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        init_git_repo(temp_dir.path());
+        let config = config(temp_dir.path());
+        fs::create_dir_all(temp_dir.path().join(".harness/runs/run_1")).unwrap();
+        fs::write(
+            temp_dir.path().join(".harness/runs/run_1/SUMMARY.md"),
+            "summary",
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join(".harness/runs/run_1/RESULT.json"),
+            "{}",
+        )
+        .unwrap();
+
+        let plan = plan_pr(&config, &run("completed", temp_dir.path())).unwrap();
+
+        assert!(plan.files.is_empty());
+    }
+
+    #[test]
+    fn strip_symphony_shim_removes_block_and_keeps_agent_edits() {
+        let original = "# Agents\n\nkeep this\n";
+        let shimmed = format!(
+            "{original}\n<!-- HARNESS-SYMPHONY:BEGIN -->\n## Harness Symphony Run\nblock\n<!-- HARNESS-SYMPHONY:END -->\n"
+        );
+        assert_eq!(strip_symphony_shim(&shimmed), original);
+
+        let edited = format!(
+            "# Agents\n\nkeep this\nagent added a real rule\n\n<!-- HARNESS-SYMPHONY:BEGIN -->\nblock\n<!-- HARNESS-SYMPHONY:END -->\ntrailing agent note\n"
+        );
+        let stripped = strip_symphony_shim(&edited);
+        assert!(stripped.contains("agent added a real rule"));
+        assert!(stripped.contains("trailing agent note"));
+        assert!(!stripped.contains("HARNESS-SYMPHONY"));
+
+        assert_eq!(strip_symphony_shim(original), original);
+
+        let double = format!(
+            "# Agents\n\n<!-- HARNESS-SYMPHONY:BEGIN -->\none\n<!-- HARNESS-SYMPHONY:END -->\n\n<!-- HARNESS-SYMPHONY:BEGIN -->\ntwo\n<!-- HARNESS-SYMPHONY:END -->\n"
+        );
+        assert!(!strip_symphony_shim(&double).contains("HARNESS-SYMPHONY"));
+
+        let mangled = "# Agents\n\n<!-- HARNESS-SYMPHONY:BEGIN -->\nagent text after a mangled block\n";
+        assert_eq!(strip_symphony_shim(mangled), mangled);
+
+        let mid_file =
+            "line1\n<!-- HARNESS-SYMPHONY:BEGIN -->\nblock\n<!-- HARNESS-SYMPHONY:END -->\nline2\n";
+        assert_eq!(strip_symphony_shim(mid_file), "line1\nline2\n");
     }
 
     #[test]

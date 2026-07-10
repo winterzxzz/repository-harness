@@ -1109,14 +1109,18 @@ pub struct CsvList(pub Option<String>);
 
 impl CsvList {
     pub fn from_optional(value: Option<String>) -> Self {
-        Self(value.filter(|item| !item.is_empty()))
+        // An explicitly passed empty value ("") means "empty list", which is
+        // distinct from an omitted flag (NULL).
+        Self(value)
     }
 
     pub fn as_json_text(&self) -> Option<String> {
         self.0.as_ref().map(|value| {
             let escaped_items = value
                 .split(',')
-                .map(|item| format!("\"{}\"", escape_json_string(item.trim())))
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(|item| format!("\"{}\"", escape_json_string(item)))
                 .collect::<Vec<_>>()
                 .join(",");
             format!("[{escaped_items}]")

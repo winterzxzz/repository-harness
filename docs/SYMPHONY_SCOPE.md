@@ -176,8 +176,13 @@ Symphony code:
    .harness/changesets/<run_id>.changeset.jsonl
    ```
 
-   in the workspace. The log is written transactionally with the database
-   write: either both happen or neither does.
+   in the workspace. The log append and the database write share one code
+   path: the append happens inside the database transaction window, a failed
+   append aborts the transaction, and a failed commit truncates the appended
+   lines. A hard crash between the file sync and the commit can still leave
+   the log one operation ahead of the database; replay through
+   `db changeset apply` is idempotent, so the changeset (the source of truth)
+   wins on the next sync or rebuild.
 
 ### Required v1 Capabilities
 
@@ -247,8 +252,12 @@ Creates:
 
 ```text
 .symphony/worktrees/<run_id>/
-.symphony/runs/<run_id>/RUN_CONTRACT.json
+.harness/runs/<run_id>/RUN_CONTRACT.json
 ```
+
+A copy of the contract is also written inside the worktree at
+`.harness/runs/<run_id>/RUN_CONTRACT.json`, so the agent never has to read
+outside its assigned workspace.
 
 The root working tree is never used as the agent workspace.
 
@@ -421,11 +430,14 @@ Recommended v1 policy:
 - failed/cancelled: no PR by default
 
 If a PR is created, it must use the summary as the PR body and commit the
-semantic changeset:
+semantic changeset when the run wrote durable Harness records:
 
 ```text
 .harness/changesets/<run_id>.changeset.jsonl
 ```
+
+A code/docs-only run that wrote no durable records has no changeset and may
+still open a PR.
 
 #### 4.9 Semantic Changesets
 
@@ -740,10 +752,12 @@ harness.db-shm
 Must not ignore:
 
 ```gitignore
-.harness/runs/*/SUMMARY.md
-.harness/runs/*/RESULT.json
 .harness/changesets/
 ```
+
+`.harness/runs/*/SUMMARY.md` and `.harness/runs/*/RESULT.json` are local
+runtime evidence (see 3.4) and stay ignored; only committed changesets are
+durable state.
 
 ## 11. Acceptance Criteria
 

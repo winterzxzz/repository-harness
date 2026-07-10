@@ -195,6 +195,9 @@ before actually launching one:
 target/debug/harness-symphony run <story-id> --prepare-only
 ```
 
+Prepare does not pull from upstream: the run branches from your current HEAD.
+Pull first if the run should start from the latest merged state.
+
 This creates an isolated worktree under:
 
 ```text

@@ -358,6 +358,13 @@ where
     let browser_address = std::net::SocketAddr::new(browser_ip, address.port());
     let url = format!("http://{browser_address}");
     println!("Symphony Web UI Controller listening at {url}");
+    if !address.ip().is_loopback() {
+        eprintln!(
+            "warning: the Symphony Web UI has no authentication and can start agent runs; \
+binding to {} exposes it beyond this machine. Use a loopback host unless you trust the network.",
+            address.ip()
+        );
+    }
     if options.open_browser {
         if let Err(error) = open_browser(&url) {
             eprintln!("{}", browser_open_warning(&url, error));
@@ -3751,7 +3758,7 @@ exit 1
         let cli_path = temp_dir.path().join("scripts/bin/harness-cli");
         fs::write(
             &cli_path,
-            "#!/bin/sh\nprintf '%s\n' \"$@\" >> sync-args.log\necho 'Changeset run_local_sync applied (2 operation(s)).'\n",
+            "#!/bin/sh\nprintf '%s\n' \"$@\" >> sync-args.log\necho '{\"id\":\"run_local_sync\",\"applied\":true,\"operations\":2}'\n",
         )
         .unwrap();
         make_executable(&cli_path);
@@ -3907,7 +3914,7 @@ exit 1
         let cli_path = temp_dir.path().join("scripts/bin/harness-cli");
         fs::write(
             &cli_path,
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" >> sync-args.log\necho 'Changeset run_sync applied (2 operation(s)).'\n",
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" >> sync-args.log\necho '{\"id\":\"run_sync\",\"applied\":true,\"operations\":2}'\n",
         )
         .unwrap();
         make_executable(&cli_path);

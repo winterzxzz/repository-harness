@@ -13,7 +13,7 @@ use crate::agent::{run_agent, AgentError};
 use crate::changeset::{append_rendered_section, ChangesetError};
 use crate::config::ResolvedConfig;
 use crate::state::{NewRunRecord, RunStateStore, StateError};
-use crate::sync::{refresh_checkout_from_upstream, SyncError};
+use crate::sync::SyncError;
 
 #[derive(Debug, Error)]
 pub enum RunError {
@@ -136,9 +136,11 @@ struct ValidationCommand {
     result: String,
 }
 
+// Prepare intentionally does not pull from upstream: mutating the user's
+// checkout is a surprising side effect, and a dirty checkout would make every
+// run fail. Runs branch from the current HEAD; pull first if you want latest.
 pub fn prepare_run(config: &ResolvedConfig, story_id: &str) -> Result<PreparedRun, RunError> {
     ensure_no_active_run(config)?;
-    refresh_checkout_from_upstream(config)?;
     let story = load_runnable_story(&config.harness_db, story_id)?;
 
     let run_id = generate_run_id();
@@ -162,7 +164,19 @@ pub fn prepare_run(config: &ResolvedConfig, story_id: &str) -> Result<PreparedRu
         &harness_db_path,
     );
     write_contract(&contract_path, &contract)?;
-    write_agents_shim(&worktree.join("AGENTS.md"), &contract_path, &contract)?;
+    // Also place the contract inside the worktree so the agent never has to
+    // reach outside its assigned workspace to read its own run contract.
+    let worktree_contract_relative = format!(".harness/runs/{run_id}/RUN_CONTRACT.json");
+    let worktree_contract_path = worktree.join(&worktree_contract_relative);
+    if let Some(parent) = worktree_contract_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    write_contract(&worktree_contract_path, &contract)?;
+    write_agents_shim(
+        &worktree.join("AGENTS.md"),
+        Path::new(&worktree_contract_relative),
+        &contract,
+    )?;
 
     let store = RunStateStore::new(config.state_db.clone());
     store.add_run(NewRunRecord {
@@ -410,7 +424,6 @@ pub fn prepare_here_run(config: &ResolvedConfig, story_id: &str) -> Result<Prepa
         return Err(RunError::HereRunDisabled);
     }
     ensure_no_active_run(config)?;
-    refresh_checkout_from_upstream(config)?;
     let story = load_runnable_story(&config.harness_db, story_id)?;
     if story.lane != "tiny" {
         return Err(RunError::StoryNotTiny {
@@ -614,7 +627,7 @@ fn build_contract(
         agent_instructions: vec![
             "Follow AGENTS.md and Harness docs.".to_owned(),
             "Implement only the assigned story scope.".to_owned(),
-            "Use the copied harness.db.".to_owned(),
+            "Use the copied harness.db through HARNESS_DB_PATH; forbidden_paths lists files that must never be committed, and does not forbid Harness CLI writes to that database.".to_owned(),
             "Run the configured verification command when available.".to_owned(),
             "Write RESULT.json with a top-level validation object, not validation_evidence. Use validation.commands[].result values pass, fail, or unavailable.".to_owned(),
         ],
@@ -857,7 +870,7 @@ fn render_agents_shim(contract_path: &Path, contract: &RunContract) -> String {
 - Harness DB: `{}`\n\
 - Required outputs: `{}` and `{}`\n\
 - RESULT.json schema: `{}`\n\
-- Forbidden paths: `{}`\n\
+- Forbidden to commit (writing the copied DB via HARNESS_DB_PATH is allowed): `{}`\n\
 \n\
 Use `HARNESS_DB_PATH={}`, `HARNESS_RUN_ID={}`, and `HARNESS_RUN_MODE=execute` for Harness CLI writes.\n\
 <!-- HARNESS-SYMPHONY:END -->\n",
@@ -1193,7 +1206,7 @@ mod tests {
         assert!(shim.contains("US-037"));
         assert!(shim.contains("RUN_CONTRACT.json"));
         assert!(shim.contains("HARNESS_DB_PATH=.symphony/worktrees/run_1/harness.db"));
-        assert!(shim.contains("Forbidden paths"));
+        assert!(shim.contains("Forbidden to commit"));
     }
 
     #[test]

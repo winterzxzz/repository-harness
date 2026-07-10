@@ -21,7 +21,7 @@ table. The schema is not changed by Phase 2.
 | `files_read` | TEXT | Standard+ | JSON array text of paths or command names. With the current CLI, pass a comma-separated list. | `["PHASE2.md","docs/HARNESS.md","scripts/bin/harness-cli query matrix"]` |
 | `files_changed` | TEXT | Standard+ | JSON array text of changed file paths. With the current CLI, pass a comma-separated list; omit only when no files changed. | `["docs/TRACE_SPEC.md","docs/HARNESS.md"]` |
 | `decisions_made` | TEXT | Detailed | JSON array text of decision strings. Include scope decisions, validation choices, and explicit non-goals. | `["Kept Phase 2 docs-only; installer propagation remains out of scope"]` |
-| `errors` | TEXT | Standard+ if errors occurred; Detailed always | JSON array text of error or blocker strings. Until the CLI supports empty arrays directly, use `none` when a detailed trace needs explicit no-error evidence. | `["git diff --check failed before whitespace fix"]` |
+| `errors` | TEXT | Standard+ if errors occurred; Detailed always | JSON array text of error or blocker strings. Pass an explicit empty value (`--errors ""`) to store `[]` when a detailed trace needs no-error evidence; the legacy `none` sentinel remains accepted. | `["git diff --check failed before whitespace fix"]` |
 | `outcome` | TEXT | Yes before final response | One of `completed`, `blocked`, `partial`, or `failed`. | `completed` |
 | `duration_seconds` | INTEGER | Detailed when available | Positive integer estimate or measured duration. Leave null if unknown. | `1800` |
 | `token_estimate` | INTEGER | Detailed when available | Positive integer estimate. Leave null if unknown. | `24000` |
@@ -74,8 +74,8 @@ Minimum fields:
 
 - All Standard fields.
 - `decisions_made` as JSON array text.
-- `errors` as JSON array text, using `none` with the current CLI when no
-  errors occurred.
+- `errors` as JSON array text, using `--errors ""` (stored as `[]`) or the
+  legacy `none` sentinel when no errors occurred.
 - `harness_friction`, using `none` only after checking for friction.
 - `duration_seconds` or a note explaining why duration is unavailable.
 - `token_estimate` or a note explaining why token estimate is unavailable.
@@ -198,7 +198,7 @@ Before the final response, check:
   Use `scripts/bin/harness-cli score-trace --id N` when re-checking a specific
   historical trace.
 - `files_changed` matches the actual changed-file set at a useful level.
-- `errors` names real blockers or is `none` for Detailed traces when the
-  current CLI is used.
+- `errors` names real blockers, or is an explicit empty array (`--errors ""`)
+  or `none` for Detailed traces.
 - `harness_friction` either names a concrete issue or is intentionally `none`.
 - Any friction that should become future work is recorded in the backlog.
