@@ -52,9 +52,13 @@ test -x "$HARNESS" || fail "kit launcher is missing or not executable"
 test "$("$HARNESS" --version)" = "$(tr -d '\r\n' < "$ROOT_DIR/scripts/harness-kit-version")" || \
   fail "kit launcher reported the wrong version"
 
-test -x "$KIT_DIR/bin/harness-symphony" || fail "kit archive is missing the Symphony runner"
-test -f "$KIT_DIR/bin/harness-symphony.sha256" || \
+test -x "$KIT_DIR/bin/harness-symphony" || fail "kit archive is missing the Symphony launcher"
+test -x "$KIT_DIR/libexec/harness-kit/scripts/bin/harness-symphony" || \
+  fail "kit archive is missing the Symphony runner binary"
+test -f "$KIT_DIR/libexec/harness-kit/scripts/bin/harness-symphony.sha256" || \
   fail "kit archive is missing the Symphony runner checksum"
+test -f "$KIT_DIR/libexec/harness-kit/web-ui-dist/index.html" || \
+  fail "kit archive is missing the Symphony web UI dist"
 ln -s "$KIT_DIR/bin/harness-symphony" "$FORMULA_PREFIX/bin/harness-symphony"
 "$FORMULA_PREFIX/bin/harness-symphony" --help >/dev/null || \
   fail "packaged Symphony runner does not execute"

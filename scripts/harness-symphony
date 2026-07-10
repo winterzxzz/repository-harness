@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+fail() {
+  printf 'Error: %s\n' "$*" >&2
+  exit 1
+}
+
+resolve_script_path() {
+  local source="$1"
+  local directory target
+
+  while [ -h "$source" ]; do
+    directory="$(cd -P "$(dirname "$source")" && pwd)"
+    target="$(readlink "$source")"
+    case "$target" in
+      /*) source="$target" ;;
+      *) source="$directory/$target" ;;
+    esac
+  done
+  printf '%s\n' "$source"
+}
+
+SCRIPT_PATH="$(resolve_script_path "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd -P)"
+KIT_ROOT="$(cd "$SCRIPT_DIR/../libexec/harness-kit" 2>/dev/null && pwd -P || printf '')"
+[ -n "$KIT_ROOT" ] || fail "Packaged Harness kit is missing. Reinstall with Homebrew."
+
+BINARY="$KIT_ROOT/scripts/bin/harness-symphony"
+[ -x "$BINARY" ] || fail "Packaged Symphony runner is missing: $BINARY"
+
+if [ -z "${HARNESS_SYMPHONY_WEB_DIST_DIR:-}" ] && [ -d "$KIT_ROOT/web-ui-dist" ]; then
+  export HARNESS_SYMPHONY_WEB_DIST_DIR="$KIT_ROOT/web-ui-dist"
+fi
+
+exec "$BINARY" "$@"
