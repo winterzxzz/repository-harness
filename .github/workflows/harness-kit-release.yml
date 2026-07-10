@@ -46,7 +46,7 @@ jobs:
           cargo fmt --check
           cargo test --workspace
           cargo build -p harness-cli
-          bash -n scripts/install-harness.sh scripts/harness scripts/build-harness-macos-kit.sh scripts/render-homebrew-formula.sh scripts/validate-harness-macos-kit.sh
+          bash -n scripts/install-harness.sh scripts/harness scripts/harness-symphony scripts/build-harness-macos-kit.sh scripts/render-homebrew-formula.sh scripts/validate-harness-macos-kit.sh
           scripts/validate-install-payload.sh
 
   build:
@@ -83,6 +83,12 @@ jobs:
 
       - name: Build Symphony runner
         run: cargo build --release -p harness-symphony
+
+      - name: Build Symphony web UI dist
+        working-directory: crates/harness-symphony/web-ui
+        run: |
+          npm ci
+          npm run build
 
       - name: Build and verify kit archive
         env:
