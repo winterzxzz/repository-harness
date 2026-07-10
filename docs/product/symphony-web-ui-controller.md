@@ -73,9 +73,9 @@ records remain the source of truth after creation.
 ## Board Card Presentation
 
 Board cards are summaries, not the full work-item record. The board must stay
-scannable across all six states, so each card should keep long titles, reasons,
-run IDs, blocker metadata, failure labels, and action hints bounded inside the
-column.
+scannable across four user-facing buckets, so each card should keep long titles,
+reasons, run IDs, blocker metadata, failure labels, internal status, and action
+hints bounded inside the column.
 
 The board must not create horizontal scrolling inside a column or inside a
 card. Dense task lists may scroll vertically within a column. Full work-item
@@ -105,9 +105,22 @@ The dependency graph must support:
 Cycle detection is required. A cycle is a product planning error and should be
 shown as a task breakdown problem, not as a user action problem.
 
-## Board States
+## Board Buckets And States
 
-The primary board states are:
+The primary board buckets are:
+
+| Bucket | Meaning |
+| --- | --- |
+| Drafts | Unstarted work that may be runnable or still blocked by planning/dependencies. |
+| Active | Work currently running or requiring operator attention before it can move forward. |
+| Ready | Finished agent work waiting for review, PR merge, or local sync approval. |
+| Done | Accepted work whose PR/sync flow is complete. |
+
+Internal Symphony task states remain the source of truth. The board groups them
+into buckets and keeps the specific state visible in cards, detail panels, and
+review/failure surfaces.
+
+The internal task states are:
 
 | State | Meaning |
 | --- | --- |
@@ -118,10 +131,18 @@ The primary board states are:
 | Needs Attention | A run failed, was interrupted, or cannot create required review artifacts. |
 | Done | The PR was merged and Symphony sync applied the accepted changeset. |
 
+Bucket mapping:
+
+- `Ready` state appears in Drafts because the work has not started yet.
+- `Blocked`, `In Progress`, and `Needs Attention` appear in Active because they
+  need current operator or runner attention.
+- `Review` appears in Ready because agent work is ready for human review/sync.
+- `Done` appears in Done.
+
 ## Main Workflow
 
 1. User opens the local Web UI.
-2. UI shows task hierarchy and board states.
+2. UI shows task hierarchy and board buckets.
 3. User clicks a task and inspects the floating task detail popup without
    losing the board context.
 4. User starts a `Ready` task from the popup or from the guarded `Run with
@@ -135,7 +156,7 @@ The primary board states are:
    or required result validation fails.
 9. When Codex emits `turn/completed` with completed status and required
    artifacts validate, Symphony creates a PR when PR creation is enabled.
-10. The task moves to `Review`.
+10. The task moves to `Review` and appears in the Ready bucket.
 11. User reviews summary, result, changeset, validation evidence, PR status, and
    logs.
 12. After the PR is merged, or after local artifact review when PR creation is

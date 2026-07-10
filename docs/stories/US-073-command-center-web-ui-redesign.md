@@ -23,11 +23,13 @@ and one-active-run operating model.
 ## Acceptance Criteria
 
 - The first viewport reads as a Command Center, with a compact command bar,
-  state overview, search, refresh, and six-state board visible.
+  bucket overview, search, refresh, and four-bucket board visible.
 - Existing task selection, detail dialog, recovery, review, delete, and sync
   controls keep their behavior and accessible names.
 - Dense board columns remain internally scrollable with no page/card horizontal
   overflow on desktop or mobile.
+- Internal task states stay visible as card/detail metadata, but the primary
+  board columns are Drafts, Active, Ready, and Done.
 - Visual styling uses local shadcn-style primitives and Tailwind utilities.
 
 ## Design Notes
@@ -71,3 +73,5 @@ Implemented Command Center shell and board polish.
 - Rust workspace: `cargo fmt --check`, `cargo test --workspace --quiet`, `cargo clippy --workspace -- -D warnings`.
 - Clean diff: `git diff --check`.
 - Browser proof: desktop and mobile screenshots captured in Codex browser after viewport reset.
+- Follow-up: board columns were simplified from six internal states to four
+  operator buckets: Drafts, Active, Ready, and Done.

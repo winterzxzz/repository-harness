@@ -13,7 +13,8 @@ what is running, what needs review, what needs attention, and what is done.
 
 Help the operator control one local Symphony run at a time:
 
-- See all work states on one dense board.
+- See work grouped as Drafts, Active, Ready, and Done instead of scanning every
+  internal runner state as a separate board column.
 - Start Ready work only when dependencies allow it.
 - Watch active run status and readable Codex progress.
 - Review run artifacts, validation, changed files, and PR status.
@@ -36,4 +37,3 @@ and control that state without inventing a second workflow model.
 Canonical product contract:
 
 - `docs/product/symphony-web-ui-controller.md`
-

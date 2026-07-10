@@ -29,13 +29,13 @@ import { GuidedIntakePanel } from "./features/symphony/intake";
 import { SettingsPanel } from "./features/symphony/settings";
 import { ToolDashboard } from "./features/symphony/tool-dashboard";
 import { TraceExplorer } from "./features/symphony/trace-explorer";
-import { agentLabel, states } from "./features/symphony/constants";
+import { agentLabel, bucketForItem, buckets } from "./features/symphony/constants";
 import { ControllerSidebar } from "./features/symphony/sidebar";
 import { ToastProvider, useToast } from "./features/symphony/toast";
 import type {
   AgentId,
+  BoardBucket,
   BoardItem,
-  BoardState,
   GuidedIntakeDraft,
   PrMergedResponse,
   PrRetryResponse,
@@ -130,8 +130,8 @@ function App() {
   const selected = selectedId ? items.find((item) => item.id === selectedId) ?? null : null;
   const counts = React.useMemo(
     () =>
-      Object.fromEntries(states.map((state) => [state, items.filter((item) => item.board_state === state).length])) as
-        Record<BoardState, number>,
+      Object.fromEntries(buckets.map((bucket) => [bucket, items.filter((item) => bucketForItem(item) === bucket).length])) as
+        Record<BoardBucket, number>,
     [items]
   );
   const activeRun = items.find((item) => item.active_run);

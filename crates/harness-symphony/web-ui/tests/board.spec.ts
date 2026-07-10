@@ -60,16 +60,16 @@ test("board renders task columns and detail controls", async ({ page }) => {
   await expect(page.getByRole("region", { name: "Command status rail" })).toBeVisible();
   await expect(page.locator("#board")).toHaveClass(/command-board-surface/);
   await expect(page.getByRole("complementary", { name: "Workspace navigation" })).toBeVisible();
-  await expect(page.getByText("Safe to start")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Drafts", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Active", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Ready", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Blocked", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "In Progress", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Review", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Needs Attention", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Done", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Blocked", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "In Progress", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Needs Attention", exact: true })).toHaveCount(0);
 
   await page.getByRole("textbox", { name: "Find task" }).fill("US-052");
-  await expect(page.getByRole("button", { name: /US-052/ })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Drafts column" }).getByRole("button", { name: /US-052/ })).toBeVisible();
   await page.getByRole("button", { name: /US-052/ }).click();
 
   const detail = page.getByRole("dialog", { name: "Selected work detail" });
@@ -170,7 +170,7 @@ test("guided intake creates a story after explicit confirmation", async ({ page 
   const successToast = page.getByRole("region", { name: "Notifications" }).getByRole("alert").filter({ hasText: "Story created" });
   await expect(successToast).toBeVisible();
   await expect(successToast).toContainText("US-075-DRAFT");
-  await expect(page.getByRole("region", { name: "Ready column" }).getByRole("button", { name: /US-075-DRAFT/ })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Drafts column" }).getByRole("button", { name: /US-075-DRAFT/ })).toBeVisible();
   expect(startRequested).toBe(false);
 });
 
@@ -264,11 +264,32 @@ test("reduced motion suppresses operational spinner animation", async ({ page })
   });
 
   await page.goto("/");
-  const spinner = page.locator("#column-in-progress svg").first();
+  const spinner = page.locator("#bucket-active svg").first();
   await expect(spinner).toBeVisible();
   await expect
     .poll(async () => spinner.evaluate((element) => getComputedStyle(element).animationName))
     .toBe("none");
+});
+
+test("summary strip pulses while a Symphony run is active", async ({ page }) => {
+  const activeItem = boardItem("US-069", "Active Run Heartbeat", "In Progress");
+  activeItem.run_id = "run_active";
+  activeItem.active_run = "run_active";
+
+  await page.route("**/api/board", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ items: [activeItem] })
+    });
+  });
+
+  await page.goto("/");
+
+  const activeMetric = page
+    .getByRole("region", { name: "Command status rail" })
+    .getByText("Active", { exact: true })
+    .locator("xpath=ancestor::*[contains(@class, 'rounded-xl')][1]");
+  await expect(activeMetric.locator("span").first()).toHaveClass(/motion-safe:animate-pulse/);
 });
 
 test("board loading and failure states expose accessibility semantics", async ({ page }) => {
@@ -333,7 +354,7 @@ test("ready task delete action confirms, retires, and refreshes the board", asyn
   await expect.poll(async () => retired).toBe(true);
   await expect(detail).toBeHidden();
   await expect(page.getByRole("button", { name: /US-064/ })).toHaveCount(0);
-  await expect(page.getByRole("region", { name: "Ready column" }).getByText("No tasks")).toBeVisible();
+  await expect(page.getByRole("region", { name: "Drafts column" }).getByText("No tasks")).toBeVisible();
 });
 
 test("ready card runs codex from the board without opening detail", async ({ page }) => {
@@ -363,22 +384,22 @@ test("ready card runs codex from the board without opening detail", async ({ pag
 
   await page.goto("/");
 
-  const readyColumn = page.getByRole("region", { name: "Ready column" });
-  const readyCard = readyColumn.getByTestId("task-card").filter({ hasText: "US-076" });
+  const draftsColumn = page.getByRole("region", { name: "Drafts column" });
+  const readyCard = draftsColumn.getByTestId("task-card").filter({ hasText: "US-076" });
   const runButton = readyCard.getByRole("button", { name: "Run with Codex" });
   await expect(runButton).toBeVisible();
-  const readyColumnBox = await readyColumn.boundingBox();
+  const draftsColumnBox = await draftsColumn.boundingBox();
   const runControlBox = await runButton.locator("..").boundingBox();
   const runButtonBox = await runButton.boundingBox();
-  expect(readyColumnBox?.width ?? 0, "Ready column keeps readable action width").toBeGreaterThanOrEqual(236);
-  expect(runControlBox?.width ?? 0, "Run split control width").toBeGreaterThanOrEqual(188);
+  expect(draftsColumnBox?.width ?? 0, "Drafts column keeps readable action width").toBeGreaterThanOrEqual(220);
+  expect(runControlBox?.width ?? 0, "Run split control width").toBeGreaterThanOrEqual(184);
   expect(runButtonBox?.height ?? 0, "Run with Codex button height").toBeGreaterThanOrEqual(34);
   await expectNoHorizontalOverflow(runButton, "Run with Codex button");
   await runButton.click();
 
   await expect.poll(async () => started).toBe(true);
   await expect(page.getByRole("dialog", { name: "Selected work detail" })).toHaveCount(0);
-  await expect(page.getByRole("region", { name: "In Progress column" }).getByRole("button", { name: /US-076/ })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Active column" }).getByRole("button", { name: /US-076/ })).toBeVisible();
 });
 
 test("agent dropdown runs with opencode and remembers the choice", async ({ page }) => {
@@ -410,7 +431,7 @@ test("agent dropdown runs with opencode and remembers the choice", async ({ page
 
   await page.goto("/");
 
-  const readyCard = page.getByRole("region", { name: "Ready column" }).getByTestId("task-card").filter({ hasText: "US-078" });
+  const readyCard = page.getByRole("region", { name: "Drafts column" }).getByTestId("task-card").filter({ hasText: "US-078" });
   await expect(readyCard.getByRole("button", { name: "Run with Codex" })).toBeVisible();
   await readyCard.getByRole("button", { name: "Choose agent" }).click();
   await page.getByRole("menuitem", { name: "Run with OpenCode" }).click();
@@ -452,7 +473,7 @@ test("settings view saves the default agent and relabels the run button", async 
   await expect.poll(async () => savedAgent).toBe("opencode");
 
   await page.getByRole("tab", { name: "Work Board" }).click();
-  const readyCard = page.getByRole("region", { name: "Ready column" }).getByTestId("task-card").filter({ hasText: "US-078" });
+  const readyCard = page.getByRole("region", { name: "Drafts column" }).getByTestId("task-card").filter({ hasText: "US-078" });
   await expect(readyCard.getByRole("button", { name: "Run with OpenCode" })).toBeVisible();
 });
 
@@ -790,59 +811,59 @@ test("board columns stay bounded and scroll dense task lists internally", async 
   await page.setViewportSize({ width: 1440, height: 820 });
   await page.goto("/");
 
-  for (const state of ["Ready", "Blocked", "In Progress", "Review", "Needs Attention", "Done"]) {
-    await expect(page.getByRole("region", { name: `${state} column` })).toBeVisible();
+  for (const bucket of ["Drafts", "Active", "Ready", "Done"]) {
+    await expect(page.getByRole("region", { name: `${bucket} column` })).toBeVisible();
   }
 
-  const readyColumn = page.getByRole("region", { name: "Ready column" });
-  const needsAttentionColumn = page.getByRole("region", { name: "Needs Attention column" });
-  const readyTasks = page.locator('[aria-label="Ready tasks"]');
+  const draftsColumn = page.getByRole("region", { name: "Drafts column" });
+  const activeColumn = page.getByRole("region", { name: "Active column" });
+  const draftsTasks = page.locator('[aria-label="Drafts tasks"]');
   const board = page.locator("#board");
   const longReadyCard = page.getByTestId("task-card").filter({ hasText: `US-068-${longToken}` });
   const longAttentionCard = page.getByTestId("task-card").filter({ hasText: "US-968" });
   const pageScrollHeight = await page.evaluate(() => document.documentElement.scrollHeight);
   const viewportHeight = await page.evaluate(() => window.innerHeight);
-  const readyMetrics = await readyTasks.evaluate((element) => ({
+  const draftsMetrics = await draftsTasks.evaluate((element) => ({
     clientHeight: element.clientHeight,
     scrollHeight: element.scrollHeight,
     scrollTop: element.scrollTop
   }));
 
-  expect(readyMetrics.scrollHeight).toBeGreaterThan(readyMetrics.clientHeight);
+  expect(draftsMetrics.scrollHeight).toBeGreaterThan(draftsMetrics.clientHeight);
   expect(pageScrollHeight).toBeLessThan(viewportHeight + 280);
   await expectPageNoHorizontalOverflow(page);
   await expectNoHorizontalOverflow(board, "desktop board");
-  await expectNoHorizontalOverflow(readyColumn, "desktop ready column");
-  await expectNoHorizontalOverflow(needsAttentionColumn, "desktop needs attention column");
+  await expectNoHorizontalOverflow(draftsColumn, "desktop drafts column");
+  await expectNoHorizontalOverflow(activeColumn, "desktop active column");
   await expectNoHorizontalOverflow(longReadyCard, "desktop long ready card");
   await expectNoHorizontalOverflow(longAttentionCard, "desktop long needs attention card");
 
-  await readyTasks.evaluate((element) => {
+  await draftsTasks.evaluate((element) => {
     element.scrollTop = element.scrollHeight;
   });
 
-  await expect(readyColumn.getByRole("heading", { name: "Ready", exact: true })).toBeVisible();
+  await expect(draftsColumn.getByRole("heading", { name: "Drafts", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: /US-921/ })).toBeVisible();
   await expect
-    .poll(async () => readyTasks.evaluate((element) => element.scrollTop))
-    .toBeGreaterThan(readyMetrics.scrollTop);
+    .poll(async () => draftsTasks.evaluate((element) => element.scrollTop))
+    .toBeGreaterThan(draftsMetrics.scrollTop);
 
   await page.setViewportSize({ width: 390, height: 760 });
-  await expect(readyColumn).toBeVisible();
+  await expect(draftsColumn).toBeVisible();
   const boardBox = await board.boundingBox();
   expect(boardBox?.y ?? 9999).toBeLessThan(760);
-  const mobileReadyMetrics = await readyTasks.evaluate((element) => ({
+  const mobileDraftsMetrics = await draftsTasks.evaluate((element) => ({
     clientHeight: element.clientHeight,
     scrollHeight: element.scrollHeight
   }));
-  expect(mobileReadyMetrics.scrollHeight).toBeGreaterThan(mobileReadyMetrics.clientHeight);
+  expect(mobileDraftsMetrics.scrollHeight).toBeGreaterThan(mobileDraftsMetrics.clientHeight);
   await expectPageNoHorizontalOverflow(page);
   await expectNoHorizontalOverflow(board, "mobile board");
-  await expectNoHorizontalOverflow(readyColumn, "mobile ready column");
-  await expectNoHorizontalOverflow(needsAttentionColumn, "mobile needs attention column");
+  await expectNoHorizontalOverflow(draftsColumn, "mobile drafts column");
+  await expectNoHorizontalOverflow(activeColumn, "mobile active column");
   await expectNoHorizontalOverflow(longReadyCard, "mobile long ready card");
   await expectNoHorizontalOverflow(longAttentionCard, "mobile long needs attention card");
-  await readyColumn.getByRole("button", { name: /US-900/ }).click();
+  await draftsColumn.getByRole("button", { name: /US-900/ }).click();
   await expect(page.getByRole("dialog", { name: "Selected work detail" })).toBeVisible();
 });
 
@@ -954,7 +975,7 @@ test("active run polling refreshes terminal review and needs-attention board sta
   });
 
   await page.goto("/");
-  await expect(page.getByRole("region", { name: "Review column" }).getByRole("button", { name: /US-069A/ })).toBeVisible({
+  await expect(page.getByRole("region", { name: "Ready column" }).getByRole("button", { name: /US-069A/ })).toBeVisible({
     timeout: 5000
   });
 
@@ -979,7 +1000,7 @@ test("active run polling refreshes terminal review and needs-attention board sta
     await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [attentionItem] }) });
   });
   await page.getByRole("button", { name: "Refresh", exact: true }).click();
-  await expect(page.getByRole("region", { name: "Needs Attention column" }).getByRole("button", { name: /US-069B/ })).toBeVisible({
+  await expect(page.getByRole("region", { name: "Active column" }).getByRole("button", { name: /US-069B/ })).toBeVisible({
     timeout: 5000
   });
 });

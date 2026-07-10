@@ -1,12 +1,12 @@
 import React from "react";
-import { AlertTriangle, Check, ChevronDown, GitPullRequestArrow, Play, PlayCircle, Radio, ShieldAlert } from "lucide-react";
-import { Badge } from "../../components/ui/badge";
+import { AlertTriangle, Check, ChevronDown, Circle, Play, PlayCircle, Radio } from "lucide-react";
+import { Badge, type BadgeTone } from "../../components/ui/badge";
 import { Card } from "../../components/ui/card";
 import { Button } from "../../components/ui/button";
 import { cn } from "../../lib/utils";
-import { agentLabel, agents, columnId, stateIcon, states } from "./constants";
-import { StatusBadge, toneForState } from "./status-badge";
-import type { AgentId, BoardItem, BoardState } from "./types";
+import { agentLabel, agents, bucketForItem, bucketIcon, bucketId, buckets } from "./constants";
+import { toneForState } from "./status-badge";
+import type { AgentId, BoardBucket, BoardItem, BoardState } from "./types";
 
 export function SummaryStrip({
   activeRun,
@@ -14,37 +14,37 @@ export function SummaryStrip({
   className
 }: {
   activeRun: BoardItem | undefined;
-  counts: Record<BoardState, number>;
+  counts: Record<BoardBucket, number>;
   className?: string;
 }) {
   const metrics = [
     {
-      label: "Active run",
-      value: activeRun?.id ?? "none",
+      label: "Drafts",
+      value: `${counts.Drafts} draft${counts.Drafts === 1 ? "" : "s"}`,
+      detail: "Planned work waiting to start.",
+      icon: Circle,
+      className: "border-zinc-500/25 bg-zinc-500/5 text-zinc-700 dark:text-zinc-400"
+    },
+    {
+      label: "Active",
+      value: activeRun?.id ?? `${counts.Active} active`,
       detail: activeRun?.active_run ? `${activeRun.active_run} is the only task allowed in progress.` : "No active Symphony run.",
       icon: Radio,
       className: activeRun?.active_run ? "border-blue-500/30 bg-blue-500/5 text-blue-800 dark:text-blue-400" : "border-border bg-card text-muted-foreground"
     },
     {
-      label: "Safe to start",
+      label: "Ready",
       value: `${counts.Ready} ready`,
-      detail: "Ready tasks have no incomplete blockers.",
+      detail: "Finished runs waiting for review or sync.",
       icon: PlayCircle,
       className: "border-emerald-500/30 bg-emerald-500/5 text-emerald-800 dark:text-emerald-400"
     },
     {
-      label: "Avoid for now",
-      value: `${counts.Blocked} blocked`,
-      detail: "Blocked work explains its missing dependency before action.",
-      icon: ShieldAlert,
-      className: "border-zinc-500/25 bg-zinc-500/5 text-zinc-700 dark:text-zinc-400"
-    },
-    {
-      label: "Needs decision",
-      value: `${counts.Review} review`,
-      detail: "Merge PR first, then approve local sync.",
-      icon: GitPullRequestArrow,
-      className: "border-violet-500/30 bg-violet-500/5 text-violet-800 dark:text-violet-400"
+      label: "Done",
+      value: `${counts.Done} done`,
+      detail: "Completed work kept for history.",
+      icon: Check,
+      className: "border-teal-500/30 bg-teal-500/5 text-teal-800 dark:text-teal-400"
     }
   ];
 
@@ -66,7 +66,7 @@ export function SummaryStrip({
             <div className="flex items-start gap-2.5">
               <span className={cn(
                 "grid size-8 lg:size-9 shrink-0 place-items-center rounded-lg border border-current/15 bg-background/40 shadow-sm",
-                metric.label === "Active run" && activeRun?.active_run && "motion-safe:animate-pulse"
+                metric.label === "Active" && activeRun?.active_run && "motion-safe:animate-pulse"
               )}>
                 <Icon className="size-4 lg:size-4.5" />
               </span>
@@ -102,31 +102,31 @@ export function BoardGrid({
 }) {
   return (
     <div className="min-h-0 min-w-0 overflow-x-auto">
-      <div className="grid h-[calc(100dvh-244px)] min-h-[410px] min-w-[1500px] grid-cols-[repeat(6,minmax(240px,1fr))] items-stretch gap-2.5 lg:gap-3 max-sm:h-auto max-sm:min-h-0 max-sm:min-w-0 max-sm:grid-cols-1">
-        {states.map((state) => {
-          const stateItems = items.filter((item) => item.board_state === state);
-          const Icon = stateIcon[state];
+      <div className="grid h-[calc(100dvh-244px)] min-h-[410px] min-w-[940px] grid-cols-[repeat(4,minmax(220px,1fr))] items-stretch gap-2.5 lg:gap-3 max-sm:h-auto max-sm:min-h-0 max-sm:min-w-0 max-sm:grid-cols-1">
+        {buckets.map((bucket) => {
+          const bucketItems = items.filter((item) => bucketForItem(item) === bucket);
+          const Icon = bucketIcon[bucket];
           return (
             <section
-              key={state}
-              id={columnId(state)}
-              aria-label={`${state} column`}
+              key={bucket}
+              id={bucketId(bucket)}
+              aria-label={`${bucket} column`}
               className={cn(
                 "flex h-full min-h-0 flex-col overflow-hidden rounded-xl border bg-muted/20 shadow-sm max-sm:h-[min(520px,calc(100dvh-180px))] max-sm:min-h-[320px]",
-                columnChrome[state]
+                bucketChrome[bucket]
               )}
             >
               <div className="flex min-h-12 items-center justify-between gap-2 border-b border-border bg-card/60 backdrop-blur-sm px-3 py-2">
                 <div className="flex items-center gap-2">
-                  <span className={cn("grid size-6 place-items-center rounded-md border", columnIcon[state])}>
-                    <Icon className={cn("size-3.5", state === "In Progress" && "motion-safe:animate-spin")} />
+                  <span className={cn("grid size-6 place-items-center rounded-md border", bucketIconClass[bucket])}>
+                    <Icon className={cn("size-3.5", bucket === "Active" && activeRunId && "motion-safe:animate-spin")} />
                   </span>
-                  <h2 className="text-sm font-bold tracking-tight text-foreground">{state}</h2>
+                  <h2 className="text-sm font-bold tracking-tight text-foreground">{bucket}</h2>
                 </div>
-                <StatusBadge state={state}>{stateItems.length}</StatusBadge>
+                <Badge tone={bucketTone[bucket]}>{bucketItems.length}</Badge>
               </div>
-              <div aria-label={`${state} tasks`} className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2 scrollbar-thin">
-                {stateItems.map((item) => (
+              <div aria-label={`${bucket} tasks`} className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2 scrollbar-thin">
+                {bucketItems.map((item) => (
                   <TaskCard
                     key={item.id}
                     item={item}
@@ -138,7 +138,7 @@ export function BoardGrid({
                     onRun={onRun}
                   />
                 ))}
-                {stateItems.length === 0 ? (
+                {bucketItems.length === 0 ? (
                   <div className="flex min-h-24 items-center justify-center rounded-lg border border-dashed border-border/80 bg-card/45 px-3 text-center text-xs text-muted-foreground font-medium">
                     No tasks
                   </div>
@@ -306,13 +306,25 @@ const columnChrome: Record<BoardState, string> = {
   Done: "border-border border-t-2 border-t-teal-500/80 dark:border-t-teal-400/80"
 };
 
-const columnIcon: Record<BoardState, string> = {
-  Ready: "column-icon-ready",
-  Blocked: "column-icon-blocked",
-  "In Progress": "column-icon-progress",
-  Review: "column-icon-review",
-  "Needs Attention": "column-icon-attention",
+const bucketChrome: Record<BoardBucket, string> = {
+  Drafts: columnChrome.Ready,
+  Active: columnChrome["In Progress"],
+  Ready: columnChrome.Review,
+  Done: columnChrome.Done
+};
+
+const bucketIconClass: Record<BoardBucket, string> = {
+  Drafts: "column-icon-ready",
+  Active: "column-icon-progress",
+  Ready: "column-icon-review",
   Done: "column-icon-done"
+};
+
+const bucketTone: Record<BoardBucket, BadgeTone> = {
+  Drafts: "neutral",
+  Active: "info",
+  Ready: "accent",
+  Done: "complete"
 };
 
 const stateDot: Record<BoardState, string> = {

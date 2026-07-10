@@ -12,6 +12,8 @@ export type BoardState =
   | "Needs Attention"
   | "Done";
 
+export type BoardBucket = "Drafts" | "Active" | "Ready" | "Done";
+
 export type FailureSummary = {
   category: string;
   reason: string;
