@@ -30,6 +30,10 @@ UI no longer uses and which bypassed all recovery guardrails, is removed.
 - `POST /api/runs/<run_id>/reject` returns 404 and no longer mutates run
   state; recovery remains available only through the guarded
   request-changes, recover, and pr-retry endpoints.
+- Concurrent connection handlers are capped (64); connections over the cap
+  are shed with a 503 instead of exhausting OS threads, and capacity is
+  reclaimed when held connections close. Thread spawn failures and socket
+  timeout setup failures are logged without stopping the accept loop.
 
 ## Design Notes
 
@@ -45,7 +49,7 @@ UI no longer uses and which bypassed all recovery guardrails, is removed.
 | Layer | Expected proof |
 | --- | --- |
 | Unit | `connection_handler_swallows_response_write_failures`, `removed_reject_endpoint_returns_not_found_and_keeps_run_state` in `web::tests` |
-| Integration | `serve_answers_requests_while_another_connection_is_idle`, `serve_survives_clients_that_disconnect_early` boot a real listener |
+| Integration | `serve_answers_requests_while_another_connection_is_idle`, `serve_survives_clients_that_disconnect_early`, `serve_sheds_connections_over_the_concurrency_limit_and_recovers` boot a real listener |
 | E2E | Manual: live server survived idle socket, unread-response closes, and an SO_LINGER=0 RST client; `/health` and `/api/board` answered afterwards; log shows swallowed `Broken pipe (os error 32)` warning |
 | Platform | n/a |
 | Release | n/a |

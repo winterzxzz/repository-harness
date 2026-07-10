@@ -367,8 +367,20 @@ pub fn run_web_server(config: &ResolvedConfig, options: WebServerOptions) -> Res
 }
 
 const CONNECTION_IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const MAX_CONCURRENT_CONNECTIONS: usize = 64;
+
+struct ConnectionSlot(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for ConnectionSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
 
 fn serve(config: &ResolvedConfig, listener: TcpListener) -> Result<(), WebError> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let active = std::sync::Arc::new(AtomicUsize::new(0));
     for stream in listener.incoming() {
         let mut stream = match stream {
             Ok(stream) => stream,
@@ -385,9 +397,26 @@ fn serve(config: &ResolvedConfig, listener: TcpListener) -> Result<(), WebError>
         if let Err(error) = stream.set_write_timeout(Some(CONNECTION_IO_TIMEOUT)) {
             eprintln!("warning: symphony web failed to set write timeout: {error}");
         }
+        // Bound handler threads so a connection flood sheds load with 503s
+        // instead of exhausting OS threads.
+        if active.fetch_add(1, Ordering::AcqRel) >= MAX_CONCURRENT_CONNECTIONS {
+            active.fetch_sub(1, Ordering::AcqRel);
+            if let Ok(response) = json_response(
+                503,
+                &ErrorResponse {
+                    error: "too many concurrent connections; retry shortly".to_owned(),
+                },
+            ) {
+                let _ = stream.write_all(response.as_bytes());
+            }
+            continue;
+        }
+        let slot = ConnectionSlot(std::sync::Arc::clone(&active));
         let config = config.clone();
-        let spawned = std::thread::Builder::new()
-            .spawn(move || handle_connection(&config, &mut stream));
+        let spawned = std::thread::Builder::new().spawn(move || {
+            let _slot = slot;
+            handle_connection(&config, &mut stream);
+        });
         if let Err(error) = spawned {
             eprintln!("warning: symphony web failed to spawn connection thread: {error}");
         }
@@ -4126,6 +4155,35 @@ exit 1
         let _idle = std::net::TcpStream::connect(address).unwrap();
         let response = fetch_health(address);
 
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
+    }
+
+    #[test]
+    fn serve_sheds_connections_over_the_concurrency_limit_and_recovers() {
+        use std::io::Read;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = test_config(&temp_dir);
+        let address = spawn_test_server(config);
+
+        let mut held = Vec::new();
+        for _ in 0..MAX_CONCURRENT_CONNECTIONS {
+            held.push(std::net::TcpStream::connect(address).unwrap());
+        }
+        // Handler threads take a moment to claim their slots.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+
+        let mut over_limit = std::net::TcpStream::connect(address).unwrap();
+        over_limit
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        let mut response = String::new();
+        over_limit.read_to_string(&mut response).unwrap();
+        assert!(response.starts_with("HTTP/1.1 503 Service Unavailable"));
+
+        drop(held);
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let response = fetch_health(address);
         assert!(response.starts_with("HTTP/1.1 200 OK"));
     }
 
