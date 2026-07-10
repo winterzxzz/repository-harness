@@ -16,7 +16,7 @@ import {
   postCreateGuidedIntake,
   postMarkPrMerged,
   postRecoverTask,
-  postRejectRun,
+  postRequestChanges,
   postRetireTask,
   postRetryPr,
   postStartTask,
@@ -39,7 +39,7 @@ import type {
   GuidedIntakeDraft,
   PrMergedResponse,
   PrRetryResponse,
-  RejectRunResponse,
+  RequestChangesResponse,
   RecoveryAction
 } from "./features/symphony/types";
 import { cn } from "./lib/utils";
@@ -68,7 +68,7 @@ function App() {
   const [syncingRunId, setSyncingRunId] = React.useState<string | null>(null);
   const [markingMergedRunId, setMarkingMergedRunId] = React.useState<string | null>(null);
   const [retryingPrRunId, setRetryingPrRunId] = React.useState<string | null>(null);
-  const [rejectingRunId, setRejectingRunId] = React.useState<string | null>(null);
+  const [requestingChangesRunId, setRequestingChangesRunId] = React.useState<string | null>(null);
   const [creatingStory, setCreatingStory] = React.useState(false);
   const [intakeError, setIntakeError] = React.useState<string | null>(null);
   const [defaultAgent, setDefaultAgent] = React.useState<AgentId>("codex");
@@ -341,22 +341,26 @@ function App() {
     [loadBoard, toast]
   );
 
-  const rejectRun = React.useCallback(
-    async (runId: string, reason: string): Promise<RejectRunResponse> => {
-      setRejectingRunId(runId);
+  const requestChanges = React.useCallback(
+    async (runId: string, reason: string, files: File[]): Promise<RequestChangesResponse> => {
+      setRequestingChangesRunId(runId);
       setError(null);
       try {
-        const result = await postRejectRun(runId, reason);
+        const result = await postRequestChanges(runId, reason, files);
         await loadBoard();
-        toast.add({ kind: "info", title: "Run rejected", description: result.next_action });
+        toast.add({
+          kind: "success",
+          title: "Changes requested",
+          description: `${result.story_id} restarted as ${result.run_id}.`
+        });
         return result;
       } catch (cause) {
-        const msg = cause instanceof Error ? cause.message : "Reject failed";
+        const msg = cause instanceof Error ? cause.message : "Request changes failed";
         setError(msg);
-        toast.add({ kind: "error", title: "Reject failed", description: msg });
+        toast.add({ kind: "error", title: "Request changes failed", description: msg });
         throw cause;
       } finally {
-        setRejectingRunId(null);
+        setRequestingChangesRunId(null);
       }
     },
     [loadBoard, toast]
@@ -560,7 +564,7 @@ function App() {
                 syncingRunId={syncingRunId}
                 markingMergedRunId={markingMergedRunId}
                 retryingPrRunId={retryingPrRunId}
-                rejectingRunId={rejectingRunId}
+                requestingChangesRunId={requestingChangesRunId}
                 onClose={closeSelectedTask}
                 onStart={startTask}
                 onRetire={retireTask}
@@ -568,7 +572,7 @@ function App() {
                 onSync={syncRun}
                 onMarkPrMerged={markPrMerged}
                 onRetryPr={retryPr}
-                onReject={rejectRun}
+                onRequestChanges={requestChanges}
               />
             </TaskDetailOverlay>
           ) : null}
