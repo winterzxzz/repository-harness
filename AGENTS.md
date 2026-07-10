@@ -6,6 +6,16 @@ Use `.codex/skills/harness-intake-griller/SKILL.md` when a request needs
 discussion, feature intake, docs, or story shaping before Symphony execution.
 The skill is project-scoped; do not use a global copy as the source of truth.
 
+## Template Review Boundary
+
+Before reviewing workflow, reliability, or cost, check whether
+`scripts/harness-install-files.txt` exists. Its presence identifies the Harness
+source template: assess its fresh installer payload, not source-only stories,
+decisions, ignored databases, changesets, or run history. Label each finding as
+`template`, `fresh-install`, or `source-repo`; call it a template defect only
+when it reproduces in the template or a fresh install. This guard does not
+apply when the user explicitly asks to audit the source repository's own state.
+
 <!-- HARNESS:BEGIN -->
 ## Harness
 
