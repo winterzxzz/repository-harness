@@ -19,7 +19,7 @@ implemented until tests or validation evidence exist.
 
 | Story | Contract | Unit | Integration | E2E | Platform | Status | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| US-086 | macOS Homebrew Harness bootstrap | yes | yes | no | no | in_progress | 2026-07-10 local: fmt, workspace tests, clippy, installer and macOS-kit validators, temporary-tap brew install/init/update smoke; public release, public-tap install, and both hosted macOS runners pending |
+| US-086 | macOS Homebrew Harness bootstrap | yes | yes | yes | no | implemented | 2026-07-10 local matrix passed; 2026-07-11 harness-kit-v0.1.0 released (locally built, Actions billing-locked) and public-tap brew install/init E2E passed on arm64; Intel runtime and hosted-runner builds pending |
 
 ## Evidence Rules
 

@@ -2,7 +2,7 @@
 
 ## Status
 
-in_progress
+implemented
 
 ## Lane
 
@@ -68,6 +68,16 @@ repository-local Harness operating model.
   --workspace`, `cargo clippy --workspace -- -D warnings`, the installer and
   macOS-kit validators, and a temporary-tap Homebrew install/init/`--init`/
   update smoke test.
-- Public GitHub Release assets, a public-tap install, and both hosted macOS
-  architecture runners remain required before E2E, platform, and release proof
-  can be recorded.
+- 2026-07-11 release proof: `harness-kit-v0.1.0` published with arm64 and x64
+  archives plus SHA-256 assets; `Formula/harness.rb` in `winterzxzz/homebrew-tap`
+  pins both checksums. Kits were built and published from a verified local
+  checkout of `main` (commit 77afe70) because GitHub Actions is locked by an
+  account billing issue; the kit release workflow resumes publication once
+  Actions is restored.
+- 2026-07-11 E2E proof on macOS arm64: `brew install winterzxzz/tap/harness`,
+  `harness --version`, `harness init --dry-run`, and a real `harness init`
+  (38 files, bundled CLI 0.1.11 verified) all passed against the public tap.
+- Platform proof remains open: the x64 kit is cross-compiled and published but
+  has not executed on Intel hardware, and neither hosted macOS runner has built
+  a kit (Actions billing lock). `brew audit --strict --online` also awaits tap
+  CI.
