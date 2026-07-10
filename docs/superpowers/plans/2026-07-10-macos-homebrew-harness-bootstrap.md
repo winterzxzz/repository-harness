@@ -89,7 +89,7 @@ GitHub Releases, Homebrew Formulae, GitHub CLI.
   `docs/TEST_MATRIX.md`. Then run:
 
   ```bash
-  scripts/bin/harness-cli story add \
+  target/debug/harness-cli story add \
     --id US-086 \
     --title "macOS Homebrew Harness bootstrap" \
     --lane normal \
@@ -104,7 +104,7 @@ GitHub Releases, Homebrew Formulae, GitHub CLI.
   Run:
 
   ```bash
-  scripts/bin/harness-cli query matrix
+  target/debug/harness-cli query matrix
   ```
 
   Expected: one `US-086` row appears with all proof flags unset.
@@ -686,7 +686,7 @@ nonexistent or mutable artifact.
   Update `US-086` with every command and result. Then run:
 
   ```bash
-  scripts/bin/harness-cli story update \
+  target/debug/harness-cli story update \
     --id US-086 \
     --status implemented \
     --unit 1 \
