@@ -97,9 +97,9 @@ HARNESS_CLI_BASE_URL="file://$RELEASE_DIR" \
 test -f "$FRESH_TARGET/docs/HARNESS.md" || fail "fresh install omitted core policy"
 test -f "$FRESH_TARGET/docs/decisions/README.md" || fail "fresh install omitted decision scaffold"
 test ! -e "$FRESH_TARGET/README.md" || fail "fresh install copied source repository README"
-if find "$FRESH_TARGET/docs/decisions" -maxdepth 1 -type f -name '[0-9][0-9][0-9][0-9]*.md' | grep -q .; then
-  fail "fresh install copied numbered decision history"
-fi
+for decision_file in "$FRESH_TARGET/docs/decisions"/[0-9][0-9][0-9][0-9]*.md; do
+  test ! -f "$decision_file" || fail "fresh install copied numbered decision history"
+done
 test ! -e "$FRESH_TARGET/harness.db" || fail "fresh install created operational database"
 test ! -e "$FRESH_TARGET/.harness" || fail "fresh install created runtime history"
 
