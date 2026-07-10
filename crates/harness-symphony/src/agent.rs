@@ -457,7 +457,7 @@ fn turn_error_from_query<'a>(message: &'a Value, turn_id: &str) -> Option<&'a st
 
 fn agent_prompt(config: &ResolvedConfig, prepared: &PreparedRun) -> String {
     let harness_cli = config.repo_root.join("scripts/bin/harness-cli");
-    format!(
+    let mut prompt = format!(
         "You are running inside a Harness Symphony worktree. Read AGENTS.md and the run contract at {}. Complete only story {} for run {}. Do not change unrelated product code. Write all required artifacts under the current working directory: .harness/runs/{}/SUMMARY.md and .harness/runs/{}/RESULT.json. Use Harness CLI writes with HARNESS_DB_PATH, HARNESS_RUN_ID, and HARNESS_RUN_MODE from the environment so .harness/changesets/{}.changeset.jsonl is produced in this worktree. If scripts/bin/harness-cli is absent in the worktree, run the root binary at {} while keeping the current worktree as cwd. RESULT.json must have version 1, run_id {}, story_id {}, an allowed outcome, summary_path .harness/runs/{}/SUMMARY.md, and a top-level validation object. Do not write validation_evidence. validation must be either {{\"commands\":[{{\"command\":\"exact command\",\"result\":\"pass\"}}]}} with each result set to pass, fail, or unavailable, or {{\"unavailable\":\"non-empty reason\"}}.",
         prepared.contract_path.display(),
         prepared.story_id,
@@ -469,7 +469,19 @@ fn agent_prompt(config: &ResolvedConfig, prepared: &PreparedRun) -> String {
         prepared.run_id,
         prepared.story_id,
         prepared.run_id
-    )
+    );
+    if let Some(feedback) = prepared.request_changes.as_ref() {
+        let evidence_paths = if feedback.evidence_paths.is_empty() {
+            "none".to_owned()
+        } else {
+            feedback.evidence_paths.join(", ")
+        };
+        prompt.push_str(&format!(
+            " This is a request-changes replacement for source run {}. Read the request-changes reason at {} before editing. Inspect every evidence image before editing: {}. If this agent adapter cannot inspect images, report the limitation in SUMMARY.md instead of silently ignoring the evidence.",
+            feedback.source_run_id, feedback.reason_path, evidence_paths
+        ));
+    }
+    prompt
 }
 
 fn terminate_child(child: &mut std::process::Child) {
@@ -529,6 +541,7 @@ mod tests {
             contract_path: Path::new("/repo/.harness/runs/run_1/RUN_CONTRACT.json").to_path_buf(),
             harness_db_path: Path::new("/repo/.symphony/worktrees/run_1/harness.db").to_path_buf(),
             lightweight: false,
+            request_changes: None,
         }
     }
 
@@ -568,6 +581,25 @@ mod tests {
         assert!(prompt.contains("top-level validation object"));
         assert!(prompt.contains("Do not write validation_evidence"));
         assert!(prompt.contains("\"result\":\"pass\""));
+    }
+
+    #[test]
+    fn request_changes_prompt_requires_image_inspection() {
+        let config = config("codex", vec![]);
+        let mut prepared = prepared();
+        prepared.request_changes = Some(crate::run::RequestChangesContract {
+            source_run_id: "run_old".to_owned(),
+            reason_path: ".harness/runs/run_1/feedback/reason.md".to_owned(),
+            evidence_paths: vec![".harness/runs/run_1/feedback/evidence-01.png".to_owned()],
+        });
+
+        let prompt = agent_prompt(&config, &prepared);
+
+        assert!(prompt.contains("Read the request-changes reason"));
+        assert!(prompt.contains("Inspect every evidence image"));
+        assert!(prompt.contains("feedback/reason.md"));
+        assert!(prompt.contains("feedback/evidence-01.png"));
+        assert!(prompt.contains("report the limitation in SUMMARY.md"));
     }
 
     #[test]

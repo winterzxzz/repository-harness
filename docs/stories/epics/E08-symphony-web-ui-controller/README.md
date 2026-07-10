@@ -42,6 +42,8 @@ Symphony records.
 24. `US-070` - Readable Done column task cards.
 25. `US-082` - Open the browser controller automatically after the local Web UI
     server binds, with a headless opt-out.
+26. `US-084` - Request changes with a reason and local image evidence from
+    completed Ready work.
 
 ## Exit Criteria
 
@@ -65,6 +67,9 @@ Symphony records.
   task detail popup.
 - Dense Done columns preserve readable compact card summaries instead of
   collapsing implemented stories into clipped strips.
+- Ready review supports requesting changes with a required reason and optional
+  local image evidence, immediately starting a replacement run for the same
+  story while preserving the prior attempt.
 - Future Web UI work follows an explicit lightweight controller design contract
   backed by build, Playwright, screenshot, and optional design-lint validation.
 - Dependency cycles are detected and shown as task breakdown problems.

@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   Clock3,
   GitPullRequestArrow,
+  ImagePlus,
   Loader2,
   Play,
   RefreshCw,
@@ -17,7 +18,17 @@ import { Separator } from "../../components/ui/separator";
 import { ApiError, fetchEvents, fetchReview } from "./api";
 import { ContextViewer } from "./context-viewer";
 import { StatusBadge } from "./status-badge";
-import type { BoardItem, FailureSummary, PrMergedResponse, PrRetryResponse, RecoveryAction, RejectRunResponse, ReviewResponse, RunEvent } from "./types";
+import type {
+  BoardItem,
+  FailureSummary,
+  PrMergedResponse,
+  PrRetryResponse,
+  RecoveryAction,
+  RequestChangesResponse,
+  ReviewFeedback,
+  ReviewResponse,
+  RunEvent
+} from "./types";
 import { cn } from "../../lib/utils";
 import { formatRunLog } from "../../run-log";
 import { agentLabel } from "./constants";
@@ -176,7 +187,7 @@ export function TaskDetail({
   syncingRunId,
   markingMergedRunId,
   retryingPrRunId,
-  rejectingRunId,
+  requestingChangesRunId,
   onClose,
   onStart,
   onRetire,
@@ -184,7 +195,7 @@ export function TaskDetail({
   onSync,
   onMarkPrMerged,
   onRetryPr,
-  onReject
+  onRequestChanges
 }: {
   item: BoardItem;
   startingId: string | null;
@@ -193,7 +204,7 @@ export function TaskDetail({
   syncingRunId: string | null;
   markingMergedRunId: string | null;
   retryingPrRunId: string | null;
-  rejectingRunId: string | null;
+  requestingChangesRunId: string | null;
   onClose: (origin?: HTMLElement) => void;
   onStart: (storyId: string) => Promise<void>;
   onRetire: (item: BoardItem) => Promise<void>;
@@ -201,7 +212,7 @@ export function TaskDetail({
   onSync: (runId: string) => Promise<void>;
   onMarkPrMerged: (runId: string) => Promise<PrMergedResponse>;
   onRetryPr: (runId: string, action: RecoveryAction) => Promise<PrRetryResponse>;
-  onReject: (runId: string, reason: string) => Promise<RejectRunResponse>;
+  onRequestChanges: (runId: string, reason: string, files: File[]) => Promise<RequestChangesResponse>;
 }) {
   const [events, setEvents] = React.useState<RunEvent[]>([]);
   const [reviewState, setReviewState] = React.useState<ReviewState>({ status: "idle" });
@@ -437,11 +448,12 @@ export function TaskDetail({
             syncing={syncingRunId === review.run_id}
             markingMerged={markingMergedRunId === review.run_id}
             retryingPr={retryingPrRunId === review.run_id}
-            rejecting={rejectingRunId === review.run_id}
+            requestingChanges={requestingChangesRunId === review.run_id}
+            allowRequestChanges={item.board_state === "Review"}
             onSync={onSync}
             onMarkPrMerged={markReviewPrMerged}
             onRetryPr={retryReviewPr}
-            onReject={onReject}
+            onRequestChanges={onRequestChanges}
           />
         </div>
       ) : null}
@@ -477,27 +489,27 @@ function ReviewPanel({
   syncing,
   markingMerged,
   retryingPr,
-  rejecting,
+  requestingChanges,
+  allowRequestChanges,
   onSync,
   onMarkPrMerged,
   onRetryPr,
-  onReject
+  onRequestChanges
 }: {
   review: ReviewResponse;
   syncing: boolean;
   markingMerged: boolean;
   retryingPr: boolean;
-  rejecting: boolean;
+  requestingChanges: boolean;
+  allowRequestChanges: boolean;
   onSync: (runId: string) => Promise<void>;
   onMarkPrMerged: (runId: string) => Promise<void>;
   onRetryPr: (runId: string, action: RecoveryAction) => Promise<void>;
-  onReject: (runId: string, reason: string) => Promise<RejectRunResponse>;
+  onRequestChanges: (runId: string, reason: string, files: File[]) => Promise<RequestChangesResponse>;
 }) {
   const canMarkMerged = review.pr_status === "created" && review.pr_url !== null;
   const canSync = review.pr_status === "merged" && review.status === "completed";
   const prRecovery = review.recovery_action?.kind === "pr_retry" ? review.recovery_action : null;
-  const [reviewNote, setReviewNote] = React.useState("");
-  const rejectDisabled = rejecting || reviewNote.trim().length === 0;
 
   return (
     <div className="flex flex-col gap-3">
@@ -534,18 +546,9 @@ function ReviewPanel({
       <ListBlock title="Changed files" values={review.changed_files} empty="No changed files listed" />
       {review.changeset_preview ? <TextBlock title="Changeset" text={review.changeset_preview} /> : null}
       <ListBlock title="Artifacts" values={review.artifact_paths} empty="No artifacts found" />
+      {review.request_changes ? <RequestChangesHistory feedback={review.request_changes} /> : null}
 
       <Separator />
-      <label className="grid gap-2">
-        <span className="text-xs font-bold uppercase tracking-widest text-muted-foreground/70">Review note</span>
-        <textarea
-          aria-label="Review note"
-          className="min-h-20 resize-y rounded-lg border border-border bg-background/50 p-3 text-sm leading-6 text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          maxLength={500}
-          value={reviewNote}
-          onChange={(event) => setReviewNote(event.target.value)}
-        />
-      </label>
       <div className="flex flex-wrap gap-2">
         {prRecovery ? (
           <Button variant="outline" disabled={retryingPr} onClick={() => void onRetryPr(review.run_id, prRecovery)}>
@@ -569,13 +572,261 @@ function ReviewPanel({
           {syncing ? <Loader2 data-icon="inline-start" className="motion-safe:animate-spin" /> : <CheckCircle2 data-icon="inline-start" />}
           Approve Sync
         </Button>
-        <Button variant="outline" disabled={rejectDisabled} onClick={() => void onReject(review.run_id, reviewNote.trim())}>
-          {rejecting ? <Loader2 data-icon="inline-start" className="motion-safe:animate-spin" /> : <ShieldAlert data-icon="inline-start" />}
-          Reject run
-        </Button>
       </div>
+      {allowRequestChanges ? (
+        <RequestChangesForm
+          runId={review.run_id}
+          submitting={requestingChanges}
+          onRequestChanges={onRequestChanges}
+        />
+      ) : null}
     </div>
   );
+}
+
+const MAX_REQUEST_CHANGES_FILES = 3;
+const MAX_REQUEST_CHANGES_FILE_BYTES = 5 * 1024 * 1024;
+const REQUEST_CHANGES_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+
+function RequestChangesForm({
+  runId,
+  submitting,
+  onRequestChanges
+}: {
+  runId: string;
+  submitting: boolean;
+  onRequestChanges: (runId: string, reason: string, files: File[]) => Promise<RequestChangesResponse>;
+}) {
+  const [reason, setReason] = React.useState("");
+  const [files, setFiles] = React.useState<File[]>([]);
+  const [validationError, setValidationError] = React.useState<string | null>(null);
+  const [dragging, setDragging] = React.useState(false);
+  const [previews, setPreviews] = React.useState<{ file: File; url: string }[]>([]);
+
+  React.useEffect(() => {
+    const nextPreviews = files.map((file) => ({ file, url: URL.createObjectURL(file) }));
+    setPreviews(nextPreviews);
+    return () => {
+      nextPreviews.forEach((preview) => URL.revokeObjectURL(preview.url));
+    };
+  }, [files]);
+
+  React.useEffect(() => {
+    setReason("");
+    setFiles([]);
+    setValidationError(null);
+  }, [runId]);
+
+  function addFiles(incoming: File[]) {
+    setValidationError(null);
+    if (files.length + incoming.length > MAX_REQUEST_CHANGES_FILES) {
+      setValidationError("Attach up to 3 evidence images.");
+      return;
+    }
+    const unsupported = incoming.find((file) => !REQUEST_CHANGES_IMAGE_TYPES.has(file.type));
+    if (unsupported) {
+      setValidationError(`${unsupported.name} must be PNG, JPEG, or WebP.`);
+      return;
+    }
+    const oversized = incoming.find((file) => file.size > MAX_REQUEST_CHANGES_FILE_BYTES);
+    if (oversized) {
+      setValidationError(`${oversized.name} exceeds the 5 MB limit.`);
+      return;
+    }
+    setFiles((current) => [...current, ...incoming]);
+  }
+
+  function removeFile(index: number) {
+    setFiles((current) => current.filter((_, currentIndex) => currentIndex !== index));
+    setValidationError(null);
+  }
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const trimmedReason = reason.trim();
+    if (!trimmedReason) {
+      setValidationError("Enter a reason before requesting changes.");
+      return;
+    }
+    setValidationError(null);
+    try {
+      await onRequestChanges(runId, trimmedReason, files);
+      setReason("");
+      setFiles([]);
+    } catch (cause) {
+      setValidationError(cause instanceof Error ? cause.message : "Request changes failed");
+    }
+  }
+
+  const inputId = `request-changes-evidence-${runId}`;
+  const reasonLength = reason.length;
+  const disabled = submitting || reason.trim().length === 0 || validationError !== null;
+
+  return (
+    <form className="rounded-xl border border-violet-200/80 bg-violet-50/45 p-4" onSubmit={(event) => void submit(event)}>
+      <div className="flex items-start gap-3">
+        <span className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-lg bg-violet-200/60 text-violet-900">
+          <RefreshCw className="size-4" aria-hidden="true" />
+        </span>
+        <div className="min-w-0">
+          <h3 className="text-sm font-bold text-foreground">Request changes</h3>
+          <p className="mt-1 text-sm leading-6 text-muted-foreground">
+            Preserve this run, attach clear evidence, and start a replacement run for the same story.
+          </p>
+        </div>
+      </div>
+
+      <label className="mt-4 grid gap-2">
+        <span className="flex items-center justify-between gap-3 text-xs font-bold text-muted-foreground">
+          <span>Change reason</span>
+          <span aria-live="polite" className="font-mono font-medium">
+            {reasonLength}/2000
+          </span>
+        </span>
+        <textarea
+          aria-label="Request changes reason"
+          className="min-h-24 resize-y rounded-lg border border-input bg-background p-3 text-sm leading-6 text-foreground outline-none transition-colors focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30"
+          maxLength={2000}
+          placeholder="Describe what is not acceptable and what should change."
+          value={reason}
+          onChange={(event) => {
+            setReason(event.target.value);
+            if (validationError?.startsWith("Enter a reason")) {
+              setValidationError(null);
+            }
+          }}
+        />
+      </label>
+
+      <div className="mt-4 grid gap-2">
+        <div className="flex items-center justify-between gap-3 text-xs font-bold text-muted-foreground">
+          <span>Evidence images</span>
+          <span aria-live="polite">{files.length}/3 images</span>
+        </div>
+        <div
+          aria-label="Image evidence drop zone"
+          className={cn(
+            "rounded-xl border border-dashed p-4 transition-colors",
+            dragging ? "border-violet-500 bg-violet-200/35" : "border-violet-200 bg-background/70"
+          )}
+          onDragEnter={(event) => {
+            event.preventDefault();
+            setDragging(true);
+          }}
+          onDragOver={(event) => event.preventDefault()}
+          onDragLeave={() => setDragging(false)}
+          onDrop={(event) => {
+            event.preventDefault();
+            setDragging(false);
+            addFiles(Array.from(event.dataTransfer.files));
+          }}
+        >
+          <input
+            id={inputId}
+            aria-label="Evidence images"
+            className="sr-only"
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            multiple
+            onChange={(event) => {
+              addFiles(Array.from(event.currentTarget.files ?? []));
+              event.currentTarget.value = "";
+            }}
+          />
+          <label htmlFor={inputId} className="flex cursor-pointer items-center gap-3 rounded-lg outline-none focus-within:ring-2 focus-within:ring-ring">
+            <span className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg bg-violet-200/55 text-violet-900">
+              <ImagePlus className="size-4" aria-hidden="true" />
+            </span>
+            <span className="min-w-0">
+              <span className="block text-sm font-semibold text-foreground">Choose images or drop them here</span>
+              <span className="mt-0.5 block text-xs leading-5 text-muted-foreground">PNG, JPEG, or WebP; 5 MB each.</span>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      {previews.length > 0 ? (
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          {previews.map(({ file, url }, index) => (
+            <div key={`${file.name}-${file.lastModified}-${index}`} className="flex min-w-0 items-center gap-3 rounded-lg border border-border bg-background p-2">
+              <img src={url} alt={`Preview ${file.name}`} className="size-14 shrink-0 rounded-md bg-muted object-contain" />
+              <div className="min-w-0 flex-1">
+                <p className="bounded-text text-xs font-semibold text-foreground">{file.name}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{formatFileSize(file.size)}</p>
+              </div>
+              <Button type="button" variant="ghost" size="icon" aria-label={`Remove ${file.name}`} onClick={() => removeFile(index)}>
+                <X aria-hidden="true" />
+              </Button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {validationError ? (
+        <div role="alert" className="mt-3 flex items-start justify-between gap-3 rounded-lg bg-destructive/10 px-3 py-2 text-sm font-medium text-destructive">
+          <span>{validationError}</span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label="Dismiss evidence error"
+            className="size-7 shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
+            onClick={() => setValidationError(null)}
+          >
+            <X aria-hidden="true" />
+          </Button>
+        </div>
+      ) : null}
+
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+        <p className="max-w-md text-xs leading-5 text-muted-foreground">The previous run and its artifacts remain available for review.</p>
+        <Button type="submit" variant="outline" disabled={disabled}>
+          {submitting ? <Loader2 data-icon="inline-start" className="motion-safe:animate-spin" /> : <RefreshCw data-icon="inline-start" />}
+          Request changes
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+function RequestChangesHistory({ feedback }: { feedback: ReviewFeedback }) {
+  return (
+    <section aria-label="Previous request changes" className="rounded-xl bg-violet-50/60 p-4">
+      <div className="flex items-center gap-2">
+        <RefreshCw className="size-4 text-violet-800" aria-hidden="true" />
+        <h3 className="text-sm font-bold text-foreground">Previous request changes</h3>
+      </div>
+      <p className="bounded-text mt-2 text-sm leading-6 text-foreground">{feedback.reason}</p>
+      <p className="bounded-text mt-2 font-mono text-xs text-muted-foreground">{feedback.reason_path}</p>
+      {feedback.evidence.length > 0 ? (
+        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {feedback.evidence.map((evidence, index) => (
+            <figure key={evidence.path} className="min-w-0 overflow-hidden rounded-lg bg-background">
+              <img
+                src={evidence.url}
+                alt={`Request changes evidence ${index + 1}`}
+                className="h-32 w-full bg-muted object-contain"
+              />
+              <figcaption className="p-2">
+                <p className="bounded-text font-mono text-xs text-foreground">{evidence.path.split("/").pop()}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{formatFileSize(evidence.size)}</p>
+              </figcaption>
+            </figure>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function FailureSummaryPanel({ summary, compact = false }: { summary: FailureSummary; compact?: boolean }) {

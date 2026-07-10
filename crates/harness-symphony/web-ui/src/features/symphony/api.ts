@@ -10,8 +10,10 @@ import type {
   GuidedIntakeDraft,
   PrMergedResponse,
   PrRetryResponse,
-  RejectRunResponse,
+  RequestChangesResponse,
   RecoveryAction,
+  ReviewEvidence,
+  ReviewFeedback,
   ReviewResponse,
   SettingsResponse,
   SyncResponse,
@@ -128,13 +130,19 @@ export async function postRetryPr(action: RecoveryAction): Promise<PrRetryRespon
   return readJson(response, parsePrRetryResponse, "PR retry failed");
 }
 
-export async function postRejectRun(runId: string, reason: string): Promise<RejectRunResponse> {
-  const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/reject`, {
+export async function postRequestChanges(
+  runId: string,
+  reason: string,
+  files: File[]
+): Promise<RequestChangesResponse> {
+  const body = new FormData();
+  body.append("reason", reason);
+  files.forEach((file) => body.append("evidence", file));
+  const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/request-changes`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ reason })
+    body
   });
-  return readJson(response, parseRejectRunResponse, "Reject failed");
+  return readJson(response, parseRequestChangesResponse, "Request changes failed");
 }
 
 export async function postCreateGuidedIntake(draft: GuidedIntakeDraft): Promise<CreatedStoryResponse> {
@@ -258,7 +266,27 @@ function parseReviewResponse(value: unknown): ReviewResponse {
     events: expectArray(record.events, "events"),
     suggested_next_action: expectString(record.suggested_next_action, "suggested_next_action"),
     failure_summary: parseNullable(record.failure_summary, parseFailureSummary),
-    recovery_action: parseNullable(record.recovery_action, parseRecoveryAction)
+    recovery_action: parseNullable(record.recovery_action, parseRecoveryAction),
+    request_changes: parseNullable(record.request_changes, parseReviewFeedback)
+  };
+}
+
+function parseReviewFeedback(value: unknown): ReviewFeedback {
+  const record = expectRecord(value, "request_changes");
+  return {
+    reason: expectString(record.reason, "request_changes.reason"),
+    reason_path: expectString(record.reason_path, "request_changes.reason_path"),
+    evidence: expectArray(record.evidence, "request_changes.evidence").map(parseReviewEvidence)
+  };
+}
+
+function parseReviewEvidence(value: unknown): ReviewEvidence {
+  const record = expectRecord(value, "request_changes.evidence item");
+  return {
+    path: expectString(record.path, "request_changes.evidence.path"),
+    url: expectString(record.url, "request_changes.evidence.url"),
+    content_type: expectString(record.content_type, "request_changes.evidence.content_type"),
+    size: expectNumber(record.size, "request_changes.evidence.size")
   };
 }
 
@@ -338,12 +366,18 @@ function parsePrRetryResponse(value: unknown): PrRetryResponse {
   };
 }
 
-function parseRejectRunResponse(value: unknown): RejectRunResponse {
-  const record = expectRecord(value, "reject run response");
+function parseRequestChangesResponse(value: unknown): RequestChangesResponse {
+  const record = expectRecord(value, "request changes response");
+  const feedback = expectRecord(record.feedback, "request changes feedback");
   return {
+    source_run_id: expectString(record.source_run_id, "source_run_id"),
     run_id: expectString(record.run_id, "run_id"),
+    story_id: expectString(record.story_id, "story_id"),
     status: expectString(record.status, "status"),
-    next_action: expectString(record.next_action, "next_action")
+    feedback: {
+      reason_path: expectString(feedback.reason_path, "feedback.reason_path"),
+      evidence_paths: parseStringArray(feedback.evidence_paths, "feedback.evidence_paths")
+    }
   };
 }
 

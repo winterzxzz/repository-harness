@@ -93,6 +93,20 @@ export type ReviewResponse = {
   suggested_next_action: string;
   failure_summary: FailureSummary | null;
   recovery_action: RecoveryAction | null;
+  request_changes: ReviewFeedback | null;
+};
+
+export type ReviewFeedback = {
+  reason: string;
+  reason_path: string;
+  evidence: ReviewEvidence[];
+};
+
+export type ReviewEvidence = {
+  path: string;
+  url: string;
+  content_type: string;
+  size: number;
 };
 
 export type ContextResponse = {
@@ -150,8 +164,13 @@ export type PrRetryResponse = {
   pr_url: string | null;
 };
 
-export type RejectRunResponse = {
+export type RequestChangesResponse = {
+  source_run_id: string;
   run_id: string;
+  story_id: string;
   status: string;
-  next_action: string;
+  feedback: {
+    reason_path: string;
+    evidence_paths: string[];
+  };
 };

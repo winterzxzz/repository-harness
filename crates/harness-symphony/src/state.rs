@@ -12,6 +12,16 @@ pub enum StateError {
     ActiveRunExists(String),
     #[error("run not found: {0}")]
     RunNotFound(String),
+    #[error("run {id} cannot be replaced because status is {status}; only completed runs can request changes")]
+    RunNotReplaceable { id: String, status: String },
+    #[error(
+        "replacement story mismatch for {source_run_id}: source is {source_story_id}, replacement is {replacement_story_id}"
+    )]
+    ReplacementStoryMismatch {
+        source_run_id: String,
+        source_story_id: String,
+        replacement_story_id: String,
+    },
     #[error("sqlite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
     #[error("io error: {0}")]
@@ -141,24 +151,78 @@ impl RunStateStore {
         if let Some(active) = active_run_id(&transaction)? {
             return Err(StateError::ActiveRunExists(active));
         }
+        insert_run(&transaction, input, None)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub fn replace_run(
+        &self,
+        source_run_id: &str,
+        rejection_reason: &str,
+        replacement: NewRunRecord,
+    ) -> Result<(), StateError> {
+        self.replace_run_with_agent(source_run_id, rejection_reason, replacement, "codex")
+    }
+
+    pub fn replace_run_with_agent(
+        &self,
+        source_run_id: &str,
+        rejection_reason: &str,
+        replacement: NewRunRecord,
+        agent: &str,
+    ) -> Result<(), StateError> {
+        self.init()?;
+        let mut connection = Connection::open(&self.path)?;
+        let transaction = connection.transaction()?;
+        if let Some(active) = active_run_id(&transaction)? {
+            return Err(StateError::ActiveRunExists(active));
+        }
+        let source = transaction
+            .query_row(
+                "SELECT story_id, status FROM run_state WHERE run_id=?1;",
+                params![source_run_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?
+            .ok_or_else(|| StateError::RunNotFound(source_run_id.to_owned()))?;
+        if source.1 != "completed" {
+            return Err(StateError::RunNotReplaceable {
+                id: source_run_id.to_owned(),
+                status: source.1,
+            });
+        }
+        if source.0 != replacement.story_id {
+            return Err(StateError::ReplacementStoryMismatch {
+                source_run_id: source_run_id.to_owned(),
+                source_story_id: source.0,
+                replacement_story_id: replacement.story_id,
+            });
+        }
+
+        insert_run(&transaction, replacement, Some(agent))?;
         transaction.execute(
-            "INSERT INTO run_state (
-                run_id, story_id, branch, worktree, lightweight, status, result_path,
-                sync_status, next_action
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9);",
+            "UPDATE run_state
+             SET status='rejected', next_action=?1, updated_at=datetime('now')
+             WHERE run_id=?2;",
             params![
-                input.run_id,
-                input.story_id,
-                input.branch,
-                input.worktree.display().to_string(),
-                i64::from(input.lightweight),
-                input.status,
-                input.result_path.map(|path| path.display().to_string()),
-                input.sync_status,
-                input.next_action,
+                format!("changes requested: {rejection_reason}"),
+                source_run_id
             ],
         )?;
         transaction.commit()?;
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub fn remove_run(&self, run_id: &str) -> Result<(), StateError> {
+        self.init()?;
+        let connection = Connection::open(&self.path)?;
+        connection.execute("DELETE FROM run_state WHERE run_id=?1;", params![run_id])?;
+        if connection.changes() == 0 {
+            return Err(StateError::RunNotFound(run_id.to_owned()));
+        }
         Ok(())
     }
 
@@ -483,6 +547,32 @@ impl RunStateStore {
     }
 }
 
+fn insert_run(
+    connection: &Connection,
+    input: NewRunRecord,
+    agent: Option<&str>,
+) -> Result<(), StateError> {
+    connection.execute(
+        "INSERT INTO run_state (
+            run_id, story_id, branch, worktree, lightweight, status, result_path,
+            sync_status, next_action, agent
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, COALESCE(?10, 'codex'));",
+        params![
+            input.run_id,
+            input.story_id,
+            input.branch,
+            input.worktree.display().to_string(),
+            i64::from(input.lightweight),
+            input.status,
+            input.result_path.map(|path| path.display().to_string()),
+            input.sync_status,
+            input.next_action,
+            agent,
+        ],
+    )?;
+    Ok(())
+}
+
 fn active_run_id(connection: &Connection) -> Result<Option<String>, StateError> {
     connection
         .query_row(
@@ -597,6 +687,77 @@ mod tests {
         store.add_run(new_record("run_2", "prepared")).unwrap();
 
         assert_eq!(store.active_run().unwrap().unwrap().run_id, "run_2");
+    }
+
+    #[test]
+    fn request_changes_state_transition_is_atomic() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = RunStateStore::new(temp_dir.path().join(".symphony/state.db"));
+        store.add_run(new_record("run_old", "completed")).unwrap();
+
+        store
+            .replace_run(
+                "run_old",
+                "Needs tighter spacing",
+                new_record("run_new", "prepared"),
+            )
+            .unwrap();
+
+        let source = store.show_run("run_old").unwrap();
+        assert_eq!(source.status, "rejected");
+        assert!(source.next_action.contains("Needs tighter spacing"));
+        assert_eq!(store.active_run().unwrap().unwrap().run_id, "run_new");
+    }
+
+    #[test]
+    fn request_changes_state_collision_rolls_back_source_rejection() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = RunStateStore::new(temp_dir.path().join(".symphony/state.db"));
+        store.add_run(new_record("run_old", "completed")).unwrap();
+
+        let error = store
+            .replace_run("run_old", "Try again", new_record("run_old", "prepared"))
+            .unwrap_err();
+
+        assert!(matches!(error, StateError::Sqlite(_)));
+        assert_eq!(store.show_run("run_old").unwrap().status, "completed");
+        assert!(store.active_run().unwrap().is_none());
+    }
+
+    #[test]
+    fn request_changes_refuses_non_completed_source() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = RunStateStore::new(temp_dir.path().join(".symphony/state.db"));
+        store.add_run(new_record("run_old", "failed")).unwrap();
+
+        let error = store
+            .replace_run("run_old", "Try again", new_record("run_new", "prepared"))
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            StateError::RunNotReplaceable { id, status }
+                if id == "run_old" && status == "failed"
+        ));
+        assert!(matches!(
+            store.show_run("run_new").unwrap_err(),
+            StateError::RunNotFound(_)
+        ));
+    }
+
+    #[test]
+    fn request_changes_remove_run_releases_incomplete_replacement() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = RunStateStore::new(temp_dir.path().join(".symphony/state.db"));
+        store.add_run(new_record("run_new", "prepared")).unwrap();
+
+        store.remove_run("run_new").unwrap();
+
+        assert!(store.active_run().unwrap().is_none());
+        assert!(matches!(
+            store.show_run("run_new").unwrap_err(),
+            StateError::RunNotFound(_)
+        ));
     }
 
     #[test]

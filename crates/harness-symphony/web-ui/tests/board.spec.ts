@@ -623,12 +623,21 @@ test("run monitor summarizes active event progress", async ({ page }) => {
   await expect(monitor).toContainText("Execution");
 });
 
-test("review panel rejects a run with a reason", async ({ page }) => {
-  let rejectBody: unknown = null;
-  const item = boardItem("US-082", "Reject Review Run", "Review");
+test("ready review requests changes with reason and image evidence", async ({ page }) => {
+  let requested = false;
+  let multipartBody = "";
+  let multipartContentType = "";
+  const item = boardItem("US-082", "Request Changes With Evidence", "Review");
   item.run_id = "run_us_082";
   await page.route("**/api/board", async (route) => {
-    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [item] }) });
+    const current = { ...item };
+    if (requested) {
+      current.board_state = "In Progress";
+      current.run_id = "run_replacement_082";
+      current.active_run = "run_replacement_082";
+      current.reason = "active run run_replacement_082";
+    }
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [current] }) });
   });
   await page.route("**/api/tasks/US-082/context", async (route) => {
     await route.fulfill({ contentType: "application/json", body: JSON.stringify({ story_id: "US-082", content: "# Context" }) });
@@ -653,25 +662,176 @@ test("review panel rejects a run with a reason", async ({ page }) => {
         events: [],
         suggested_next_action: "Review evidence.",
         failure_summary: null,
-        recovery_action: null
+        recovery_action: null,
+        request_changes: null
       })
     });
   });
-  await page.route("**/api/runs/run_us_082/reject", async (route) => {
-    rejectBody = route.request().postDataJSON();
+  await page.route("**/api/runs/run_us_082/request-changes", async (route) => {
+    multipartContentType = route.request().headers()["content-type"] ?? "";
+    multipartBody = route.request().postDataBuffer()?.toString("latin1") ?? "";
+    requested = true;
     await route.fulfill({
+      status: 202,
       contentType: "application/json",
-      body: JSON.stringify({ run_id: "run_us_082", status: "rejected", next_action: "review rejected: Needs tests" })
+      body: JSON.stringify({
+        source_run_id: "run_us_082",
+        run_id: "run_replacement_082",
+        story_id: "US-082",
+        status: "prepared",
+        feedback: {
+          reason_path: ".harness/runs/run_replacement_082/feedback/reason.md",
+          evidence_paths: [".harness/runs/run_replacement_082/feedback/evidence-01.png"]
+        }
+      })
     });
+  });
+  await page.route("**/api/runs/run_replacement_082/events", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ run_id: "run_replacement_082", events: [] }) });
   });
 
   await page.goto("/");
   await page.getByRole("button", { name: /US-082/ }).click();
   const detail = page.getByRole("dialog", { name: "Selected work detail" });
-  await detail.getByRole("textbox", { name: "Review note" }).fill("Needs tests");
-  await detail.getByRole("button", { name: "Reject run" }).click();
+  await detail.getByRole("textbox", { name: "Request changes reason" }).fill("Tighten the mobile spacing");
+  await detail.getByLabel("Evidence images").setInputFiles({
+    name: "mobile-spacing.png",
+    mimeType: "image/png",
+    buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1])
+  });
+  await expect(detail.getByText("mobile-spacing.png")).toBeVisible();
+  await expect(detail.getByRole("img", { name: "Preview mobile-spacing.png" })).toBeVisible();
+  await detail.getByRole("button", { name: "Request changes" }).click();
 
-  await expect.poll(async () => rejectBody).toEqual({ reason: "Needs tests" });
+  await expect.poll(() => requested).toBe(true);
+  expect(multipartContentType).toContain("multipart/form-data; boundary=");
+  expect(multipartBody).toContain('name="reason"');
+  expect(multipartBody).toContain("Tighten the mobile spacing");
+  expect(multipartBody).toContain('name="evidence"; filename="mobile-spacing.png"');
+  await expect(page.getByRole("region", { name: "Active column" }).getByRole("button", { name: /US-082/ })).toBeVisible();
+});
+
+test("request changes validates image limits and supports removal", async ({ page }) => {
+  const item = boardItem("US-083", "Request Changes Validation", "Review");
+  item.run_id = "run_us_083";
+  await page.route("**/api/board", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [item] }) });
+  });
+  await page.route("**/api/tasks/US-083/context", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ story_id: "US-083", content: "# Context" }) });
+  });
+  await page.route("**/api/runs/run_us_083/review", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        run_id: "run_us_083",
+        story_id: "US-083",
+        status: "completed",
+        agent: "codex",
+        outcome: "completed",
+        summary: "Ready for review",
+        result: null,
+        validation: null,
+        changed_files: [],
+        changeset_preview: null,
+        pr_url: null,
+        pr_status: "not_applicable",
+        artifact_paths: [],
+        events: [],
+        suggested_next_action: "Review evidence.",
+        failure_summary: null,
+        recovery_action: null,
+        request_changes: {
+          reason: "Previous spacing pass was incomplete",
+          reason_path: ".harness/runs/run_us_083/feedback/reason.md",
+          evidence: [
+            {
+              path: ".harness/runs/run_us_083/feedback/evidence-01.png",
+              url: "/api/runs/run_us_083/feedback/evidence-01.png",
+              content_type: "image/png",
+              size: 9
+            }
+          ]
+        }
+      })
+    });
+  });
+  await page.route("**/api/runs/run_us_083/feedback/evidence-01.png", async (route) => {
+    await route.fulfill({ contentType: "image/png", body: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]) });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /US-083/ }).click();
+  const detail = page.getByRole("dialog", { name: "Selected work detail" });
+  const submit = detail.getByRole("button", { name: "Request changes" });
+  await expect(submit).toBeDisabled();
+  await expect(detail.getByText("Previous spacing pass was incomplete")).toBeVisible();
+  await expect(detail.getByRole("img", { name: "Request changes evidence 1" })).toBeVisible();
+
+  const input = detail.getByLabel("Evidence images");
+  await input.setInputFiles({ name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("notes") });
+  await expect(detail.getByRole("alert")).toContainText("PNG, JPEG, or WebP");
+
+  const oversized = Buffer.alloc(5 * 1024 * 1024 + 1);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(oversized);
+  await input.setInputFiles({ name: "oversized.png", mimeType: "image/png", buffer: oversized });
+  await expect(detail.getByRole("alert")).toContainText("5 MB");
+
+  const valid = (name: string) => ({
+    name,
+    mimeType: "image/png",
+    buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1])
+  });
+  await input.setInputFiles([valid("one.png"), valid("two.png"), valid("three.png"), valid("four.png")]);
+  await expect(detail.getByRole("alert")).toContainText("up to 3");
+
+  await input.setInputFiles([valid("one.png"), valid("two.png")]);
+  await expect(detail.getByText("2/3 images")).toBeVisible();
+  await detail.getByRole("button", { name: "Remove one.png" }).click();
+  await expect(detail.getByText("one.png")).toHaveCount(0);
+  await expect(detail.getByText("1/3 images")).toBeVisible();
+});
+
+test("done detail does not offer request changes", async ({ page }) => {
+  const item = boardItem("US-084-DONE", "Accepted Work Stays Done", "Done");
+  item.run_id = "run_done_084";
+  await page.route("**/api/board", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [item] }) });
+  });
+  await page.route("**/api/tasks/US-084-DONE/context", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ story_id: "US-084-DONE", content: "# Context" }) });
+  });
+  await page.route("**/api/runs/run_done_084/review", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        run_id: "run_done_084",
+        story_id: "US-084-DONE",
+        status: "completed",
+        agent: "codex",
+        outcome: "completed",
+        summary: "Accepted",
+        result: null,
+        validation: null,
+        changed_files: [],
+        changeset_preview: null,
+        pr_url: null,
+        pr_status: "merged",
+        artifact_paths: [],
+        events: [],
+        suggested_next_action: "Accepted work remains done.",
+        failure_summary: null,
+        recovery_action: null,
+        request_changes: null
+      })
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /US-084-DONE/ }).click();
+  const detail = page.getByRole("dialog", { name: "Selected work detail" });
+  await expect(detail.getByRole("textbox", { name: "Request changes reason" })).toHaveCount(0);
+  await expect(detail.getByRole("button", { name: "Request changes" })).toHaveCount(0);
 });
 
 test("delete action is hidden for non-ready tasks", async ({ page }) => {
