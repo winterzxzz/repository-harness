@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+fail() {
+  printf 'Error: %s\n' "$*" >&2
+  exit 1
+}
+
+usage() {
+  cat <<'EOF'
+Usage: harness <command> [options] [path]
+
+Commands:
+  init, --init  Install the packaged Harness kit into a project.
+  update        Safely update tracked Harness files in a project.
+  --version     Print the packaged Harness kit version.
+  --help        Show this help.
+
+`init` and `update` accept the installer flags, including --merge, --override,
+--yes, --dry-run, --claude, --refresh-agent-shim, --force, and --adopt.
+EOF
+}
+
+resolve_script_path() {
+  local source="$1"
+  local directory target
+
+  while [ -h "$source" ]; do
+    directory="$(cd -P "$(dirname "$source")" && pwd)"
+    target="$(readlink "$source")"
+    case "$target" in
+      /*) source="$target" ;;
+      *) source="$directory/$target" ;;
+    esac
+  done
+  printf '%s\n' "$source"
+}
+
+SCRIPT_PATH="$(resolve_script_path "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd -P)"
+KIT_ROOT="$(cd "$SCRIPT_DIR/../libexec/harness-kit" 2>/dev/null && pwd -P || printf '')"
+[ -n "$KIT_ROOT" ] || fail "Packaged Harness kit is missing. Reinstall with Homebrew."
+
+INSTALLER="$KIT_ROOT/scripts/install-harness.sh"
+CLI_BINARY="$KIT_ROOT/scripts/bin/harness-cli"
+CLI_CHECKSUM="$KIT_ROOT/scripts/bin/harness-cli.sha256"
+KIT_VERSION="$KIT_ROOT/scripts/harness-kit-version"
+
+run_installer() {
+  case "$(uname -s):$(uname -m)" in
+    Darwin:arm64|Darwin:x86_64) ;;
+    *) fail "harness is distributed for macOS Apple Silicon and Intel only" ;;
+  esac
+  [ -x "$INSTALLER" ] || fail "Packaged Harness installer is missing: $INSTALLER"
+  [ -f "$CLI_BINARY" ] || fail "Local Harness CLI binary is missing: $CLI_BINARY"
+  [ -f "$CLI_CHECKSUM" ] || fail "Local Harness CLI checksum file is missing: $CLI_CHECKSUM"
+
+  export HARNESS_CLI_BINARY_PATH="$CLI_BINARY"
+  export HARNESS_CLI_CHECKSUM_PATH="$CLI_CHECKSUM"
+  exec "$INSTALLER" "$@"
+}
+
+case "${1:---help}" in
+  init|--init)
+    shift
+    run_installer "$@"
+    ;;
+  update)
+    shift
+    run_installer --update "$@"
+    ;;
+  --version)
+    [ -f "$KIT_VERSION" ] || fail "Packaged Harness kit version is missing: $KIT_VERSION"
+    cat "$KIT_VERSION"
+    ;;
+  -h|--help|help)
+    usage
+    ;;
+  *)
+    fail "Unknown command: $1"
+    ;;
+esac
