@@ -301,6 +301,12 @@ The expected control surface is:
 harness-symphony web
 ```
 
+After the loopback listener binds, browser mode must open the controller URL
+in the system default browser. Headless and automated callers must be able to
+disable this convenience with `harness-symphony web --no-open`. Failure to open
+the browser must warn without stopping the local server because the printed
+URL remains a valid manual recovery path.
+
 The backend should expose local APIs for board data, task details, run start,
 event streaming, review state, PR status, and sync.
 

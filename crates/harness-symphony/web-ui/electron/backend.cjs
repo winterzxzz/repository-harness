@@ -117,6 +117,22 @@ async function waitForHttp(url, options = {}) {
   throw lastError ?? new Error(`Timed out waiting for ${url}`);
 }
 
+function backendArgs(options) {
+  const args = [
+    "--repo-root",
+    options.repoRoot,
+    "web",
+    "--host",
+    options.host ?? "127.0.0.1",
+    "--port",
+    String(options.port ?? 0)
+  ];
+  if (options.openBrowser !== true) {
+    args.push("--no-open");
+  }
+  return args;
+}
+
 function startBackend(options) {
   const repoRoot = options.repoRoot;
   const binary = options.binary;
@@ -127,7 +143,7 @@ function startBackend(options) {
 
   const child = spawn(
     binary,
-    ["--repo-root", repoRoot, "web", "--host", host, "--port", String(port)],
+    backendArgs({ repoRoot, host, port, openBrowser: options.openBrowser }),
     {
       cwd: repoRoot,
       env: {
@@ -193,6 +209,7 @@ function startBackend(options) {
 
 module.exports = {
   assertExecutable,
+  backendArgs,
   developmentBackendBinary,
   findRepoRoot,
   packagedBackendBinary,

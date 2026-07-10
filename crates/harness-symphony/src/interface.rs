@@ -112,6 +112,9 @@ struct WebArgs {
     /// Local port to bind.
     #[arg(long, default_value_t = 4317)]
     port: u16,
+    /// Start the local server without opening the system browser.
+    #[arg(long)]
+    no_open: bool,
 }
 
 #[derive(Args, Debug)]
@@ -259,6 +262,7 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
             WebServerOptions {
                 host: args.host,
                 port: args.port,
+                open_browser: !args.no_open,
             },
         )?,
         Command::Auto(args) => {
@@ -619,5 +623,25 @@ mod tests {
             "0",
         ])
         .is_ok());
+    }
+
+    #[test]
+    fn web_auto_open_cli_defaults_to_open() {
+        let cli = Cli::try_parse_from(["harness-symphony", "web"]).unwrap();
+        let Command::Web(args) = cli.command else {
+            panic!("expected web command");
+        };
+
+        assert!(!args.no_open);
+    }
+
+    #[test]
+    fn web_auto_open_cli_accepts_no_open() {
+        let cli = Cli::try_parse_from(["harness-symphony", "web", "--no-open"]).unwrap();
+        let Command::Web(args) = cli.command else {
+            panic!("expected web command");
+        };
+
+        assert!(args.no_open);
     }
 }

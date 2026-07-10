@@ -154,7 +154,26 @@ target/debug/harness-symphony doctor
 Fix any `fail` rows before running a normal story. Warnings are usually
 actionable configuration gaps; read the message before deciding to continue.
 
-### 3. See Runnable Work
+### 3. Open The Local Controller
+
+Start the Web UI from the repository root:
+
+```bash
+target/debug/harness-symphony web
+```
+
+After the server binds, Symphony opens the controller in the system default
+browser. For CI, SSH, Electron, or other headless use, keep the server running
+without opening a browser:
+
+```bash
+target/debug/harness-symphony web --no-open
+```
+
+If the browser cannot be opened, Symphony prints the controller URL and keeps
+the server available for manual opening.
+
+### 4. See Runnable Work
 
 ```bash
 target/debug/harness-symphony work list
@@ -167,7 +186,7 @@ Look for a story with `Runnable` set to `yes` or `warn`.
   command.
 - `no`: do not run it through Symphony yet.
 
-### 4. Prepare A Normal Or High-Risk Story
+### 5. Prepare A Normal Or High-Risk Story
 
 Use `--prepare-only` when you want to inspect what Symphony will give the agent
 before actually launching one:
@@ -192,7 +211,7 @@ The worktree `AGENTS.md` contains a Symphony block that points the agent to the
 contract and repeats the assigned story, copied database path, required outputs,
 and forbidden paths.
 
-### 5. Execute A Normal Or High-Risk Story
+### 6. Execute A Normal Or High-Risk Story
 
 When the repo is configured with an agent adapter, run:
 

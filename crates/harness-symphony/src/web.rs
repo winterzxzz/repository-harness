@@ -47,6 +47,7 @@ pub enum WebError {
 pub struct WebServerOptions {
     pub host: String,
     pub port: u16,
+    pub open_browser: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -294,10 +295,42 @@ struct ToolItem {
     checked_at: Option<String>,
 }
 
-pub fn run_web_server(config: &ResolvedConfig, options: WebServerOptions) -> Result<(), WebError> {
-    let listener = TcpListener::bind(format!("{}:{}", options.host, options.port))?;
+fn browser_open_warning(url: &str, error: impl std::fmt::Display) -> String {
+    format!("warning: could not open Symphony Web UI at {url}: {error}. Open the URL manually.")
+}
+
+fn prepare_web_server<F, E>(
+    options: WebServerOptions,
+    open_browser: F,
+) -> Result<TcpListener, WebError>
+where
+    F: FnOnce(&str) -> Result<(), E>,
+    E: std::fmt::Display,
+{
+    let listener = TcpListener::bind((options.host.as_str(), options.port))?;
     let address = listener.local_addr()?;
-    println!("Symphony Web UI Controller listening at http://{address}");
+    let browser_ip = if address.ip().is_unspecified() {
+        if address.is_ipv6() {
+            std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)
+        } else {
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+        }
+    } else {
+        address.ip()
+    };
+    let browser_address = std::net::SocketAddr::new(browser_ip, address.port());
+    let url = format!("http://{browser_address}");
+    println!("Symphony Web UI Controller listening at {url}");
+    if options.open_browser {
+        if let Err(error) = open_browser(&url) {
+            eprintln!("{}", browser_open_warning(&url, error));
+        }
+    }
+    Ok(listener)
+}
+
+pub fn run_web_server(config: &ResolvedConfig, options: WebServerOptions) -> Result<(), WebError> {
+    let listener = prepare_web_server(options, webbrowser::open)?;
     for stream in listener.incoming() {
         let mut stream = stream?;
         let response = handle_stream(config, &mut stream)?;
@@ -2017,11 +2050,117 @@ mod tests {
     use super::*;
     use crate::config::SymphonyConfig;
     use rusqlite::{params, Connection};
+    use std::cell::{Cell, RefCell};
     use std::fs;
     use std::process::Command;
     use std::sync::Mutex;
 
     static ENV_MUTEX: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn web_auto_open_uses_resolved_listener_url() {
+        let opened_url = RefCell::new(None);
+        let listener = prepare_web_server(
+            WebServerOptions {
+                host: "127.0.0.1".to_owned(),
+                port: 0,
+                open_browser: true,
+            },
+            |url| {
+                opened_url.replace(Some(url.to_owned()));
+                Ok::<_, String>(())
+            },
+        )
+        .unwrap();
+
+        let expected = format!("http://{}", listener.local_addr().unwrap());
+        assert_eq!(opened_url.borrow().as_deref(), Some(expected.as_str()));
+    }
+
+    #[test]
+    fn web_auto_open_skips_launcher_when_disabled() {
+        let called = Cell::new(false);
+        let listener = prepare_web_server(
+            WebServerOptions {
+                host: "127.0.0.1".to_owned(),
+                port: 0,
+                open_browser: false,
+            },
+            |_| {
+                called.set(true);
+                Ok::<_, String>(())
+            },
+        )
+        .unwrap();
+
+        assert_ne!(listener.local_addr().unwrap().port(), 0);
+        assert!(!called.get());
+    }
+
+    #[test]
+    fn web_auto_open_failure_keeps_listener_available() {
+        let listener = prepare_web_server(
+            WebServerOptions {
+                host: "127.0.0.1".to_owned(),
+                port: 0,
+                open_browser: true,
+            },
+            |_| Err("no browser available"),
+        )
+        .unwrap();
+
+        assert_ne!(listener.local_addr().unwrap().port(), 0);
+        assert_eq!(
+            browser_open_warning("http://127.0.0.1:4317", "no browser available"),
+            "warning: could not open Symphony Web UI at http://127.0.0.1:4317: no browser available. Open the URL manually."
+        );
+    }
+
+    #[test]
+    fn web_auto_open_maps_unspecified_ipv4_to_loopback() {
+        let opened_url = RefCell::new(None);
+        prepare_web_server(
+            WebServerOptions {
+                host: "0.0.0.0".to_owned(),
+                port: 0,
+                open_browser: true,
+            },
+            |url| {
+                opened_url.replace(Some(url.to_owned()));
+                Ok::<_, String>(())
+            },
+        )
+        .unwrap();
+
+        assert!(opened_url
+            .borrow()
+            .as_deref()
+            .unwrap()
+            .starts_with("http://127.0.0.1:"));
+    }
+
+    #[test]
+    fn web_auto_open_supports_unspecified_ipv6_and_uses_loopback_url() {
+        let opened_url = RefCell::new(None);
+        prepare_web_server(
+            WebServerOptions {
+                host: "::".to_owned(),
+                port: 0,
+                open_browser: true,
+            },
+            |url| {
+                opened_url.replace(Some(url.to_owned()));
+                Ok::<_, String>(())
+            },
+        )
+        .unwrap();
+
+        assert!(opened_url
+            .borrow()
+            .as_deref()
+            .unwrap()
+            .starts_with("http://[::1]:"));
+    }
 
     fn test_config(temp_dir: &tempfile::TempDir) -> ResolvedConfig {
         SymphonyConfig::default().resolve(temp_dir.path())
