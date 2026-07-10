@@ -379,10 +379,18 @@ fn serve(config: &ResolvedConfig, listener: TcpListener) -> Result<(), WebError>
         };
         // Idle sockets (e.g. browser preconnects) must not hold a handler
         // thread forever, and one slow connection must not block the rest.
-        let _ = stream.set_read_timeout(Some(CONNECTION_IO_TIMEOUT));
-        let _ = stream.set_write_timeout(Some(CONNECTION_IO_TIMEOUT));
+        if let Err(error) = stream.set_read_timeout(Some(CONNECTION_IO_TIMEOUT)) {
+            eprintln!("warning: symphony web failed to set read timeout: {error}");
+        }
+        if let Err(error) = stream.set_write_timeout(Some(CONNECTION_IO_TIMEOUT)) {
+            eprintln!("warning: symphony web failed to set write timeout: {error}");
+        }
         let config = config.clone();
-        std::thread::spawn(move || handle_connection(&config, &mut stream));
+        let spawned = std::thread::Builder::new()
+            .spawn(move || handle_connection(&config, &mut stream));
+        if let Err(error) = spawned {
+            eprintln!("warning: symphony web failed to spawn connection thread: {error}");
+        }
     }
     Ok(())
 }
