@@ -74,11 +74,46 @@ grep -Fq 'harness-macos-x64.tar.gz' "$FORMULA" || \
 KIT_WORKFLOW="$ROOT_DIR/.github/workflows/harness-kit-release.yml"
 test -f "$KIT_WORKFLOW" || fail "kit release workflow is missing"
 ruby -e 'require "yaml"; YAML.load_file(ARGV.fetch(0))' "$KIT_WORKFLOW"
+rg -Fq 'cargo build -p harness-cli' "$KIT_WORKFLOW" || \
+  fail "kit release verification does not build the CLI fixture"
+for release_workflow in \
+  "$ROOT_DIR/.github/workflows/harness-cli-release.yml" \
+  "$KIT_WORKFLOW" \
+  "$ROOT_DIR/.github/workflows/post-merge-maintenance.yml"
+do
+  test -f "$release_workflow" || fail "release workflow is missing: $release_workflow"
+  if rg -n 'uses: [^[:space:]]+@(v[0-9]|stable)' "$release_workflow" >/dev/null; then
+    fail "release workflow uses a mutable GitHub Action reference: $release_workflow"
+  fi
+done
+for publish_workflow in \
+  "$ROOT_DIR/.github/workflows/harness-cli-release.yml" \
+  "$KIT_WORKFLOW"
+do
+  if rg -n '^  push:' "$publish_workflow" >/dev/null; then
+    fail "release workflow has a duplicate tag push trigger: $publish_workflow"
+  fi
+done
 grep -Fq 'harness-macos-arm64.tar.gz' "$KIT_WORKFLOW" || \
   fail "kit release workflow omitted the arm64 archive"
 grep -Fq 'harness-macos-x64.tar.gz' "$KIT_WORKFLOW" || \
   fail "kit release workflow omitted the Intel archive"
 grep -Fq 'HOMEBREW_TAP_TOKEN' "$KIT_WORKFLOW" || \
   fail "kit release workflow omitted the tap publishing credential"
+rg -Uq 'name: Publish kit release\n    needs: build\n    runs-on: macos-15' "$KIT_WORKFLOW" || \
+  fail "kit release workflow does not test the tap on macOS"
+rg -Fq 'brew install winterzxzz/tap/harness' "$KIT_WORKFLOW" || \
+  fail "kit release workflow does not install the rendered Formula"
+rg -Fq 'harness init --dry-run --yes' "$KIT_WORKFLOW" || \
+  fail "kit release workflow does not smoke-test harness init"
+
+rg -Fq 'brew install winterzxzz/tap/harness' "$ROOT_DIR/README.md" || \
+  fail "README omitted the Homebrew installation command"
+rg -Fq 'brew bundle' "$ROOT_DIR/README.md" || \
+  fail "README omitted the multi-Mac Brewfile flow"
+rg -Fq 'harness update' "$ROOT_DIR/README.md" || \
+  fail "README omitted the project update command"
+rg -Fq 'scripts/bin/harness-cli' "$ROOT_DIR/README.md" || \
+  fail "README omitted the repository-local agent CLI contract"
 
 printf 'macOS kit validation passed\n'

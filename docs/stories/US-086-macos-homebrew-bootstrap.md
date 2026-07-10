@@ -64,4 +64,10 @@ repository-local Harness operating model.
 
 ## Evidence
 
-- Pending implementation and release validation.
+- 2026-07-10 local verification passed: `cargo fmt --check`, `cargo test
+  --workspace`, `cargo clippy --workspace -- -D warnings`, the installer and
+  macOS-kit validators, and a temporary-tap Homebrew install/init/`--init`/
+  update smoke test.
+- Public GitHub Release assets, a public-tap install, and both hosted macOS
+  architecture runners remain required before E2E, platform, and release proof
+  can be recorded.

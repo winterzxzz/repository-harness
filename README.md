@@ -62,6 +62,54 @@ https://openai.com/index/harness-engineering/
 
 ## Install Harness Into A Project
 
+### macOS with Homebrew
+
+The primary macOS path installs a versioned, checksummed local kit. It does
+not execute a remote shell script when you run `harness init`:
+
+```bash
+brew install winterzxzz/tap/harness
+cd /path/to/project
+harness init
+```
+
+`harness --init` is an alias for `harness init`. The command preserves the
+installer's safe conflict flow: interactive runs offer Merge, Override, or
+Stop; non-interactive runs require `--merge` or `--override` when the project
+already contains Harness paths.
+
+Use a Brewfile to install the same versioned command on several Macs:
+
+```ruby
+tap "winterzxzz/tap"
+brew "harness"
+```
+
+Then run `brew bundle` on each Mac.
+
+Update the global kit and each project separately, so a package upgrade never
+silently changes a repository:
+
+```bash
+brew update && brew upgrade harness
+cd /path/to/project
+harness update
+```
+
+`harness update` replaces only files whose hash still matches the version
+installed by Harness. It reports locally modified files without changing them;
+use `--force` only when you want a timestamped backup before replacement. For
+a project installed before managed-file tracking, run `harness update --adopt`
+once to explicitly begin tracking its current Harness files.
+Updates refuse symlinked managed paths instead of following them outside the
+project directory.
+
+Agents continue using the repository-local `scripts/bin/harness-cli` command
+after initialization. The global `harness` command only bootstraps and updates
+the operating kit.
+
+### Direct installer fallback
+
 From a target project directory, run:
 
 ```bash
@@ -144,9 +192,9 @@ verifies its `.sha256` checksum, and installs it at
 `scripts/bin/harness-cli` on macOS/Linux or `scripts/bin/harness-cli.exe` on
 Windows. The Rust CLI is the main Harness tool and stable command path.
 
-Harness CLI release assets are published from tags by the
-`Harness CLI Release` GitHub Actions workflow. The installer expects each
-release to include `harness-cli-<platform>` and
+Harness CLI release assets are published by the reusable `Harness CLI Release`
+GitHub Actions workflow after post-merge maintenance creates the matching tag.
+The installer expects each release to include `harness-cli-<platform>` and
 `harness-cli-<platform>.sha256` assets for macOS arm64, macOS x64, Linux x64,
 Linux arm64, and Windows x64. The Windows asset is
 `harness-cli-windows-x64.exe` plus `harness-cli-windows-x64.exe.sha256`.
