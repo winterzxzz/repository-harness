@@ -34,7 +34,8 @@ GitHub Releases, Homebrew Formulae, GitHub CLI.
 - `scripts/build-harness-macos-kit.sh`: builds one self-contained archive for
   each macOS architecture.
 - `scripts/render-homebrew-formula.sh`: writes the exact Formula from a kit
-  tag and two computed SHA-256 values.
+  tag, two computed SHA-256 values, and either the production release base URL
+  or a local `file://` test base URL.
 - `scripts/validate-install-payload.sh`: extends existing fresh/merge smoke
   coverage for local CLI verification and installer state.
 - `scripts/validate-harness-macos-kit.sh`: tests the assembled local kit and
@@ -444,6 +445,7 @@ GitHub Releases, Homebrew Formulae, GitHub CLI.
   ```bash
   scripts/render-homebrew-formula.sh \
     --kit-version 0.1.0 \
+    --base-url "file://$TMP_DIR" \
     --arm-sha 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
     --intel-sha fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210 \
     --output "$TMP_DIR/harness.rb"
@@ -472,6 +474,7 @@ GitHub Releases, Homebrew Formulae, GitHub CLI.
 
   ```text
   @KIT_VERSION@
+  @KIT_BASE_URL@
   @ARM_SHA256@
   @INTEL_SHA256@
   ```
@@ -487,11 +490,11 @@ GitHub Releases, Homebrew Formulae, GitHub CLI.
 
     on_macos do
       on_arm do
-        url "https://github.com/winterzxzz/repository-harness/releases/download/harness-kit-v#{version}/harness-macos-arm64.tar.gz"
+        url "@KIT_BASE_URL@/harness-macos-arm64.tar.gz"
         sha256 "@ARM_SHA256@"
       end
       on_intel do
-        url "https://github.com/winterzxzz/repository-harness/releases/download/harness-kit-v#{version}/harness-macos-x64.tar.gz"
+        url "@KIT_BASE_URL@/harness-macos-x64.tar.gz"
         sha256 "@INTEL_SHA256@"
       end
     end
@@ -507,8 +510,11 @@ GitHub Releases, Homebrew Formulae, GitHub CLI.
   end
   ```
 
-  The renderer must reject an invalid version or checksum rather than writing a
-  Formula. It must write atomically to the requested output path.
+  The renderer defaults `--base-url` to
+  `https://github.com/winterzxzz/repository-harness/releases/download/harness-kit-v<version>`.
+  It must accept only HTTPS GitHub release URLs or absolute `file://` URLs for
+  local tests, reject an invalid version or checksum, and write atomically to
+  the requested output path.
 
 - [ ] **Step 4: Implement kit release workflow and ordered release dispatch**
 
@@ -563,6 +569,11 @@ GitHub Releases, Homebrew Formulae, GitHub CLI.
 - Create in `winterzxzz/homebrew-tap`: `Formula/harness.rb`
 - Create in `winterzxzz/homebrew-tap`: `README.md`
 - Create in `winterzxzz/homebrew-tap`: `.github/workflows/formula.yml`
+
+**Precondition:** Complete this task only after the source-repository pull
+request is merged and GitHub Actions has published the first immutable
+`harness-kit-v<version>` release. A feature-branch formula must not point at a
+nonexistent or mutable artifact.
 
 - [ ] **Step 1: Verify GitHub authentication and repository availability**
 
