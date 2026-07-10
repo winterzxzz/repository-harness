@@ -1,4 +1,3 @@
-use std::path::Path;
 use std::process::Command;
 
 use serde::Serialize;
@@ -29,9 +28,7 @@ pub struct RunScore {
 /// Run the task's functional command in the artifact worktree.
 /// Pass iff the command exits 0.
 pub fn functional_pass(spec: &TaskSpec, artifact: &Artifact) -> Result<bool, BenchError> {
-    let status = Command::new("sh")
-        .arg("-c")
-        .arg(&spec.functional.test_command)
+    let status = functional_command(&spec.functional.test_command)
         .current_dir(&artifact.worktree)
         .status()
         .map_err(|source| BenchError::Io {
@@ -41,36 +38,43 @@ pub fn functional_pass(spec: &TaskSpec, artifact: &Artifact) -> Result<bool, Ben
     Ok(status.success())
 }
 
-fn query_first_string(db: &Path, sql: &str) -> Result<Option<String>, BenchError> {
-    let conn =
-        rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .map_err(|e| BenchError::Sqlite(e.to_string()))?;
-    let value = conn.query_row(sql, [], |row| row.get::<_, String>(0));
+fn functional_command(test_command: &str) -> Command {
+    #[cfg(windows)]
+    let mut command = Command::new("cmd");
+    #[cfg(windows)]
+    command.arg("/C");
+
+    #[cfg(not(windows))]
+    let mut command = Command::new("sh");
+    #[cfg(not(windows))]
+    command.arg("-c");
+
+    command.arg(test_command);
+    command
+}
+
+fn query_first_string(
+    conn: &rusqlite::Connection,
+    sql: &str,
+) -> Result<Option<String>, BenchError> {
+    let value = conn.query_row(sql, [], |row| row.get::<_, Option<String>>(0));
     match value {
-        Ok(v) => Ok(Some(v)),
+        Ok(value) => Ok(value),
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
         Err(e) => Err(BenchError::Sqlite(e.to_string())),
     }
 }
 
-fn query_first_i64(db: &Path, sql: &str) -> Result<i64, BenchError> {
-    let conn =
-        rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .map_err(|e| BenchError::Sqlite(e.to_string()))?;
-    conn.query_row(sql, [], |row| row.get::<_, i64>(0))
+fn query_first_i64(conn: &rusqlite::Connection, sql: &str) -> Result<i64, BenchError> {
+    conn.query_row(sql, [], |row| row.get::<_, Option<i64>>(0))
+        .map(|value| value.unwrap_or(0))
         .or_else(|e| match e {
             rusqlite::Error::QueryReturnedNoRows => Ok(0),
             other => Err(BenchError::Sqlite(other.to_string())),
         })
 }
 
-fn eval_check(check: &Check, artifact: &Artifact) -> Result<(bool, String), BenchError> {
-    // Every current check kind needs the harness database.
-    let db = match &artifact.harness_db {
-        Some(db) => db,
-        None => return Ok((false, "no harness.db (bare arm)".to_string())),
-    };
-
+fn eval_check(check: &Check, conn: &rusqlite::Connection) -> Result<(bool, String), BenchError> {
     match check.kind.as_str() {
         "sql_expect" => {
             let sql = check
@@ -80,7 +84,7 @@ fn eval_check(check: &Check, artifact: &Artifact) -> Result<(bool, String), Benc
             let expect = check.expect.as_deref().ok_or_else(|| {
                 BenchError::CheckConfig(check.id.clone(), "missing expect".into())
             })?;
-            let actual = query_first_string(db, sql)?;
+            let actual = query_first_string(conn, sql)?;
             match actual {
                 Some(v) if v == expect => Ok((true, v.to_string())),
                 Some(v) => Ok((false, format!("got '{v}', want '{expect}'"))),
@@ -92,7 +96,7 @@ fn eval_check(check: &Check, artifact: &Artifact) -> Result<(bool, String), Benc
                 .sql
                 .as_deref()
                 .ok_or_else(|| BenchError::CheckConfig(check.id.clone(), "missing sql".into()))?;
-            let count = query_first_i64(db, sql)?;
+            let count = query_first_i64(conn, sql)?;
             Ok((count > 0, format!("count={count}")))
         }
         other => Err(BenchError::CheckConfig(
@@ -103,9 +107,21 @@ fn eval_check(check: &Check, artifact: &Artifact) -> Result<(bool, String), Benc
 }
 
 pub fn run_checks(spec: &TaskSpec, artifact: &Artifact) -> Result<Vec<CheckResult>, BenchError> {
+    let conn = artifact
+        .harness_db
+        .as_ref()
+        .map(|db| {
+            rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .map_err(|e| BenchError::Sqlite(e.to_string()))
+        })
+        .transpose()?;
+
     let mut results = Vec::with_capacity(spec.checks.len());
     for check in &spec.checks {
-        let (passed, detail) = eval_check(check, artifact)?;
+        let (passed, detail) = match conn.as_ref() {
+            Some(conn) => eval_check(check, conn)?,
+            None => (false, "no harness.db (bare arm)".to_string()),
+        };
         results.push(CheckResult {
             id: check.id.clone(),
             responsibility: check.responsibility.clone(),
@@ -212,6 +228,26 @@ sql = "SELECT count(*) FROM trace"
     }
 
     #[test]
+    fn functional_command_uses_the_platform_shell() {
+        let command = functional_command("echo ok");
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        #[cfg(windows)]
+        {
+            assert_eq!(command.get_program(), "cmd");
+            assert_eq!(args, ["/C", "echo ok"]);
+        }
+        #[cfg(not(windows))]
+        {
+            assert_eq!(command.get_program(), "sh");
+            assert_eq!(args, ["-c", "echo ok"]);
+        }
+    }
+
+    #[test]
     fn sql_expect_matches_and_mismatches() {
         let (_tmp, artifact) = artifact_with_db("tiny", 1);
         let results = run_checks(&spec_with("true"), &artifact).unwrap();
@@ -256,6 +292,39 @@ sql = "SELECT id FROM trace WHERE 0"
             !score.checks[0].passed,
             "zero rows should be treated as count 0, not error"
         );
+    }
+
+    #[test]
+    fn sql_null_values_fail_checks_without_aborting() {
+        let (_tmp, artifact) = artifact_with_db("tiny", 0);
+        let toml = r#"
+id = "T1"
+lane = "tiny"
+
+[functional]
+test_command = "true"
+
+[[checks]]
+id = "null_string"
+responsibility = "Task specification"
+kind = "sql_expect"
+sql = "SELECT NULL"
+expect = "tiny"
+
+[[checks]]
+id = "null_integer"
+responsibility = "Observability"
+kind = "sql_nonzero"
+sql = "SELECT NULL"
+"#;
+        let spec = TaskSpec::from_toml_str(toml).unwrap();
+        let results = run_checks(&spec, &artifact).unwrap();
+
+        assert_eq!(results.len(), 2);
+        assert!(!results[0].passed);
+        assert_eq!(results[0].detail, "no rows, want 'tiny'");
+        assert!(!results[1].passed);
+        assert_eq!(results[1].detail, "count=0");
     }
 
     #[test]
