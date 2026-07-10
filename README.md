@@ -74,6 +74,12 @@ On Windows PowerShell, run:
 & ([scriptblock]::Create((irm "https://raw.githubusercontent.com/hoangnb24/repository-harness/main/scripts/install-harness.ps1"))) -Yes
 ```
 
+A fresh install copies the reusable Harness operating kit, not this source
+repository's identity or task history. The target keeps its own `README.md` and
+starts with empty product, story, decision, backlog, test-matrix, database, and
+run-history surfaces. Those records are created only from work performed in the
+target project.
+
 If the target already has `AGENTS.md`, `docs/`, or `scripts/`, choose one:
 
 ```bash

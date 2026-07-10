@@ -112,7 +112,12 @@ fi
 
 RELEASE_DIR="$TMP_DIR/release"
 mkdir -p "$RELEASE_DIR"
-cp "$ROOT_DIR/scripts/bin/harness-cli" "$RELEASE_DIR/harness-cli-test-platform"
+CLI_SOURCE="$ROOT_DIR/scripts/bin/harness-cli"
+if [ ! -x "$CLI_SOURCE" ]; then
+  CLI_SOURCE="$ROOT_DIR/target/debug/harness-cli"
+fi
+test -x "$CLI_SOURCE" || fail "Harness CLI fixture is unavailable; run cargo build first"
+cp "$CLI_SOURCE" "$RELEASE_DIR/harness-cli-test-platform"
 sha256_file "$RELEASE_DIR/harness-cli-test-platform" > \
   "$RELEASE_DIR/harness-cli-test-platform.sha256"
 

@@ -1,8 +1,9 @@
 # Harness installer payload.
-# Add new files here once; Bash and PowerShell installers both read this list.
+# Install reusable operating files and empty project scaffolds only.
+# Do not add repository-harness task history or project identity here.
+# Bash and PowerShell installers both read this list.
 # Schema migrations are discovered automatically from scripts/schema/*.sql.
 AGENTS.md
-README.md
 docs/ARCHITECTURE.md
 docs/CONTEXT_RULES.md
 docs/FEATURE_INTAKE.md
@@ -17,13 +18,6 @@ docs/README.md
 docs/TEST_MATRIX.md
 docs/TOOL_REGISTRY.md
 docs/TRACE_SPEC.md
-docs/decisions/0001-harness-first-development.md
-docs/decisions/0002-post-spec-product-lifecycle.md
-docs/decisions/0003-generic-spec-intake-harness.md
-docs/decisions/0004-sqlite-durable-layer.md
-docs/decisions/0005-prebuilt-rust-harness-cli.md
-docs/decisions/0006-phase-4-benchmark-triage.md
-docs/decisions/0007-improvement-proposal-rules.md
 docs/decisions/README.md
 docs/product/README.md
 docs/stories/README.md
