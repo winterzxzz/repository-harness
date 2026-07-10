@@ -49,11 +49,84 @@ pub enum WebError {
     InvalidAssetPath,
 }
 
+pub const DEFAULT_WEB_HOST: &str = "127.0.0.1";
+pub const DEFAULT_WEB_PORT: u16 = 4317;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WebServerOptions {
     pub host: String,
     pub port: u16,
     pub open_browser: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EnsureWebOutcome {
+    AlreadyRunning { url: String },
+    Spawned { url: String },
+    SpawnFailed { url: String, message: String },
+}
+
+const ENSURE_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// Make sure a Symphony Web UI server is reachable at the requested address,
+/// spawning a detached background server when none is listening. Failure to
+/// spawn is reported in the outcome instead of failing the caller: runs must
+/// proceed even when the Web UI cannot start.
+pub fn ensure_web_server(repo_root: &Path, options: &WebServerOptions) -> EnsureWebOutcome {
+    ensure_web_server_with(options, |opts| spawn_detached_web_server(repo_root, opts))
+}
+
+fn ensure_web_server_with<F, E>(options: &WebServerOptions, spawn: F) -> EnsureWebOutcome
+where
+    F: FnOnce(&WebServerOptions) -> Result<(), E>,
+    E: std::fmt::Display,
+{
+    let url = format!("http://{}:{}", options.host, options.port);
+    if web_server_listening(options) {
+        return EnsureWebOutcome::AlreadyRunning { url };
+    }
+    match spawn(options) {
+        Ok(()) => EnsureWebOutcome::Spawned { url },
+        Err(error) => EnsureWebOutcome::SpawnFailed {
+            url,
+            message: error.to_string(),
+        },
+    }
+}
+
+fn web_server_listening(options: &WebServerOptions) -> bool {
+    use std::net::ToSocketAddrs;
+
+    match (options.host.as_str(), options.port).to_socket_addrs() {
+        Ok(mut addrs) => addrs.any(|addr| {
+            std::net::TcpStream::connect_timeout(&addr, ENSURE_CONNECT_TIMEOUT).is_ok()
+        }),
+        Err(_) => false,
+    }
+}
+
+fn spawn_detached_web_server(
+    repo_root: &Path,
+    options: &WebServerOptions,
+) -> Result<(), std::io::Error> {
+    let exe = std::env::current_exe()?;
+    let mut command = Command::new(exe);
+    command
+        .arg("--repo-root")
+        .arg(repo_root)
+        .arg("web")
+        .arg("--host")
+        .arg(&options.host)
+        .arg("--port")
+        .arg(options.port.to_string())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    if !options.open_browser {
+        command.arg("--no-open");
+    }
+    command.spawn()?;
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2437,6 +2510,78 @@ mod tests {
     use std::sync::Mutex;
 
     static ENV_MUTEX: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn ensure_web_reuses_listening_server_without_spawning() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let options = WebServerOptions {
+            host: "127.0.0.1".to_owned(),
+            port,
+            open_browser: true,
+        };
+
+        let outcome = ensure_web_server_with(&options, |_| -> Result<(), String> {
+            panic!("spawn must not run when a server is already listening")
+        });
+
+        assert_eq!(
+            outcome,
+            EnsureWebOutcome::AlreadyRunning {
+                url: format!("http://127.0.0.1:{port}"),
+            }
+        );
+    }
+
+    #[test]
+    fn ensure_web_spawns_when_no_server_listening() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let options = WebServerOptions {
+            host: "127.0.0.1".to_owned(),
+            port,
+            open_browser: true,
+        };
+
+        let spawned = Cell::new(false);
+        let outcome = ensure_web_server_with(&options, |_| -> Result<(), String> {
+            spawned.set(true);
+            Ok(())
+        });
+
+        assert!(spawned.get());
+        assert_eq!(
+            outcome,
+            EnsureWebOutcome::Spawned {
+                url: format!("http://127.0.0.1:{port}"),
+            }
+        );
+    }
+
+    #[test]
+    fn ensure_web_reports_spawn_failure_instead_of_erroring() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let options = WebServerOptions {
+            host: "127.0.0.1".to_owned(),
+            port,
+            open_browser: true,
+        };
+
+        let outcome = ensure_web_server_with(&options, |_| -> Result<(), String> {
+            Err("boom".to_owned())
+        });
+
+        assert_eq!(
+            outcome,
+            EnsureWebOutcome::SpawnFailed {
+                url: format!("http://127.0.0.1:{port}"),
+                message: "boom".to_owned(),
+            }
+        );
+    }
 
     #[test]
     fn web_auto_open_uses_resolved_listener_url() {

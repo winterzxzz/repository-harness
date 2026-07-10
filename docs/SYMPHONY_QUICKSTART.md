@@ -173,6 +173,11 @@ target/debug/harness-symphony web --no-open
 If the browser cannot be opened, Symphony prints the controller URL and keeps
 the server available for manual opening.
 
+Manual start is optional for execution: `harness-symphony run` and
+`harness-symphony auto` automatically spawn this server on `127.0.0.1:4317`
+when nothing is listening there, and reuse it when it is already running. Pass
+`--no-web` to either command to skip that.
+
 ### 4. See Runnable Work
 
 ```bash

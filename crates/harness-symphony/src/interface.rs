@@ -15,7 +15,10 @@ use crate::run::{
 };
 use crate::state::{RunRecord, RunStateStore, StateError};
 use crate::sync::{sync_changesets, unapplied_changesets, SyncError, SyncResult};
-use crate::web::{run_web_server, WebError, WebServerOptions};
+use crate::web::{
+    ensure_web_server, run_web_server, EnsureWebOutcome, WebError, WebServerOptions,
+    DEFAULT_WEB_HOST, DEFAULT_WEB_PORT,
+};
 use crate::work::{list_board, list_work, BoardItem, WorkError, WorkItem};
 
 #[derive(Parser, Debug)]
@@ -77,6 +80,9 @@ struct RunArgs {
     /// Run a tiny-lane story in the current checkout with copied database isolation.
     #[arg(long)]
     here: bool,
+    /// Skip ensuring the Symphony Web UI server is running before the run.
+    #[arg(long)]
+    no_web: bool,
 }
 
 #[derive(Args, Debug)]
@@ -102,15 +108,18 @@ struct AutoArgs {
     /// Exit after this many idle polls. Omit for long-running mode.
     #[arg(long)]
     max_idle_cycles: Option<u32>,
+    /// Skip ensuring the Symphony Web UI server is running before polling.
+    #[arg(long)]
+    no_web: bool,
 }
 
 #[derive(Args, Debug)]
 struct WebArgs {
     /// Local interface to bind.
-    #[arg(long, default_value = "127.0.0.1")]
+    #[arg(long, default_value = DEFAULT_WEB_HOST)]
     host: String,
     /// Local port to bind.
-    #[arg(long, default_value_t = 4317)]
+    #[arg(long, default_value_t = DEFAULT_WEB_PORT)]
     port: u16,
     /// Start the local server without opening the system browser.
     #[arg(long)]
@@ -226,6 +235,9 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
             }
         },
         Command::Run(args) => {
+            if !args.prepare_only && !args.no_web {
+                print_ensure_web(&ensure_web_server(&repo_root, &default_web_options()));
+            }
             if args.prepare_only {
                 let prepared = if args.here {
                     prepare_here_run(&resolved, &args.story_id)?
@@ -266,6 +278,9 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
             },
         )?,
         Command::Auto(args) => {
+            if !args.no_web {
+                print_ensure_web(&ensure_web_server(&repo_root, &default_web_options()));
+            }
             let mut options = options_from_config(&resolved);
             options.enabled = args.enable;
             options.once = args.once;
@@ -381,6 +396,30 @@ fn print_config(config: &ResolvedConfig) {
         config.auto_poll_interval_seconds
     );
     println!("auto_max_attempts: {}", config.auto_max_attempts);
+}
+
+fn default_web_options() -> WebServerOptions {
+    WebServerOptions {
+        host: DEFAULT_WEB_HOST.to_owned(),
+        port: DEFAULT_WEB_PORT,
+        open_browser: true,
+    }
+}
+
+fn print_ensure_web(outcome: &EnsureWebOutcome) {
+    match outcome {
+        EnsureWebOutcome::AlreadyRunning { url } => {
+            println!("Symphony Web UI already running at {url}");
+        }
+        EnsureWebOutcome::Spawned { url } => {
+            println!("Symphony Web UI starting at {url}");
+        }
+        EnsureWebOutcome::SpawnFailed { url, message } => {
+            eprintln!(
+                "warning: could not start Symphony Web UI at {url}: {message}. Continuing without it."
+            );
+        }
+    }
 }
 
 fn print_prepared_run(run: &PreparedRun) {
@@ -623,6 +662,34 @@ mod tests {
             "0",
         ])
         .is_ok());
+    }
+
+    #[test]
+    fn run_cli_defaults_to_ensuring_web() {
+        let cli = Cli::try_parse_from(["harness-symphony", "run", "US-001"]).unwrap();
+        let Command::Run(args) = cli.command else {
+            panic!("expected run command");
+        };
+        assert!(!args.no_web);
+    }
+
+    #[test]
+    fn run_cli_accepts_no_web() {
+        let cli = Cli::try_parse_from(["harness-symphony", "run", "US-001", "--no-web"]).unwrap();
+        let Command::Run(args) = cli.command else {
+            panic!("expected run command");
+        };
+        assert!(args.no_web);
+    }
+
+    #[test]
+    fn auto_cli_accepts_no_web() {
+        let cli =
+            Cli::try_parse_from(["harness-symphony", "auto", "--enable", "--no-web"]).unwrap();
+        let Command::Auto(args) = cli.command else {
+            panic!("expected auto command");
+        };
+        assert!(args.no_web);
     }
 
     #[test]

@@ -337,6 +337,15 @@ disable this convenience with `harness-symphony web --no-open`. Failure to open
 the browser must warn without stopping the local server because the printed
 URL remains a valid manual recovery path.
 
+Executing work must not require a separate manual `web` start. When
+`harness-symphony run` (execute paths) or `harness-symphony auto` finds no
+server listening on the default loopback address (`127.0.0.1:4317`), it spawns
+a detached `harness-symphony web` process before starting work; when a server
+is already listening it is reused. The spawned server outlives the run so
+review can continue after the run ends, and a spawn failure warns without
+blocking the run. `--no-web` on `run` and `auto` skips this convenience;
+`run --prepare-only` never starts the server.
+
 The backend should expose local APIs for board data, task details, run start,
 event streaming, review state, PR status, and sync.
 
