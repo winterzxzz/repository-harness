@@ -271,6 +271,27 @@ test("reduced motion suppresses operational spinner animation", async ({ page })
     .toBe("none");
 });
 
+test("summary strip pulses while a Symphony run is active", async ({ page }) => {
+  const activeItem = boardItem("US-069", "Active Run Heartbeat", "In Progress");
+  activeItem.run_id = "run_active";
+  activeItem.active_run = "run_active";
+
+  await page.route("**/api/board", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ items: [activeItem] })
+    });
+  });
+
+  await page.goto("/");
+
+  const activeMetric = page
+    .getByRole("region", { name: "Command status rail" })
+    .getByText("Active", { exact: true })
+    .locator("xpath=ancestor::*[contains(@class, 'rounded-xl')][1]");
+  await expect(activeMetric.locator("span").first()).toHaveClass(/motion-safe:animate-pulse/);
+});
+
 test("board loading and failure states expose accessibility semantics", async ({ page }) => {
   let releaseBoard!: () => void;
   const boardReady = new Promise<void>((resolve) => {

@@ -66,7 +66,7 @@ export function SummaryStrip({
             <div className="flex items-start gap-2.5">
               <span className={cn(
                 "grid size-8 lg:size-9 shrink-0 place-items-center rounded-lg border border-current/15 bg-background/40 shadow-sm",
-                metric.label === "Active run" && activeRun?.active_run && "motion-safe:animate-pulse"
+                metric.label === "Active" && activeRun?.active_run && "motion-safe:animate-pulse"
               )}>
                 <Icon className="size-4 lg:size-4.5" />
               </span>
