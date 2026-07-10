@@ -47,6 +47,7 @@ pub enum WebError {
 pub struct WebServerOptions {
     pub host: String,
     pub port: u16,
+    pub open_browser: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
