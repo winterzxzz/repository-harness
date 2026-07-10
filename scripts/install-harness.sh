@@ -309,6 +309,45 @@ backup_target_file() {
   cp -p "$target" "$backup"
 }
 
+assert_update_path_is_safe() {
+  local relative="$1"
+  local target parent project_root resolved_parent
+
+  case "$relative" in
+    ""|/*|..|../*|*/../*|*/..)
+      fail "Invalid managed file path: $relative"
+      ;;
+  esac
+
+  project_root="$(cd -P "$TARGET_DIR" && pwd -P)"
+  target="$TARGET_DIR/$relative"
+  [ ! -L "$target" ] || fail "Refusing to update symlinked Harness path: $relative"
+
+  parent="$(dirname "$target")"
+  while :; do
+    [ ! -L "$parent" ] || fail "Refusing to update through symlinked Harness path: $relative"
+    [ -d "$parent" ] && break
+    [ "$parent" != "$TARGET_DIR" ] || fail "Managed file parent is missing: $relative"
+    parent="$(dirname "$parent")"
+  done
+
+  resolved_parent="$(cd -P "$parent" && pwd -P)"
+  case "$resolved_parent" in
+    "$project_root"|"$project_root"/*) ;;
+    *) fail "Managed file path escapes the target project: $relative" ;;
+  esac
+}
+
+preflight_update_paths() {
+  local relative
+
+  while IFS= read -r relative || [ -n "$relative" ]; do
+    [ -n "$relative" ] || continue
+    assert_update_path_is_safe "$relative"
+  done < <(list_payload_files)
+  assert_update_path_is_safe "scripts/bin/harness-cli"
+}
+
 update_managed_file() {
   local relative="$1"
   local target="$TARGET_DIR/$relative"
@@ -1288,6 +1327,7 @@ if [ "$UPDATE_MODE" -eq 1 ]; then
   if [ ! -f "$(state_file)" ] && [ "$ADOPT_MODE" -eq 0 ]; then
     fail "Run 'harness update --adopt' to begin tracking this legacy installation."
   fi
+  preflight_update_paths
 
   if [ "$ADOPT_MODE" -eq 1 ]; then
     adopt_existing_files

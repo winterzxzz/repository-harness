@@ -193,6 +193,20 @@ HARNESS_CLI_PLATFORM=test-platform \
 test -f "$UPDATE_TARGET/.harness/install-state.tsv" || \
   fail "adoption did not create managed-file state"
 
+SYMLINK_TARGET="$TMP_DIR/symlink-target.txt"
+printf 'outside project\n' > "$SYMLINK_TARGET"
+rm "$UPDATE_TARGET/docs/HARNESS.md"
+ln -s "$SYMLINK_TARGET" "$UPDATE_TARGET/docs/HARNESS.md"
+if HARNESS_CLI_BINARY_PATH="$CLI_SOURCE" \
+  HARNESS_CLI_CHECKSUM_PATH="$RELEASE_DIR/harness-cli-test-platform.sha256" \
+  HARNESS_CLI_PLATFORM=test-platform \
+  "$UPDATE_SOURCE/scripts/install-harness.sh" --directory "$UPDATE_TARGET" --update --force --yes \
+  >"$TMP_DIR/symlink-update.txt" 2>&1; then
+  fail "forced update accepted a symlinked managed file"
+fi
+test "$(cat "$SYMLINK_TARGET")" = 'outside project' || \
+  fail "forced update wrote through a managed-file symlink"
+
 MERGE_TARGET="$TMP_DIR/merge-target"
 mkdir -p "$MERGE_TARGET/docs/decisions"
 printf 'target readme\n' >"$MERGE_TARGET/README.md"
