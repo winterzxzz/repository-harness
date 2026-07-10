@@ -240,7 +240,8 @@ fn prepare_replacement_files(
         .into());
     }
 
-    refresh_checkout_from_upstream(config)?;
+    // Like prepare_run, replacement prepare does not pull from upstream; the
+    // replacement branches from the current HEAD.
     let story = load_runnable_story(&config.harness_db, story_id)?;
     let run_id = generate_run_id();
     let branch = format!("symphony/{run_id}");
@@ -281,7 +282,15 @@ fn prepare_replacement_files(
         );
         contract.request_changes = Some(request_changes);
         write_contract(&contract_path, &contract)?;
-        write_agents_shim(&worktree.join("AGENTS.md"), &contract_path, &contract)?;
+        // Mirror prepare_run: contract copy inside the worktree, shim pointing
+        // at the worktree-relative path.
+        let worktree_contract_relative = format!(".harness/runs/{run_id}/RUN_CONTRACT.json");
+        write_contract(&worktree.join(&worktree_contract_relative), &contract)?;
+        write_agents_shim(
+            &worktree.join("AGENTS.md"),
+            Path::new(&worktree_contract_relative),
+            &contract,
+        )?;
         Ok(())
     })();
     if let Err(error) = preparation {
