@@ -2,7 +2,7 @@
 
 ## Status
 
-planned
+implemented
 
 ## Lane
 
@@ -71,4 +71,14 @@ payload drift.
 
 ## Evidence
 
-No implementation evidence yet; the story is planned.
+- `scripts/bin/harness-cli story verify US-083`
+- `scripts/validate-install-payload.sh`
+- `bash -n scripts/install-harness.sh`
+- `git diff --check`
+- Payload validation proved required policy/scaffold retention, rejected source
+  README and numbered decision history, performed a fresh local install without
+  database or run artifacts, and preserved target-owned README and decision
+  files during `--merge`.
+- Both Bash and PowerShell installers remain bound to
+  `scripts/harness-install-files.txt`; PowerShell runtime execution was
+  unavailable on the local macOS validation host.
