@@ -3,6 +3,7 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const electronPath = require("electron");
 const {
+  backendArgs,
   developmentBackendBinary,
   findRepoRoot,
   repoRootFromElectronDir,
@@ -42,6 +43,11 @@ async function main() {
   });
   if (discoveredRoot !== repoRoot) {
     throw new Error(`Repo root discovery returned ${discoveredRoot}, expected ${repoRoot}`);
+  }
+
+  const args = backendArgs({ repoRoot, host: "127.0.0.1", port: 0 });
+  if (!args.includes("--no-open")) {
+    throw new Error("Electron backend must disable the CLI browser launcher");
   }
 
   runChecked("cargo", ["build", "-p", "harness-symphony"]);
