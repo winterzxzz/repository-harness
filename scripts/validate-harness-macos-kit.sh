@@ -22,10 +22,18 @@ if [ ! -x "$CLI_SOURCE" ] && [ -z "${HARNESS_CLI_FIXTURE:-}" ]; then
 fi
 test -x "$CLI_SOURCE" || fail "Harness CLI fixture is unavailable; run cargo build -p harness-cli first"
 
+SYMPHONY_SOURCE="${HARNESS_SYMPHONY_FIXTURE:-$ROOT_DIR/target/release/harness-symphony}"
+if [ ! -x "$SYMPHONY_SOURCE" ] && [ -z "${HARNESS_SYMPHONY_FIXTURE:-}" ]; then
+  SYMPHONY_SOURCE="$ROOT_DIR/target/debug/harness-symphony"
+fi
+test -x "$SYMPHONY_SOURCE" || \
+  fail "Harness Symphony fixture is unavailable; run cargo build -p harness-symphony first"
+
 OUT_DIR="$TMP_DIR/out"
 "$ROOT_DIR/scripts/build-harness-macos-kit.sh" \
   --platform "$platform" \
   --cli "$CLI_SOURCE" \
+  --symphony "$SYMPHONY_SOURCE" \
   --out-dir "$OUT_DIR"
 
 ARCHIVE="$OUT_DIR/harness-macos-${platform#macos-}.tar.gz"
@@ -43,6 +51,13 @@ test -x "$HARNESS" || fail "kit launcher is missing or not executable"
 "$HARNESS" --help >/dev/null
 test "$("$HARNESS" --version)" = "$(tr -d '\r\n' < "$ROOT_DIR/scripts/harness-kit-version")" || \
   fail "kit launcher reported the wrong version"
+
+test -x "$KIT_DIR/bin/harness-symphony" || fail "kit archive is missing the Symphony runner"
+test -f "$KIT_DIR/bin/harness-symphony.sha256" || \
+  fail "kit archive is missing the Symphony runner checksum"
+ln -s "$KIT_DIR/bin/harness-symphony" "$FORMULA_PREFIX/bin/harness-symphony"
+"$FORMULA_PREFIX/bin/harness-symphony" --help >/dev/null || \
+  fail "packaged Symphony runner does not execute"
 
 TARGET="$TMP_DIR/project"
 "$HARNESS" init --dry-run --yes "$TARGET" >/dev/null
@@ -70,12 +85,16 @@ grep -Fq 'harness-macos-arm64.tar.gz' "$FORMULA" || \
   fail "Formula omitted the arm64 kit archive"
 grep -Fq 'harness-macos-x64.tar.gz' "$FORMULA" || \
   fail "Formula omitted the Intel kit archive"
+grep -Fq 'bin/harness-symphony' "$FORMULA" || \
+  fail "Formula omitted the Symphony runner symlink"
 
 KIT_WORKFLOW="$ROOT_DIR/.github/workflows/harness-kit-release.yml"
 test -f "$KIT_WORKFLOW" || fail "kit release workflow is missing"
 ruby -e 'require "yaml"; YAML.load_file(ARGV.fetch(0))' "$KIT_WORKFLOW"
 rg -Fq 'cargo build -p harness-cli' "$KIT_WORKFLOW" || \
   fail "kit release verification does not build the CLI fixture"
+rg -Fq 'cargo build --release -p harness-symphony' "$KIT_WORKFLOW" || \
+  fail "kit release workflow does not build the Symphony runner"
 for release_workflow in \
   "$ROOT_DIR/.github/workflows/harness-cli-release.yml" \
   "$KIT_WORKFLOW" \

@@ -77,11 +77,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh release download "${{ steps.cli.outputs.tag }}" --repo "$GITHUB_REPOSITORY" --pattern "${{ matrix.cli_asset }}" --dir dist
 
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # 2026-07-10
+        with:
+          toolchain: stable
+
+      - name: Build Symphony runner
+        run: cargo build --release -p harness-symphony
+
       - name: Build and verify kit archive
         env:
           HARNESS_CLI_FIXTURE: ${{ github.workspace }}/dist/${{ matrix.cli_asset }}
+          HARNESS_SYMPHONY_FIXTURE: ${{ github.workspace }}/target/release/harness-symphony
         run: |
-          scripts/build-harness-macos-kit.sh --platform "${{ matrix.platform }}" --cli "$HARNESS_CLI_FIXTURE" --out-dir dist
+          scripts/build-harness-macos-kit.sh --platform "${{ matrix.platform }}" --cli "$HARNESS_CLI_FIXTURE" --symphony "$HARNESS_SYMPHONY_FIXTURE" --out-dir dist
           scripts/validate-harness-macos-kit.sh
           shasum -a 256 "dist/harness-macos-${{ matrix.platform == 'macos-arm64' && 'arm64' || 'x64' }}.tar.gz" > "dist/harness-macos-${{ matrix.platform == 'macos-arm64' && 'arm64' || 'x64' }}.tar.gz.sha256"
 

@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: build-harness-macos-kit.sh --platform <macos-arm64|macos-x64> --cli <path> --out-dir <path>
+Usage: build-harness-macos-kit.sh --platform <macos-arm64|macos-x64> --cli <path> --symphony <path> --out-dir <path>
 EOF
 }
 
@@ -26,6 +26,7 @@ sha256_file() {
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 PLATFORM=""
 CLI_SOURCE=""
+SYMPHONY_SOURCE=""
 OUT_DIR=""
 
 while [ "$#" -gt 0 ]; do
@@ -38,6 +39,11 @@ while [ "$#" -gt 0 ]; do
     --cli)
       [ "$#" -ge 2 ] || fail "--cli requires a path"
       CLI_SOURCE="$2"
+      shift 2
+      ;;
+    --symphony)
+      [ "$#" -ge 2 ] || fail "--symphony requires a path"
+      SYMPHONY_SOURCE="$2"
       shift 2
       ;;
     --out-dir)
@@ -61,6 +67,8 @@ case "$PLATFORM" in
 esac
 [ -n "$CLI_SOURCE" ] || fail "--cli is required"
 [ -x "$CLI_SOURCE" ] || fail "Harness CLI binary is not executable: $CLI_SOURCE"
+[ -n "$SYMPHONY_SOURCE" ] || fail "--symphony is required"
+[ -x "$SYMPHONY_SOURCE" ] || fail "Harness Symphony binary is not executable: $SYMPHONY_SOURCE"
 [ -n "$OUT_DIR" ] || fail "--out-dir is required"
 
 STAGE_DIR="$(mktemp -d)"
@@ -103,6 +111,9 @@ chmod 755 "$STAGE_DIR/bin/harness"
 cp -p "$CLI_SOURCE" "$KIT_ROOT/scripts/bin/harness-cli"
 chmod 755 "$KIT_ROOT/scripts/bin/harness-cli"
 sha256_file "$KIT_ROOT/scripts/bin/harness-cli" > "$KIT_ROOT/scripts/bin/harness-cli.sha256"
+cp -p "$SYMPHONY_SOURCE" "$STAGE_DIR/bin/harness-symphony"
+chmod 755 "$STAGE_DIR/bin/harness-symphony"
+sha256_file "$STAGE_DIR/bin/harness-symphony" > "$STAGE_DIR/bin/harness-symphony.sha256"
 
 mkdir -p "$OUT_DIR"
 ARCHIVE="$OUT_DIR/harness-macos-${PLATFORM#macos-}.tar.gz"
