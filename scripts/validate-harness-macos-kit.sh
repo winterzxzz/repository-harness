@@ -16,8 +16,8 @@ case "$(uname -m)" in
   *) fail "unsupported host architecture: $(uname -m)" ;;
 esac
 
-CLI_SOURCE="$ROOT_DIR/scripts/bin/harness-cli"
-if [ ! -x "$CLI_SOURCE" ]; then
+CLI_SOURCE="${HARNESS_CLI_FIXTURE:-$ROOT_DIR/scripts/bin/harness-cli}"
+if [ ! -x "$CLI_SOURCE" ] && [ -z "${HARNESS_CLI_FIXTURE:-}" ]; then
   CLI_SOURCE="$ROOT_DIR/target/debug/harness-cli"
 fi
 test -x "$CLI_SOURCE" || fail "Harness CLI fixture is unavailable; run cargo build -p harness-cli first"
@@ -57,5 +57,28 @@ if "$HARNESS" init --yes "$TMP_DIR/checksum-target" >"$TMP_DIR/checksum-error.tx
 fi
 grep -Fq 'Local Harness CLI checksum file is missing' "$TMP_DIR/checksum-error.txt" || \
   fail "kit init did not explain the missing local CLI checksum"
+
+FORMULA="$TMP_DIR/harness.rb"
+"$ROOT_DIR/scripts/render-homebrew-formula.sh" \
+  --kit-version 0.1.0 \
+  --base-url "file://$OUT_DIR" \
+  --arm-sha 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
+  --intel-sha fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210 \
+  --output "$FORMULA"
+ruby -c "$FORMULA" >/dev/null
+grep -Fq 'harness-macos-arm64.tar.gz' "$FORMULA" || \
+  fail "Formula omitted the arm64 kit archive"
+grep -Fq 'harness-macos-x64.tar.gz' "$FORMULA" || \
+  fail "Formula omitted the Intel kit archive"
+
+KIT_WORKFLOW="$ROOT_DIR/.github/workflows/harness-kit-release.yml"
+test -f "$KIT_WORKFLOW" || fail "kit release workflow is missing"
+ruby -e 'require "yaml"; YAML.load_file(ARGV.fetch(0))' "$KIT_WORKFLOW"
+grep -Fq 'harness-macos-arm64.tar.gz' "$KIT_WORKFLOW" || \
+  fail "kit release workflow omitted the arm64 archive"
+grep -Fq 'harness-macos-x64.tar.gz' "$KIT_WORKFLOW" || \
+  fail "kit release workflow omitted the Intel archive"
+grep -Fq 'HOMEBREW_TAP_TOKEN' "$KIT_WORKFLOW" || \
+  fail "kit release workflow omitted the tap publishing credential"
 
 printf 'macOS kit validation passed\n'
