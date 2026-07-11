@@ -1,11 +1,5 @@
 # Agent Instructions
 
-## Project Skills
-
-Use `.codex/skills/harness-intake-griller/SKILL.md` when a request needs
-discussion, feature intake, docs, or story shaping before Symphony execution.
-The skill is project-scoped; do not use a global copy as the source of truth.
-
 ## Template Review Boundary
 
 Before reviewing workflow, reliability, or cost, check whether

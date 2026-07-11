@@ -103,6 +103,9 @@ grep -Fq '## Template Review Boundary' "$FRESH_TARGET/AGENTS.md" || \
   fail "fresh install omitted the template review boundary"
 grep -Fq 'scripts/harness-install-files.txt' "$FRESH_TARGET/AGENTS.md" || \
   fail "template review boundary does not identify the source manifest"
+if grep -Fq '.codex/skills/harness-intake-griller/SKILL.md' "$FRESH_TARGET/AGENTS.md"; then
+  fail "fresh install AGENTS.md references an uninstalled project skill"
+fi
 test ! -e "$FRESH_TARGET/README.md" || fail "fresh install copied source repository README"
 for decision_file in "$FRESH_TARGET/docs/decisions"/[0-9][0-9][0-9][0-9]*.md; do
   test ! -f "$decision_file" || fail "fresh install copied numbered decision history"
@@ -112,6 +115,22 @@ test -f "$FRESH_TARGET/.harness/install-state.tsv" || \
   fail "fresh install omitted managed-file state"
 test ! -e "$FRESH_TARGET/.harness/changesets" || \
   fail "fresh install created runtime history"
+if grep -Eq '^\| US-[0-9]+' "$FRESH_TARGET/docs/TEST_MATRIX.md"; then
+  fail "fresh install copied source story evidence into the test matrix"
+fi
+if grep -Fq 'repository-harness' "$FRESH_TARGET/docs/HARNESS_MATURITY.md" || \
+   grep -Fq 'repository-harness' "$FRESH_TARGET/docs/HARNESS_COMPONENTS.md"; then
+  fail "fresh install copied source repository identity into operating docs"
+fi
+if grep -Eq 'SYMPHONY_(QUICKSTART|SCOPE)\.md' "$FRESH_TARGET/docs/README.md"; then
+  fail "fresh install documentation map references omitted Symphony docs"
+fi
+if grep -Fq 'symphony-web-ui-controller.md' "$FRESH_TARGET/docs/product/README.md"; then
+  fail "fresh install product index references an omitted source contract"
+fi
+if grep -Eq 'Phase [0-9]+ pins `harness-cli-v' "$FRESH_TARGET/scripts/README.md"; then
+  fail "fresh install scripts guide contains a stale source release claim"
+fi
 
 LOCAL_CLI_TARGET="$TMP_DIR/local-cli-target"
 HARNESS_CLI_BINARY_PATH="$CLI_SOURCE" \
