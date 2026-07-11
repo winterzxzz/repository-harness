@@ -118,6 +118,14 @@ test ! -e "$FRESH_TARGET/.harness/changesets" || \
 if grep -Eq '^\| US-[0-9]+' "$FRESH_TARGET/docs/TEST_MATRIX.md"; then
   fail "fresh install copied source story evidence into the test matrix"
 fi
+test -f "$FRESH_TARGET/docs/HARNESS_MATURITY.md" || \
+  fail "fresh install omitted Harness maturity guidance"
+test -f "$FRESH_TARGET/docs/HARNESS_COMPONENTS.md" || \
+  fail "fresh install omitted Harness component guidance"
+test -f "$FRESH_TARGET/docs/README.md" || \
+  fail "fresh install omitted the documentation map"
+test -f "$FRESH_TARGET/docs/product/README.md" || \
+  fail "fresh install omitted the product documentation scaffold"
 if grep -Fq 'repository-harness' "$FRESH_TARGET/docs/HARNESS_MATURITY.md" || \
    grep -Fq 'repository-harness' "$FRESH_TARGET/docs/HARNESS_COMPONENTS.md"; then
   fail "fresh install copied source repository identity into operating docs"
