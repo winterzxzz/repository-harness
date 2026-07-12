@@ -1,6 +1,7 @@
 {
   "version": 1,
   "story_id": "US-097",
+  "story_status": "implemented",
   "completed_at": "2026-07-12T08:28:44Z",
   "partition_commit": "1418a6437aa5a4d8c9420172a8430ea0ea555c54",
   "external_artifact_root": "/Users/themrb/Documents/personal/e11-migration-artifacts/US-097-20260712",
@@ -63,6 +64,7 @@
     "generic_fixture_operations": 22,
     "harness_cli_tests": 81,
     "audit_entropy_before_story_completion": 5,
+    "audit_entropy_after_story_completion": 0,
     "wrong_owner_runnable_rows": 0,
     "consumer_changeset_trackable": true
   }
