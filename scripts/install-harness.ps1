@@ -35,6 +35,67 @@ function Resolve-TargetPath([string]$PathValue) {
     return [System.IO.Path]::GetFullPath((Join-Path (Get-Location).Path $expanded))
 }
 
+function Assert-ManagedPathSafe([string]$Relative) {
+    if ([string]::IsNullOrWhiteSpace($Relative)) {
+        Fail "Managed file path is empty"
+    }
+
+    $normalized = $Relative -replace '\\', '/'
+    if ([System.IO.Path]::IsPathRooted($Relative) -or
+        $normalized -match '^[A-Za-z]:/' -or
+        $normalized -match '(^|/)\.\.(/|$)') {
+        Fail "Invalid managed file path: $Relative"
+    }
+
+    $target = Join-Path $script:TargetDir $Relative
+    $targetItem = Get-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue
+    if ($null -ne $targetItem -and
+        (($targetItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)) {
+        Fail "Refusing to update symlinked Harness path: $Relative"
+    }
+
+    $parent = Split-Path -Parent $target
+    while ($true) {
+        $parentItem = Get-Item -LiteralPath $parent -Force -ErrorAction SilentlyContinue
+        if ($null -ne $parentItem) {
+            if (($parentItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                Fail "Refusing to update through symlinked Harness path: $Relative"
+            }
+            if ($parent -eq $script:TargetDir) {
+                break
+            }
+        }
+
+        $nextParent = Split-Path -Parent $parent
+        if ([string]::IsNullOrWhiteSpace($nextParent) -or $nextParent -eq $parent) {
+            Fail "Managed file parent is outside the target project: $Relative"
+        }
+        $parent = $nextParent
+    }
+}
+
+function Assert-StatePathsSafe {
+    $targetItem = Get-Item -LiteralPath $script:TargetDir -Force -ErrorAction SilentlyContinue
+    if ($null -ne $targetItem -and
+        (($targetItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)) {
+        Fail "Refusing to use a reparse-point target project: $script:TargetDir"
+    }
+
+    foreach ($relative in @(".harness", ".harness-backup")) {
+        $path = Join-Path $script:TargetDir $relative
+        $item = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+        if ($null -eq $item) {
+            continue
+        }
+        if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            Fail "Refusing to use a reparse-point Harness state path: $relative"
+        }
+        if (!$item.PSIsContainer) {
+            Fail "Harness state path is not a directory: $relative"
+        }
+    }
+}
+
 function Get-SourceMode {
     if ($PSScriptRoot) {
         $candidate = Split-Path -Parent $PSScriptRoot
@@ -377,6 +438,7 @@ $script:PayloadManifest = "scripts/harness-install-files.txt"
 $script:SchemaDir = "scripts/schema"
 $script:CliBaseUrl = if ($env:HARNESS_CLI_BASE_URL) { $env:HARNESS_CLI_BASE_URL.TrimEnd("/") } else { Get-DefaultCliBaseUrl }
 $script:TargetDir = Resolve-TargetPath $Directory
+Assert-StatePathsSafe
 $script:BackupDir = Join-Path $script:TargetDir (".harness-backup/" + (Get-Date -Format "yyyyMMddHHmmss"))
 $script:ConflictAction = "install"
 
@@ -442,6 +504,13 @@ $files += Get-SchemaFiles
 $files = $files | Select-Object -Unique
 if (($files | Where-Object { $_ -like "$script:SchemaDir/*.sql" }).Count -eq 0) {
     Fail "No schema migrations found in $script:SchemaDir"
+}
+
+if (Test-Path -LiteralPath $script:TargetDir) {
+    foreach ($file in $files) {
+        Assert-ManagedPathSafe $file
+    }
+    Assert-ManagedPathSafe "scripts/bin/harness-cli.exe"
 }
 
 foreach ($file in $files) {

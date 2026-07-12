@@ -46,6 +46,8 @@ jobs:
           cargo fmt --check
           cargo test --workspace
           cargo build -p harness-cli
+          scripts/validate-architecture.sh
+          scripts/validate-harness-cli-release.sh
           bash -n scripts/install-harness.sh scripts/harness scripts/harness-symphony scripts/build-harness-macos-kit.sh scripts/render-homebrew-formula.sh scripts/validate-harness-macos-kit.sh
           scripts/validate-install-payload.sh
 
@@ -71,6 +73,11 @@ jobs:
       - name: Resolve bundled CLI release
         id: cli
         run: echo "tag=$(awk 'NF && $1 !~ /^#/ { print $1; exit }' scripts/harness-cli-release-tag)" >> "$GITHUB_OUTPUT"
+
+      - name: Verify bundled CLI release is published
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/validate-harness-cli-release.sh --remote --repo "$GITHUB_REPOSITORY"
 
       - name: Download bundled CLI release asset
         env:

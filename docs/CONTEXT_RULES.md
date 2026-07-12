@@ -83,8 +83,8 @@ Use this phase to leave evidence for the next agent.
 
 | Trigger | Expand to |
 | --- | --- |
-| Database schema, durable records, or migrations | `docs/decisions/0004-sqlite-durable-layer.md`, `scripts/schema/`, and relevant CLI code |
-| CLI behavior or installer distribution | `docs/decisions/0005-prebuilt-rust-harness-cli.md`, `scripts/README.md`, relevant `crates/harness-cli/*` code, CLI help, and installer docs |
+| Database schema, durable records, or migrations | `docs/decisions/` when a matching record exists, `scripts/schema/`, and relevant CLI code |
+| CLI behavior or installer distribution | `docs/decisions/` when a matching record exists, `scripts/README.md`, relevant `crates/harness-cli/*` code, CLI help, and installer docs when present |
 | Auth, authorization, data loss, audit/security, or external providers | High-risk story template, relevant decisions, and owner confirmation when direction is ambiguous |
 | Public API, product behavior, or user-visible workflow | Relevant `docs/product/*`, story packets, validation expectations, and UI/API tests |
 | Harness policy, source hierarchy, risk classification, or validation rules | `docs/HARNESS.md`, `docs/FEATURE_INTAKE.md`, `docs/ARCHITECTURE.md`, and relevant decisions |

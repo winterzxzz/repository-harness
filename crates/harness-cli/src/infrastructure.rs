@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
@@ -12,8 +13,9 @@ use thiserror::Error;
 use crate::application::{
     BacklogAddInput, BacklogCloseInput, BrownfieldImportResult, ChangesetApplyResult,
     ContextPackInput, DbRebuildResult, DecisionAddInput, DecisionVerifyResult, HarnessContext,
-    InitResult, IntakeInput, InterventionAddInput, InterventionFilter, MigrateResult, QueryTable,
-    StoryAddInput, StoryUpdateInput, StoryVerifyResult, ToolRegisterInput, TraceInput,
+    HarnessRepository, InitResult, IntakeInput, InterventionAddInput, InterventionFilter,
+    MigrateResult, QueryTable, StoryAddInput, StoryUpdateInput, StoryVerifyResult, ToolCheckResult,
+    ToolRegisterInput, TraceInput,
 };
 use crate::domain::{
     compiled_tool_registry, normalize_token, score_context, score_trace, validate_tool_description,
@@ -72,59 +74,6 @@ pub enum HarnessInfraError {
     Io(#[from] std::io::Error),
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
-}
-
-/// Outcome of one `tool check` scan. The CLI reports these facts; the agent
-/// applies policy (skip / degrade / use) based on `status`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ToolCheckResult {
-    pub name: String,
-    pub kind: String,
-    pub capability: Option<String>,
-    pub status: String,
-    pub detail: String,
-}
-
-pub trait HarnessRepository {
-    fn init(&self) -> Result<InitResult>;
-    fn migrate(&self) -> Result<MigrateResult>;
-    fn import_brownfield(&self) -> Result<BrownfieldImportResult>;
-    fn record_intake(&self, input: IntakeInput) -> Result<i64>;
-    fn add_story(&self, input: StoryAddInput) -> Result<()>;
-    fn update_story(&self, input: StoryUpdateInput) -> Result<()>;
-    fn verify_story(&self, id: &str) -> Result<StoryVerifyResult>;
-    fn verify_all_stories(&self) -> Result<StoryVerifyAllResult>;
-    fn add_decision(&self, input: DecisionAddInput) -> Result<()>;
-    fn verify_decision(&self, id: &str) -> Result<DecisionVerifyResult>;
-    fn add_backlog(&self, input: BacklogAddInput) -> Result<i64>;
-    fn close_backlog(&self, input: BacklogCloseInput) -> Result<()>;
-    fn register_tool(&self, input: ToolRegisterInput) -> Result<()>;
-    fn remove_tool(&self, name: &str) -> Result<()>;
-    fn check_tools(&self, name: Option<String>) -> Result<Vec<ToolCheckResult>>;
-    fn add_intervention(&self, input: InterventionAddInput) -> Result<i64>;
-    fn record_trace(&self, input: TraceInput) -> Result<i64>;
-    fn score_trace(&self, id: Option<i64>) -> Result<TraceScoreResult>;
-    fn score_context(&self, id: i64) -> Result<ContextScoreResult>;
-    fn context_pack(&self, input: ContextPackInput) -> Result<String>;
-    fn story_verify_status(&self, id: &str) -> Result<StoryVerifyStatus>;
-    fn query_matrix(&self) -> Result<Vec<StoryMatrixRecord>>;
-    fn query_backlog(&self, filter: BacklogFilter) -> Result<Vec<BacklogRecord>>;
-    fn query_decisions(&self) -> Result<Vec<DecisionRecord>>;
-    fn query_intakes(&self) -> Result<Vec<IntakeRecord>>;
-    fn query_traces(&self) -> Result<Vec<TraceRecord>>;
-    fn query_friction(&self) -> Result<Vec<FrictionRecord>>;
-    fn query_tools(
-        &self,
-        responsibility: Option<String>,
-        capability: Option<String>,
-    ) -> Result<Vec<ToolEntry>>;
-    fn query_interventions(&self, filter: InterventionFilter) -> Result<Vec<InterventionRecord>>;
-    fn query_stats(&self) -> Result<HarnessStats>;
-    fn audit(&self) -> Result<AuditResult>;
-    fn propose(&self, commit: bool) -> Result<Vec<ImprovementProposal>>;
-    fn query_sql(&self, sql: &str) -> Result<QueryTable>;
-    fn apply_changeset(&self, path: &Path) -> Result<ChangesetApplyResult>;
-    fn rebuild_db(&self, changeset_dir: &Path) -> Result<DbRebuildResult>;
 }
 
 #[derive(Debug)]
@@ -524,6 +473,8 @@ impl SqliteHarnessRepository {
 }
 
 impl HarnessRepository for SqliteHarnessRepository {
+    type Error = HarnessInfraError;
+
     fn init(&self) -> Result<InitResult> {
         if self.db_path.exists() {
             let connection = self.open_existing()?;
@@ -1615,6 +1566,7 @@ impl HarnessRepository for SqliteHarnessRepository {
                    AND last_verified_result IS NULL
                  ORDER BY id;",
             )?,
+            untracked_decisions: untracked_decision_findings(&self.repo_root, &connection)?,
             backlog_without_outcomes: audit_findings(
                 &connection,
                 "SELECT CAST(id AS TEXT), title FROM backlog
@@ -1634,6 +1586,7 @@ impl HarnessRepository for SqliteHarnessRepository {
                  ORDER BY story.id;",
             )?,
             broken_tools: Vec::new(),
+            unresolved_friction: unresolved_friction_findings(&connection)?,
         };
 
         let mut statement =
@@ -1668,11 +1621,13 @@ impl HarnessRepository for SqliteHarnessRepository {
         let connection = self.open_existing()?;
         let audit = self.audit()?;
         let mut proposals = Vec::new();
+        let mut has_friction_proposal = false;
 
         for (text, count) in repeated_friction(&connection)? {
             if validation_provider_friction_resolved(&connection, &text)? {
                 continue;
             }
+            has_friction_proposal = true;
             proposals.push(ImprovementProposal {
                 title: format!("Reduce repeated friction: {}", short_title(&text)),
                 component: "Failure attribution".to_owned(),
@@ -1682,6 +1637,23 @@ impl HarnessRepository for SqliteHarnessRepository {
                 suggested_action: "Update the relevant Harness docs, templates, or CLI guidance for this friction pattern.".to_owned(),
                 validation_plan: "Review the next five related traces and compare friction frequency.".to_owned(),
                 confidence: confidence_for_count(count),
+                committed_backlog_id: None,
+            });
+        }
+
+        if !audit.unresolved_friction.is_empty() && !has_friction_proposal {
+            proposals.push(ImprovementProposal {
+                title: "Review unresolved harness friction".to_owned(),
+                component: "Failure attribution".to_owned(),
+                evidence: format!(
+                    "{} trace(s) recorded actionable friction without a repeated pattern.",
+                    audit.unresolved_friction.len()
+                ),
+                predicted_impact: "Prevent one-off harness failures from disappearing before they can be evaluated.".to_owned(),
+                risk: "tiny".to_owned(),
+                suggested_action: "Review the listed traces and either fix the harness or record a bounded backlog item with a measurable prediction.".to_owned(),
+                validation_plan: "Run harness-cli audit after the review and confirm the friction is resolved or linked to a backlog item.".to_owned(),
+                confidence: "low".to_owned(),
                 committed_backlog_id: None,
             });
         }
@@ -1709,6 +1681,10 @@ impl HarnessRepository for SqliteHarnessRepository {
             (
                 "unverified decision commands",
                 audit.unverified_decisions.len(),
+            ),
+            (
+                "markdown decisions missing durable records",
+                audit.untracked_decisions.len(),
             ),
             (
                 "implemented backlog items without outcomes",
@@ -2837,6 +2813,75 @@ fn audit_findings(connection: &Connection, sql: &str) -> Result<Vec<AuditFinding
         })
     })?;
     collect_rows(rows)
+}
+
+fn untracked_decision_findings(
+    repo_root: &Path,
+    connection: &Connection,
+) -> Result<Vec<AuditFinding>> {
+    let mut statement = connection.prepare(
+        "SELECT doc_path FROM decision
+         WHERE doc_path IS NOT NULL AND TRIM(doc_path) <> '';",
+    )?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+    let tracked_paths = collect_rows(rows)?.into_iter().collect::<HashSet<_>>();
+
+    let mut files = Vec::new();
+    collect_markdown_files(&repo_root.join("docs/decisions"), &mut files)?;
+    let mut findings = Vec::new();
+    for path in files {
+        let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if !is_decision_file_name(file_name) {
+            continue;
+        }
+        let relative = relative_path(repo_root, &path);
+        if tracked_paths.contains(&relative) {
+            continue;
+        }
+        let title = fs::read_to_string(&path)
+            .ok()
+            .and_then(|content| markdown_title(&content))
+            .unwrap_or_else(|| relative.clone());
+        findings.push(AuditFinding {
+            id: path
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .unwrap_or(file_name)
+                .to_owned(),
+            title,
+        });
+    }
+    Ok(findings)
+}
+
+fn unresolved_friction_findings(connection: &Connection) -> Result<Vec<AuditFinding>> {
+    let mut statement = connection.prepare(
+        "SELECT id, task_summary, harness_friction FROM trace
+         WHERE harness_friction IS NOT NULL
+           AND TRIM(harness_friction) <> ''
+           AND LOWER(TRIM(harness_friction)) <> 'none'
+         ORDER BY id;",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+    let mut findings = Vec::new();
+    for (id, task_summary, friction) in collect_rows(rows)? {
+        if validation_provider_friction_resolved(connection, &friction)? {
+            continue;
+        }
+        findings.push(AuditFinding {
+            id: format!("trace-{id}"),
+            title: format!("{task_summary}: {friction}"),
+        });
+    }
+    Ok(findings)
 }
 
 fn repeated_friction(connection: &Connection) -> Result<Vec<(String, usize)>> {
@@ -4176,7 +4221,62 @@ mod tests {
         assert!(proposals
             .iter()
             .all(|proposal| proposal.committed_backlog_id.is_some()));
-        assert!(repository.query_backlog(BacklogFilter::Open).unwrap().len() >= 1);
+        assert!(!repository
+            .query_backlog(BacklogFilter::Open)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn audit_surfaces_markdown_decisions_missing_from_durable_records() {
+        let (_temp_dir, repository) = isolated_test_repository();
+        fs::create_dir_all(repository.repo_root.join("docs/decisions")).unwrap();
+        fs::write(
+            repository
+                .repo_root
+                .join("docs/decisions/0001-untracked.md"),
+            "# Untracked decision\n\n## Status\n\nAccepted\n",
+        )
+        .unwrap();
+        repository.init().unwrap();
+
+        let audit = repository.audit().unwrap();
+
+        assert_eq!(audit.untracked_decisions.len(), 1);
+        assert!(audit.entropy_score() > 0);
+    }
+
+    #[test]
+    fn propose_keeps_a_single_unresolved_friction_visible() {
+        let (_temp_dir, repository) = isolated_test_repository();
+        repository.init().unwrap();
+        repository
+            .record_trace(TraceInput {
+                task_summary: "Friction candidate".to_owned(),
+                intake_id: None,
+                story_id: None,
+                agent: Some("codex".to_owned()),
+                outcome: Some("completed".to_owned()),
+                duration_seconds: None,
+                token_estimate: None,
+                friction: Some("A one-off but actionable friction".to_owned()),
+                notes: None,
+                actions: CsvList::from_optional(None),
+                files_read: CsvList::from_optional(None),
+                files_changed: CsvList::from_optional(None),
+                decisions: CsvList::from_optional(None),
+                errors: CsvList::from_optional(None),
+            })
+            .unwrap();
+
+        let proposals = repository.propose(false).unwrap();
+
+        let audit = repository.audit().unwrap();
+        assert_eq!(audit.unresolved_friction.len(), 1);
+        assert!(audit.entropy_score() > 0);
+        assert!(proposals
+            .iter()
+            .any(|proposal| proposal.title == "Review unresolved harness friction"));
     }
 
     #[test]

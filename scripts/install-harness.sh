@@ -85,7 +85,7 @@ expand_path() {
     "~")
       printf '%s\n' "$HOME"
       ;;
-    "~/"*)
+    \~/*)
       printf '%s/%s\n' "$HOME" "${1#~/}"
       ;;
     /*)
@@ -133,7 +133,7 @@ copy_file() {
         cp -p "$target" "$backup"
         write_source_file "$relative" "$target"
         record_managed_file "$relative"
-        log "updated $relative (backup: ${backup#$TARGET_DIR/})"
+        log "updated $relative (backup: ${backup#"$TARGET_DIR"/})"
       fi
       UPDATED=$((UPDATED + 1))
     else
@@ -176,10 +176,10 @@ if grep -Fxq "harness.db" "$target" &&
   if [ "$DRY_RUN" -eq 1 ]; then
     log "update   .gitignore (append harness rules)"
   else
-    {
-      [ -s "$target" ] && printf '\n'
-      printf '%s\n%s\n' "$marker" "$rules"
-    } >> "$target"
+    if [ -s "$target" ]; then
+      printf '\n' >> "$target"
+    fi
+    printf '%s\n%s\n' "$marker" "$rules" >> "$target"
     log "updated  .gitignore (appended harness rules)"
   fi
   UPDATED=$((UPDATED + 1))
@@ -338,7 +338,7 @@ assert_update_path_is_safe() {
   esac
 }
 
-preflight_update_paths() {
+preflight_managed_paths() {
   local relative
 
   while IFS= read -r relative || [ -n "$relative" ]; do
@@ -408,7 +408,7 @@ update_managed_file() {
   record_managed_file "$relative"
   UPDATED=$((UPDATED + 1))
   if [ "$current_hash" != "$recorded_hash" ]; then
-    log "updated  $relative (backup: ${BACKUP_DIR#$TARGET_DIR/}/$relative)"
+    log "updated  $relative (backup: ${BACKUP_DIR#"$TARGET_DIR"/}/$relative)"
   else
     log "updated  $relative"
   fi
@@ -615,10 +615,10 @@ refresh_agent_shim() {
     write_source_file "AGENTS.md" "$target"
     insert_agent_custom_section "$target" "$custom_tmp"
     rm -f "$custom_tmp"
-    log "updated  AGENTS.md (old Harness guide -> shim; backup: ${BACKUP_DIR#$TARGET_DIR/}/AGENTS.md)"
+    log "updated  AGENTS.md (old Harness guide -> shim; backup: ${BACKUP_DIR#"$TARGET_DIR"/}/AGENTS.md)"
   else
     append_or_replace_agent_harness_block
-    log "updated  AGENTS.md (refreshed Harness block; backup: ${BACKUP_DIR#$TARGET_DIR/}/AGENTS.md)"
+    log "updated  AGENTS.md (refreshed Harness block; backup: ${BACKUP_DIR#"$TARGET_DIR"/}/AGENTS.md)"
   fi
   UPDATED=$((UPDATED + 1))
 }
@@ -686,7 +686,7 @@ write_claude_shim() {
         !in_block { print }
       ' block_file="$block_tmp" "$target" > "$tmp"
       mv "$tmp" "$target"
-      log "updated  CLAUDE.md (refreshed Harness block; backup: ${BACKUP_DIR#$TARGET_DIR/}/CLAUDE.md)"
+      log "updated  CLAUDE.md (refreshed Harness block; backup: ${BACKUP_DIR#"$TARGET_DIR"/}/CLAUDE.md)"
     fi
     UPDATED=$((UPDATED + 1))
   elif [ -e "$target" ]; then
@@ -698,7 +698,7 @@ write_claude_shim() {
         printf '\n'
         cat "$block_tmp"
       } >> "$target"
-      log "updated  CLAUDE.md (appended Harness block; backup: ${BACKUP_DIR#$TARGET_DIR/}/CLAUDE.md)"
+      log "updated  CLAUDE.md (appended Harness block; backup: ${BACKUP_DIR#"$TARGET_DIR"/}/CLAUDE.md)"
     fi
     UPDATED=$((UPDATED + 1))
   else
@@ -745,6 +745,20 @@ sha256_file() {
 
 state_file() {
   printf '%s\n' "$TARGET_DIR/.harness/install-state.tsv"
+}
+
+assert_state_paths_are_safe() {
+  local relative path
+
+  [ ! -L "$TARGET_DIR" ] || fail "Refusing to use symlinked target project: $TARGET_DIR"
+
+  for relative in .harness .harness-backup; do
+    path="$TARGET_DIR/$relative"
+    [ ! -L "$path" ] || fail "Refusing to use symlinked Harness state path: $relative"
+    if [ -e "$path" ] && [ ! -d "$path" ]; then
+      fail "Harness state path is not a directory: $relative"
+    fi
+  done
 }
 
 read_kit_version() {
@@ -1010,7 +1024,7 @@ update_harness_cli_binary() {
   record_managed_file "$relative"
   UPDATED=$((UPDATED + 1))
   if [ "$current_hash" != "$recorded_hash" ]; then
-    log "updated  $relative (backup: ${BACKUP_DIR#$TARGET_DIR/}/$relative)"
+    log "updated  $relative (backup: ${BACKUP_DIR#"$TARGET_DIR"/}/$relative)"
   else
     log "updated  $relative"
   fi
@@ -1147,7 +1161,7 @@ override_protected_target_paths() {
 
     mkdir -p "$BACKUP_DIR"
     mv "$TARGET_DIR/$protected" "$BACKUP_DIR/$protected"
-    log "removed  $protected (backup: ${BACKUP_DIR#$TARGET_DIR/}/$protected)"
+    log "removed  $protected (backup: ${BACKUP_DIR#"$TARGET_DIR"/}/$protected)"
   done
 }
 
@@ -1279,6 +1293,7 @@ if [ "$UPDATE_MODE" -eq 0 ] && [ "$YES" -eq 0 ] && can_prompt; then
 fi
 
 TARGET_DIR="$(make_absolute_parent "$(expand_path "$TARGET_INPUT")")"
+assert_state_paths_are_safe
 BACKUP_DIR="$TARGET_DIR/.harness-backup/$(date +%Y%m%d%H%M%S)"
 CREATED=0
 UPDATED=0
@@ -1327,7 +1342,7 @@ if [ "$UPDATE_MODE" -eq 1 ]; then
   if [ ! -f "$(state_file)" ] && [ "$ADOPT_MODE" -eq 0 ]; then
     fail "Run 'harness update --adopt' to begin tracking this legacy installation."
   fi
-  preflight_update_paths
+  preflight_managed_paths
 
   if [ "$ADOPT_MODE" -eq 1 ]; then
     adopt_existing_files
@@ -1336,6 +1351,9 @@ if [ "$UPDATE_MODE" -eq 1 ]; then
     install_harness_cli_binary
   fi
 else
+  if [ -d "$TARGET_DIR" ]; then
+    preflight_managed_paths
+  fi
   copy_payload_files
   refresh_agent_shim
   write_claude_shim
