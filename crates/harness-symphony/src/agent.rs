@@ -193,15 +193,19 @@ fn run_codex_agent_with_timeout(
     let stderr_capture = Arc::clone(&stderr_text);
     let stderr_writer = Arc::clone(&stderr_log);
     std::thread::spawn(move || {
-        let mut reader = BufReader::new(stderr);
+        let mut reader = stderr;
         let mut buffer = [0_u8; 8192];
+        let mut captured_len = 0;
         while let Ok(count) = reader.read(&mut buffer) {
             if count == 0 {
                 break;
             }
-            let mut captured = stderr_capture.lock().expect("stderr capture poisoned");
-            let remaining = AGENT_OUTPUT_MAX_BYTES.saturating_sub(captured.len());
-            captured.extend_from_slice(&buffer[..count.min(remaining)]);
+            if captured_len < AGENT_OUTPUT_MAX_BYTES {
+                let mut captured = stderr_capture.lock().expect("stderr capture poisoned");
+                let remaining = AGENT_OUTPUT_MAX_BYTES.saturating_sub(captured.len());
+                captured.extend_from_slice(&buffer[..count.min(remaining)]);
+                captured_len = captured.len();
+            }
             let _ = stderr_writer
                 .lock()
                 .expect("stderr log poisoned")
@@ -549,14 +553,18 @@ fn spawn_output_drain<R: Read + Send + 'static>(
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let mut buffer = [0_u8; 8192];
+        let mut captured_len = 0;
         while let Ok(count) = reader.read(&mut buffer) {
             if count == 0 {
                 break;
             }
             if let Some(capture) = &capture {
-                let mut captured = capture.lock().expect("stderr capture poisoned");
-                let remaining = AGENT_OUTPUT_MAX_BYTES.saturating_sub(captured.len());
-                captured.extend_from_slice(&buffer[..count.min(remaining)]);
+                if captured_len < AGENT_OUTPUT_MAX_BYTES {
+                    let mut captured = capture.lock().expect("stderr capture poisoned");
+                    let remaining = AGENT_OUTPUT_MAX_BYTES.saturating_sub(captured.len());
+                    captured.extend_from_slice(&buffer[..count.min(remaining)]);
+                    captured_len = captured.len();
+                }
             }
             let _ = writer
                 .lock()
@@ -719,15 +727,13 @@ fn append_event_log(path: &Path, line: &str) -> Result<(), AgentError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let current_len = std::fs::metadata(path)
-        .map(|metadata| metadata.len() as usize)
-        .unwrap_or(0);
     let mut file = OpenOptions::new()
         .create(true)
         .truncate(false)
         .read(true)
         .write(true)
         .open(path)?;
+    let current_len = file.metadata()?.len() as usize;
     let bytes = format!("{line}\n").into_bytes();
     if current_len.saturating_add(bytes.len()) <= AGENT_OUTPUT_MAX_BYTES {
         file.seek(SeekFrom::End(0))?;
