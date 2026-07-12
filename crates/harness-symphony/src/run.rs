@@ -62,6 +62,12 @@ pub struct PreparedRun {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutoRunProvenance {
+    pub base_sha: String,
+    pub refresh_warning: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompletedRun {
     pub prepared: PreparedRun,
     pub outcome: String,
@@ -83,6 +89,10 @@ pub struct RunContract {
     pub result_json_schema: Value,
     pub forbidden_paths: Vec<String>,
     pub agent_instructions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_sha: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_warning: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_changes: Option<RequestChangesContract>,
 }
@@ -140,6 +150,23 @@ struct ValidationCommand {
 // checkout is a surprising side effect, and a dirty checkout would make every
 // run fail. Runs branch from the current HEAD; pull first if you want latest.
 pub fn prepare_run(config: &ResolvedConfig, story_id: &str) -> Result<PreparedRun, RunError> {
+    prepare_run_with_provenance(config, story_id, None)
+}
+
+pub(crate) fn prepare_run_with_provenance(
+    config: &ResolvedConfig,
+    story_id: &str,
+    provenance: Option<AutoRunProvenance>,
+) -> Result<PreparedRun, RunError> {
+    prepare_run_with_post_resource_hook(config, story_id, provenance, |_| Ok(()))
+}
+
+fn prepare_run_with_post_resource_hook(
+    config: &ResolvedConfig,
+    story_id: &str,
+    provenance: Option<AutoRunProvenance>,
+    post_resource_hook: impl FnOnce(&PreparedRun) -> Result<(), RunError>,
+) -> Result<PreparedRun, RunError> {
     ensure_no_active_run(config)?;
     let story = load_runnable_story(&config.harness_db, story_id)?;
 
@@ -149,59 +176,68 @@ pub fn prepare_run(config: &ResolvedConfig, story_id: &str) -> Result<PreparedRu
     let run_dir = config.runs_dir.join(&run_id);
     let contract_path = run_dir.join("RUN_CONTRACT.json");
     let harness_db_path = worktree.join("harness.db");
-
-    fs::create_dir_all(&config.worktrees_dir)?;
-    fs::create_dir_all(&run_dir)?;
-    create_worktree(&config.repo_root, &branch, &worktree)?;
-    fs::copy(&config.harness_db, &harness_db_path)?;
-
-    let contract = build_contract(
-        config,
-        &run_id,
-        story_id,
-        false,
-        &worktree,
-        &harness_db_path,
-    );
-    write_contract(&contract_path, &contract)?;
-    // Also place the contract inside the worktree so the agent never has to
-    // reach outside its assigned workspace to read its own run contract.
-    let worktree_contract_relative = format!(".harness/runs/{run_id}/RUN_CONTRACT.json");
-    let worktree_contract_path = worktree.join(&worktree_contract_relative);
-    if let Some(parent) = worktree_contract_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    write_contract(&worktree_contract_path, &contract)?;
-    write_agents_shim(
-        &worktree.join("AGENTS.md"),
-        Path::new(&worktree_contract_relative),
-        &contract,
-    )?;
-
-    let store = RunStateStore::new(config.state_db.clone());
-    store.add_run(NewRunRecord {
+    let prepared = PreparedRun {
         run_id: run_id.clone(),
-        story_id: story.id,
+        story_id: story.id.clone(),
         branch: Some(branch.clone()),
         worktree: worktree.clone(),
-        lightweight: false,
-        status: "prepared".to_owned(),
-        result_path: Some(PathBuf::from(format!(".harness/runs/{run_id}/RESULT.json"))),
-        sync_status: "not_applied".to_owned(),
-        next_action: format!("Launch agent for {story_id} or inspect {contract_path:?}"),
-    })?;
-    store.record_run_agent(&run_id, &config.agent_adapter)?;
-
-    Ok(PreparedRun {
-        run_id,
-        story_id: story_id.to_owned(),
-        branch: Some(branch),
-        worktree,
-        contract_path,
-        harness_db_path,
+        contract_path: contract_path.clone(),
+        harness_db_path: harness_db_path.clone(),
         lightweight: false,
         request_changes: None,
-    })
+    };
+
+    let preparation = (|| -> Result<(), RunError> {
+        fs::create_dir_all(&config.worktrees_dir)?;
+        fs::create_dir_all(&run_dir)?;
+        create_worktree(&config.repo_root, &branch, &worktree)?;
+        post_resource_hook(&prepared)?;
+        fs::copy(&config.harness_db, &harness_db_path)?;
+
+        let contract = build_contract(
+            config,
+            &run_id,
+            story_id,
+            false,
+            &worktree,
+            &harness_db_path,
+            provenance.as_ref(),
+        );
+        write_contract(&contract_path, &contract)?;
+        // Also place the contract inside the worktree so the agent never has to
+        // reach outside its assigned workspace to read its own run contract.
+        let worktree_contract_relative = format!(".harness/runs/{run_id}/RUN_CONTRACT.json");
+        let worktree_contract_path = worktree.join(&worktree_contract_relative);
+        if let Some(parent) = worktree_contract_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        write_contract(&worktree_contract_path, &contract)?;
+        write_agents_shim(
+            &worktree.join("AGENTS.md"),
+            Path::new(&worktree_contract_relative),
+            &contract,
+        )?;
+
+        let store = RunStateStore::new(config.state_db.clone());
+        store.add_run(NewRunRecord {
+            run_id: run_id.clone(),
+            story_id: story.id,
+            branch: Some(branch.clone()),
+            worktree: worktree.clone(),
+            lightweight: false,
+            status: "prepared".to_owned(),
+            result_path: Some(PathBuf::from(format!(".harness/runs/{run_id}/RESULT.json"))),
+            sync_status: "not_applied".to_owned(),
+            next_action: format!("Launch agent for {story_id} or inspect {contract_path:?}"),
+        })?;
+        store.record_run_agent(&run_id, &config.agent_adapter)?;
+        Ok(())
+    })();
+    if let Err(error) = preparation {
+        cleanup_prepared_resources(config, &prepared);
+        return Err(error);
+    }
+    Ok(prepared)
 }
 
 pub fn prepare_replacement_run(
@@ -279,6 +315,7 @@ fn prepare_replacement_files(
             false,
             &worktree,
             &harness_db_path,
+            None,
         );
         contract.request_changes = Some(request_changes);
         write_contract(&contract_path, &contract)?;
@@ -294,7 +331,7 @@ fn prepare_replacement_files(
         Ok(())
     })();
     if let Err(error) = preparation {
-        cleanup_replacement_files(config, &prepared);
+        cleanup_prepared_resources(config, &prepared);
         return Err(error);
     }
     Ok(prepared)
@@ -330,7 +367,7 @@ fn finalize_replacement_run(
         replacement,
         &config.agent_adapter,
     ) {
-        cleanup_replacement_files(config, &prepared);
+        cleanup_prepared_resources(config, &prepared);
         return Err(error.into());
     }
     Ok(prepared)
@@ -407,7 +444,8 @@ fn write_feedback_directory(
     Ok(())
 }
 
-fn cleanup_replacement_files(config: &ResolvedConfig, prepared: &PreparedRun) {
+fn cleanup_prepared_resources(config: &ResolvedConfig, prepared: &PreparedRun) {
+    let _ = RunStateStore::new(config.state_db.clone()).remove_run(&prepared.run_id);
     if let Some(branch) = prepared.branch.as_deref() {
         let _ = Command::new("git")
             .args(["worktree", "remove", "--force"])
@@ -426,9 +464,22 @@ fn cleanup_replacement_files(config: &ResolvedConfig, prepared: &PreparedRun) {
     if run_dir.exists() {
         let _ = fs::remove_dir_all(run_dir);
     }
+    if prepared.lightweight {
+        if let Some(local_run_dir) = prepared.harness_db_path.parent() {
+            let _ = fs::remove_dir_all(local_run_dir);
+        }
+    }
 }
 
 pub fn prepare_here_run(config: &ResolvedConfig, story_id: &str) -> Result<PreparedRun, RunError> {
+    prepare_here_run_with_post_resource_hook(config, story_id, |_| Ok(()))
+}
+
+fn prepare_here_run_with_post_resource_hook(
+    config: &ResolvedConfig,
+    story_id: &str,
+    post_resource_hook: impl FnOnce(&PreparedRun) -> Result<(), RunError>,
+) -> Result<PreparedRun, RunError> {
     if !config.allow_here_for_tiny {
         return Err(RunError::HereRunDisabled);
     }
@@ -446,49 +497,71 @@ pub fn prepare_here_run(config: &ResolvedConfig, story_id: &str) -> Result<Prepa
     let contract_path = run_dir.join("RUN_CONTRACT.json");
     let local_run_dir = config.repo_root.join(".symphony/runs").join(&run_id);
     let harness_db_path = local_run_dir.join("harness.db");
-
-    fs::create_dir_all(&run_dir)?;
-    fs::create_dir_all(&local_run_dir)?;
-    fs::copy(&config.harness_db, &harness_db_path)?;
-
-    let contract = build_contract(
-        config,
-        &run_id,
-        story_id,
-        true,
-        &config.repo_root,
-        &harness_db_path,
-    );
-    write_contract(&contract_path, &contract)?;
-
-    let store = RunStateStore::new(config.state_db.clone());
-    store.add_run(NewRunRecord {
+    let prepared = PreparedRun {
         run_id: run_id.clone(),
         story_id: story_id.to_owned(),
         branch: None,
         worktree: config.repo_root.clone(),
-        lightweight: true,
-        status: "prepared".to_owned(),
-        result_path: Some(PathBuf::from(format!(".harness/runs/{run_id}/RESULT.json"))),
-        sync_status: "not_applied".to_owned(),
-        next_action: format!("Launch lightweight run for {story_id} or inspect {contract_path:?}"),
-    })?;
-    store.record_run_agent(&run_id, &config.agent_adapter)?;
-
-    Ok(PreparedRun {
-        run_id,
-        story_id: story_id.to_owned(),
-        branch: None,
-        worktree: config.repo_root.clone(),
-        contract_path,
-        harness_db_path,
+        contract_path: contract_path.clone(),
+        harness_db_path: harness_db_path.clone(),
         lightweight: true,
         request_changes: None,
-    })
+    };
+
+    let preparation = (|| -> Result<(), RunError> {
+        fs::create_dir_all(&run_dir)?;
+        fs::create_dir_all(&local_run_dir)?;
+        post_resource_hook(&prepared)?;
+        fs::copy(&config.harness_db, &harness_db_path)?;
+
+        let contract = build_contract(
+            config,
+            &run_id,
+            story_id,
+            true,
+            &config.repo_root,
+            &harness_db_path,
+            None,
+        );
+        write_contract(&contract_path, &contract)?;
+
+        let store = RunStateStore::new(config.state_db.clone());
+        store.add_run(NewRunRecord {
+            run_id: run_id.clone(),
+            story_id: story_id.to_owned(),
+            branch: None,
+            worktree: config.repo_root.clone(),
+            lightweight: true,
+            status: "prepared".to_owned(),
+            result_path: Some(PathBuf::from(format!(".harness/runs/{run_id}/RESULT.json"))),
+            sync_status: "not_applied".to_owned(),
+            next_action: format!(
+                "Launch lightweight run for {story_id} or inspect {contract_path:?}"
+            ),
+        })?;
+        store.record_run_agent(&run_id, &config.agent_adapter)?;
+        Ok(())
+    })();
+    if let Err(error) = preparation {
+        cleanup_prepared_resources(config, &prepared);
+        return Err(error);
+    }
+    Ok(prepared)
 }
 
 pub fn execute_run(config: &ResolvedConfig, story_id: &str) -> Result<CompletedRun, RunError> {
-    execute_prepared_run(config, prepare_run(config, story_id)?)
+    execute_run_with_provenance(config, story_id, None)
+}
+
+pub(crate) fn execute_run_with_provenance(
+    config: &ResolvedConfig,
+    story_id: &str,
+    provenance: Option<AutoRunProvenance>,
+) -> Result<CompletedRun, RunError> {
+    execute_prepared_run(
+        config,
+        prepare_run_with_provenance(config, story_id, provenance)?,
+    )
 }
 
 pub fn execute_here_run(config: &ResolvedConfig, story_id: &str) -> Result<CompletedRun, RunError> {
@@ -590,6 +663,7 @@ fn build_contract(
     lightweight: bool,
     worktree: &Path,
     harness_db_path: &Path,
+    provenance: Option<&AutoRunProvenance>,
 ) -> RunContract {
     let required_outputs = vec![
         format!(".harness/runs/{run_id}/SUMMARY.md"),
@@ -640,6 +714,8 @@ fn build_contract(
             "Run the configured verification command when available.".to_owned(),
             "Write RESULT.json with a top-level validation object, not validation_evidence. Use validation.commands[].result values pass, fail, or unavailable.".to_owned(),
         ],
+        base_sha: provenance.map(|value| value.base_sha.clone()),
+        refresh_warning: provenance.and_then(|value| value.refresh_warning.clone()),
         request_changes: None,
     }
 }
@@ -708,10 +784,12 @@ fn validate_finished_run(
             result.outcome
         )));
     }
-    if !has_validation_evidence(result.validation.as_ref()) {
-        return Err(RunError::InvalidResult(
-            "validation evidence missing or unavailable reason absent".to_owned(),
-        ));
+    if !validation_satisfies_outcome(&result.outcome, result.validation.as_ref()) {
+        return Err(RunError::InvalidResult(if result.outcome == "completed" {
+            "completed outcome requires every validation command to pass".to_owned()
+        } else {
+            "validation evidence missing or unavailable reason absent".to_owned()
+        }));
     }
     if let Some(summary) = result.summary_path.as_deref() {
         if summary.trim().is_empty() {
@@ -808,6 +886,19 @@ fn parse_result_file(path: &Path) -> Result<ResultFile, RunError> {
     serde_json::from_str(&text).map_err(RunError::Json)
 }
 
+pub(crate) fn result_has_passing_completion_proof(
+    path: &Path,
+    run_id: &str,
+    story_id: &str,
+) -> Result<bool, RunError> {
+    let result = parse_result_file(path)?;
+    Ok(result.version == 1
+        && result.run_id == run_id
+        && result.story_id == story_id
+        && result.outcome == "completed"
+        && validation_satisfies_outcome(&result.outcome, result.validation.as_ref()))
+}
+
 fn valid_outcome(value: &str) -> bool {
     matches!(
         value,
@@ -831,6 +922,27 @@ fn has_validation_evidence(validation: Option<&ResultValidation>) -> bool {
         .as_deref()
         .map(str::trim)
         .is_some_and(|value| !value.is_empty())
+}
+
+fn validation_satisfies_outcome(outcome: &str, validation: Option<&ResultValidation>) -> bool {
+    if outcome != "completed" {
+        return has_validation_evidence(validation);
+    }
+    let Some(validation) = validation else {
+        return false;
+    };
+    validation
+        .unavailable
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or_default()
+        .is_empty()
+        && validation.commands.as_ref().is_some_and(|commands| {
+            !commands.is_empty()
+                && commands
+                    .iter()
+                    .all(|command| !command.command.trim().is_empty() && command.result == "pass")
+        })
 }
 
 fn valid_command(command: &ValidationCommand) -> bool {
@@ -954,6 +1066,7 @@ mod tests {
             auto_source: "harness-db".to_owned(),
             auto_poll_interval_seconds: 30,
             auto_max_attempts: 3,
+            auto_allow_stale_base: false,
         }
     }
 
@@ -1054,6 +1167,7 @@ mod tests {
             false,
             Path::new("/repo/.symphony/worktrees/run_1"),
             Path::new("/repo/.symphony/worktrees/run_1/harness.db"),
+            None,
         );
 
         assert_eq!(contract.version, 1);
@@ -1185,6 +1299,7 @@ mod tests {
             true,
             Path::new("/repo"),
             Path::new("/repo/.symphony/runs/run_1/harness.db"),
+            None,
         );
 
         assert!(contract.lightweight);
@@ -1205,6 +1320,7 @@ mod tests {
             false,
             Path::new("/repo/.symphony/worktrees/run_1"),
             Path::new("/repo/.symphony/worktrees/run_1/harness.db"),
+            None,
         );
         let shim = render_agents_shim(
             Path::new("/repo/.harness/runs/run_1/RUN_CONTRACT.json"),
@@ -1248,6 +1364,39 @@ mod tests {
             unavailable: None,
         };
         assert!(!has_validation_evidence(Some(&missing)));
+    }
+
+    #[test]
+    fn completed_outcome_requires_every_validation_command_to_pass() {
+        for result in ["fail", "unavailable"] {
+            let validation = ResultValidation {
+                commands: Some(vec![ValidationCommand {
+                    command: "cargo test".to_owned(),
+                    result: result.to_owned(),
+                }]),
+                unavailable: None,
+            };
+
+            assert!(!validation_satisfies_outcome(
+                "completed",
+                Some(&validation)
+            ));
+        }
+    }
+
+    #[test]
+    fn non_completed_outcomes_allow_non_passing_validation_evidence() {
+        for result in ["fail", "unavailable"] {
+            let validation = ResultValidation {
+                commands: Some(vec![ValidationCommand {
+                    command: "cargo test".to_owned(),
+                    result: result.to_owned(),
+                }]),
+                unavailable: None,
+            };
+
+            assert!(validation_satisfies_outcome("blocked", Some(&validation)));
+        }
     }
 
     #[test]
@@ -1302,6 +1451,90 @@ mod tests {
         ));
         assert!(!config.worktrees_dir.exists());
         assert!(!config.runs_dir.exists());
+    }
+
+    #[test]
+    fn prepare_run_failure_after_worktree_creation_rolls_back_resources_and_state() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = config_for_root(temp_dir.path());
+        init_git_repo(temp_dir.path());
+        write_story_db(&config.harness_db, "US-ROLLBACK", "planned", "normal");
+
+        let error = prepare_run_with_post_resource_hook(&config, "US-ROLLBACK", None, |_| {
+            Err(RunError::Io(std::io::Error::other(
+                "injected prepare failure",
+            )))
+        })
+        .unwrap_err();
+
+        assert!(error.to_string().contains("injected prepare failure"));
+        assert!(
+            !config.runs_dir.exists() || fs::read_dir(&config.runs_dir).unwrap().next().is_none()
+        );
+        assert!(
+            !config.worktrees_dir.exists()
+                || fs::read_dir(&config.worktrees_dir)
+                    .unwrap()
+                    .next()
+                    .is_none()
+        );
+        let branches = Command::new("git")
+            .args(["branch", "--list", "symphony/run_*"])
+            .current_dir(&config.repo_root)
+            .output()
+            .unwrap();
+        assert!(String::from_utf8_lossy(&branches.stdout).trim().is_empty());
+        assert!(RunStateStore::new(config.state_db.clone())
+            .list_runs()
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn stale_auto_prepare_persists_base_provenance_in_contract() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = config_for_root(temp_dir.path());
+        init_git_repo(temp_dir.path());
+        write_story_db(&config.harness_db, "US-STALE-CONTRACT", "planned", "normal");
+        let provenance = AutoRunProvenance {
+            base_sha: "abc123".to_owned(),
+            refresh_warning: Some("upstream offline".to_owned()),
+        };
+
+        let prepared =
+            prepare_run_with_provenance(&config, "US-STALE-CONTRACT", Some(provenance)).unwrap();
+        let contract: RunContract =
+            serde_json::from_str(&fs::read_to_string(prepared.contract_path).unwrap()).unwrap();
+
+        assert_eq!(contract.base_sha.as_deref(), Some("abc123"));
+        assert_eq!(
+            contract.refresh_warning.as_deref(),
+            Some("upstream offline")
+        );
+    }
+
+    #[test]
+    fn prepare_here_failure_after_local_run_creation_rolls_back_resources_and_state() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = config_for_root(temp_dir.path());
+        init_git_repo(temp_dir.path());
+        write_story_db(&config.harness_db, "US-HERE-ROLLBACK", "planned", "tiny");
+
+        let error = prepare_here_run_with_post_resource_hook(&config, "US-HERE-ROLLBACK", |_| {
+            Err(RunError::Io(std::io::Error::other("injected here failure")))
+        })
+        .unwrap_err();
+
+        assert!(error.to_string().contains("injected here failure"));
+        assert!(
+            !config.runs_dir.exists() || fs::read_dir(&config.runs_dir).unwrap().next().is_none()
+        );
+        let local_runs = config.repo_root.join(".symphony/runs");
+        assert!(!local_runs.exists() || fs::read_dir(local_runs).unwrap().next().is_none());
+        assert!(RunStateStore::new(config.state_db.clone())
+            .list_runs()
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -1392,6 +1625,63 @@ mod tests {
         assert_eq!(completed.outcome, "completed");
         let summary = fs::read_to_string(summary_path).unwrap();
         assert!(summary.contains("lightweight: true"));
+    }
+
+    #[test]
+    fn finished_run_rejects_completed_outcome_without_passing_proof() {
+        for result in ["fail", "unavailable"] {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let config = config_for_root(temp_dir.path());
+            Command::new("git")
+                .arg("init")
+                .current_dir(temp_dir.path())
+                .output()
+                .unwrap();
+            let run_id = format!("run_{result}");
+            let run_dir = temp_dir.path().join(".harness/runs").join(&run_id);
+            let changeset_dir = temp_dir.path().join(".harness/changesets");
+            fs::create_dir_all(&run_dir).unwrap();
+            fs::create_dir_all(&changeset_dir).unwrap();
+            fs::write(run_dir.join("SUMMARY.md"), "# Summary\n").unwrap();
+            fs::write(
+                changeset_dir.join(format!("{run_id}.changeset.jsonl")),
+                format!(r#"{{"op":"changeset.header","version":1,"run_id":"{run_id}"}}"#),
+            )
+            .unwrap();
+            fs::write(
+                run_dir.join("RESULT.json"),
+                format!(
+                    r#"{{
+                        "version": 1,
+                        "run_id": "{run_id}",
+                        "story_id": "US-TINY",
+                        "outcome": "completed",
+                        "validation": {{
+                            "commands": [
+                                {{ "command": "cargo test", "result": "{result}" }}
+                            ]
+                        }}
+                    }}"#
+                ),
+            )
+            .unwrap();
+            let prepared = PreparedRun {
+                run_id,
+                story_id: "US-TINY".to_owned(),
+                branch: None,
+                worktree: temp_dir.path().to_path_buf(),
+                contract_path: run_dir.join("RUN_CONTRACT.json"),
+                harness_db_path: run_dir.join("harness.db"),
+                lightweight: true,
+                request_changes: None,
+            };
+
+            let error = validate_finished_run(&config, prepared).unwrap_err();
+
+            assert!(error
+                .to_string()
+                .contains("completed outcome requires every validation command to pass"));
+        }
     }
 
     #[test]

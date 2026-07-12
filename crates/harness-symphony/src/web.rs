@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -67,23 +67,45 @@ pub enum EnsureWebOutcome {
 }
 
 const ENSURE_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(300);
+const HEALTH_SERVICE: &str = "harness-symphony";
+const HEALTH_RESPONSE_LIMIT: usize = 16 * 1024;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct HealthResponse {
+    service: String,
+    version: String,
+    repository: String,
+}
 
 /// Make sure a Symphony Web UI server is reachable at the requested address,
 /// spawning a detached background server when none is listening. Failure to
 /// spawn is reported in the outcome instead of failing the caller: runs must
 /// proceed even when the Web UI cannot start.
 pub fn ensure_web_server(repo_root: &Path, options: &WebServerOptions) -> EnsureWebOutcome {
-    ensure_web_server_with(options, |opts| spawn_detached_web_server(repo_root, opts))
+    ensure_web_server_with(repo_root, options, |opts| {
+        spawn_detached_web_server(repo_root, opts)
+    })
 }
 
-fn ensure_web_server_with<F, E>(options: &WebServerOptions, spawn: F) -> EnsureWebOutcome
+fn ensure_web_server_with<F, E>(
+    repo_root: &Path,
+    options: &WebServerOptions,
+    spawn: F,
+) -> EnsureWebOutcome
 where
     F: FnOnce(&WebServerOptions) -> Result<(), E>,
     E: std::fmt::Display,
 {
     let url = format!("http://{}:{}", options.host, options.port);
-    if web_server_listening(options) {
-        return EnsureWebOutcome::AlreadyRunning { url };
+    match probe_web_server(repo_root, options) {
+        WebProbe::Matching => return EnsureWebOutcome::AlreadyRunning { url },
+        WebProbe::Occupied => {
+            return EnsureWebOutcome::SpawnFailed {
+                url,
+                message: "port is occupied by a different service or repository; stop it or choose another port".to_owned(),
+            };
+        }
+        WebProbe::Available => {}
     }
     match spawn(options) {
         Ok(()) => EnsureWebOutcome::Spawned { url },
@@ -94,15 +116,154 @@ where
     }
 }
 
-fn web_server_listening(options: &WebServerOptions) -> bool {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WebProbe {
+    Available,
+    Occupied,
+    Matching,
+}
+
+fn probe_web_server(repo_root: &Path, options: &WebServerOptions) -> WebProbe {
     use std::net::ToSocketAddrs;
 
     match (options.host.as_str(), options.port).to_socket_addrs() {
-        Ok(mut addrs) => addrs.any(|addr| {
-            std::net::TcpStream::connect_timeout(&addr, ENSURE_CONNECT_TIMEOUT).is_ok()
-        }),
-        Err(_) => false,
+        Ok(addrs) => {
+            let mut occupied = false;
+            for addr in addrs {
+                let Ok(mut stream) =
+                    std::net::TcpStream::connect_timeout(&addr, ENSURE_CONNECT_TIMEOUT)
+                else {
+                    continue;
+                };
+                occupied = true;
+                let _ = stream.set_read_timeout(Some(ENSURE_CONNECT_TIMEOUT));
+                let _ = stream.set_write_timeout(Some(ENSURE_CONNECT_TIMEOUT));
+                let request = format!(
+                    "GET /health HTTP/1.1\r\nHost: {}:{}\r\nConnection: close\r\n\r\n",
+                    options.host, options.port
+                );
+                let matches = stream
+                    .write_all(request.as_bytes())
+                    .and_then(|()| {
+                        read_health_response(
+                            &mut stream,
+                            std::time::Instant::now() + ENSURE_CONNECT_TIMEOUT,
+                        )
+                    })
+                    .is_ok_and(|health| {
+                        health.service == HEALTH_SERVICE
+                            && health.version == env!("CARGO_PKG_VERSION")
+                            && health.repository == repository_root_identity(repo_root)
+                    });
+                if matches {
+                    return WebProbe::Matching;
+                } else {
+                    eprintln!(
+                        "warning: listener at http://{addr} is not Symphony for repository {}",
+                        repo_root.display()
+                    );
+                }
+            }
+            if occupied {
+                WebProbe::Occupied
+            } else {
+                WebProbe::Available
+            }
+        }
+        Err(_) => WebProbe::Available,
     }
+}
+
+fn read_health_response(
+    stream: &mut std::net::TcpStream,
+    deadline: std::time::Instant,
+) -> Result<HealthResponse, std::io::Error> {
+    let mut response = Vec::new();
+    let mut expected_len = None;
+    loop {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "health probe exceeded its deadline",
+            ));
+        }
+        stream.set_read_timeout(Some(remaining))?;
+        let mut chunk = [0_u8; 1024];
+        let read = stream.read(&mut chunk)?;
+        if read == 0 {
+            break;
+        }
+        if response.len() + read > HEALTH_RESPONSE_LIMIT {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "health response exceeds size limit",
+            ));
+        }
+        response.extend_from_slice(&chunk[..read]);
+        if expected_len.is_none() {
+            expected_len = health_response_total_len(&response)?;
+        }
+        if expected_len.is_some_and(|length| response.len() >= length) {
+            break;
+        }
+    }
+    let response = std::str::from_utf8(&response)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+    let (headers, body) = response.split_once("\r\n\r\n").ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "incomplete HTTP response")
+    })?;
+    if !headers.starts_with("HTTP/1.1 200 ") && !headers.starts_with("HTTP/1.0 200 ") {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "health endpoint did not return HTTP 200",
+        ));
+    }
+    serde_json::from_str(body)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+}
+
+fn health_response_total_len(response: &[u8]) -> Result<Option<usize>, std::io::Error> {
+    let Some(header_end) = response.windows(4).position(|bytes| bytes == b"\r\n\r\n") else {
+        return Ok(None);
+    };
+    let headers = std::str::from_utf8(&response[..header_end])
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+    let content_length = headers
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim())
+        })
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "health response is missing Content-Length",
+            )
+        })?
+        .parse::<usize>()
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+    let total = header_end + 4 + content_length;
+    if total > HEALTH_RESPONSE_LIMIT {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "health response exceeds size limit",
+        ));
+    }
+    Ok(Some(total))
+}
+
+fn repository_root_identity(repo_root: &Path) -> String {
+    let normalized = repo_root
+        .canonicalize()
+        .unwrap_or_else(|_| repo_root.to_path_buf());
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in normalized.to_string_lossy().as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
 }
 
 fn spawn_detached_web_server(
@@ -549,7 +710,14 @@ fn handle_http_request(
     let method = request.method.as_str();
     let path = request.path.as_str();
     match (method, path) {
-        ("GET", "/health") => json_response(200, &serde_json::json!({"ok": true})),
+        ("GET", "/health") => json_response(
+            200,
+            &HealthResponse {
+                service: HEALTH_SERVICE.to_owned(),
+                version: env!("CARGO_PKG_VERSION").to_owned(),
+                repository: repository_root_identity(&config.repo_root),
+            },
+        ),
         ("GET", "/api/board") => {
             let items = list_board(&config.harness_db, &config.state_db)?;
             let items = items
@@ -2512,18 +2680,97 @@ mod tests {
     static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
     #[test]
-    fn ensure_web_reuses_listening_server_without_spawning() {
+    fn ensure_web_reports_occupied_when_listener_is_not_symphony() {
+        let repo = tempfile::tempdir().unwrap();
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let _ = listener.accept();
+        });
         let options = WebServerOptions {
             host: "127.0.0.1".to_owned(),
             port,
             open_browser: true,
         };
 
-        let outcome = ensure_web_server_with(&options, |_| -> Result<(), String> {
-            panic!("spawn must not run when a server is already listening")
+        let spawned = Cell::new(false);
+        let outcome = ensure_web_server_with(repo.path(), &options, |_| -> Result<(), String> {
+            spawned.set(true);
+            Ok(())
         });
+        server.join().unwrap();
+
+        assert!(!spawned.get());
+        assert!(
+            matches!(outcome, EnsureWebOutcome::SpawnFailed { message, .. } if message.contains("occupied"))
+        );
+    }
+
+    fn spawn_health_listener(body: String) -> (u16, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 1024];
+            let _ = std::io::Read::read(&mut stream, &mut request);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(), body
+            );
+            let _ = stream.write_all(response.as_bytes());
+        });
+        (port, server)
+    }
+
+    #[test]
+    fn ensure_web_reports_occupied_when_symphony_health_is_for_another_repository() {
+        let repo = tempfile::tempdir().unwrap();
+        let body = serde_json::json!({
+            "service": "harness-symphony",
+            "version": env!("CARGO_PKG_VERSION"),
+            "repository": "another-repository"
+        })
+        .to_string();
+        let (port, server) = spawn_health_listener(body);
+        let options = WebServerOptions {
+            host: "127.0.0.1".to_owned(),
+            port,
+            open_browser: true,
+        };
+
+        let spawned = Cell::new(false);
+        let outcome = ensure_web_server_with(repo.path(), &options, |_| -> Result<(), String> {
+            spawned.set(true);
+            Ok(())
+        });
+        server.join().unwrap();
+
+        assert!(!spawned.get());
+        assert!(
+            matches!(outcome, EnsureWebOutcome::SpawnFailed { message, .. } if message.contains("occupied"))
+        );
+    }
+
+    #[test]
+    fn ensure_web_reuses_matching_symphony_health() {
+        let repo = tempfile::tempdir().unwrap();
+        let body = serde_json::json!({
+            "service": "harness-symphony",
+            "version": env!("CARGO_PKG_VERSION"),
+            "repository": repository_root_identity(repo.path())
+        })
+        .to_string();
+        let (port, server) = spawn_health_listener(body);
+        let options = WebServerOptions {
+            host: "127.0.0.1".to_owned(),
+            port,
+            open_browser: true,
+        };
+
+        let outcome = ensure_web_server_with(repo.path(), &options, |_| -> Result<(), String> {
+            panic!("spawn must not run when Symphony identity matches")
+        });
+        server.join().unwrap();
 
         assert_eq!(
             outcome,
@@ -2534,7 +2781,40 @@ mod tests {
     }
 
     #[test]
+    fn ensure_web_probe_has_an_absolute_deadline() {
+        let repo = tempfile::tempdir().unwrap();
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request);
+            for byte in b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n{" {
+                if stream.write_all(&[*byte]).is_err() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(75));
+            }
+        });
+        let options = WebServerOptions {
+            host: "127.0.0.1".to_owned(),
+            port,
+            open_browser: true,
+        };
+
+        let started = std::time::Instant::now();
+        let outcome = ensure_web_server_with(repo.path(), &options, |_| -> Result<(), String> {
+            panic!("occupied slow listener must not trigger spawn")
+        });
+        server.join().unwrap();
+
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        assert!(matches!(outcome, EnsureWebOutcome::SpawnFailed { .. }));
+    }
+
+    #[test]
     fn ensure_web_spawns_when_no_server_listening() {
+        let repo = tempfile::tempdir().unwrap();
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
@@ -2545,7 +2825,7 @@ mod tests {
         };
 
         let spawned = Cell::new(false);
-        let outcome = ensure_web_server_with(&options, |_| -> Result<(), String> {
+        let outcome = ensure_web_server_with(repo.path(), &options, |_| -> Result<(), String> {
             spawned.set(true);
             Ok(())
         });
@@ -2561,6 +2841,7 @@ mod tests {
 
     #[test]
     fn ensure_web_reports_spawn_failure_instead_of_erroring() {
+        let repo = tempfile::tempdir().unwrap();
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
@@ -2570,7 +2851,7 @@ mod tests {
             open_browser: true,
         };
 
-        let outcome = ensure_web_server_with(&options, |_| -> Result<(), String> {
+        let outcome = ensure_web_server_with(repo.path(), &options, |_| -> Result<(), String> {
             Err("boom".to_owned())
         });
 
@@ -2963,14 +3244,27 @@ exit 1
     }
 
     #[test]
-    fn health_request_returns_ok_json() {
+    fn health_request_returns_service_version_and_repository_identity() {
         let temp_dir = tempfile::tempdir().unwrap();
         let config = test_config(&temp_dir);
 
         let response = handle_request(&config, "GET /health HTTP/1.1\r\n\r\n").unwrap();
 
         assert!(response.starts_with("HTTP/1.1 200 OK"));
-        assert!(response.ends_with(r#"{"ok":true}"#));
+        let body_start = response
+            .bytes
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .unwrap()
+            + 4;
+        let body = &response.bytes[body_start..];
+        let health: HealthResponse = serde_json::from_slice(body).unwrap();
+        assert_eq!(health.service, HEALTH_SERVICE);
+        assert_eq!(health.version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            health.repository,
+            repository_root_identity(&config.repo_root)
+        );
     }
 
     #[test]
@@ -2982,7 +3276,7 @@ exit 1
         let response = handle_http_request(&config, &request).unwrap();
 
         assert!(response.starts_with("HTTP/1.1 200 OK"));
-        assert!(response.ends_with(r#"{"ok":true}"#));
+        assert!(response.contains(r#""service":"harness-symphony""#));
     }
 
     #[test]

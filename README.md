@@ -73,6 +73,14 @@ cd /path/to/project
 harness init
 ```
 
+The formula also installs `harness-symphony`, so a Homebrew setup can run the
+local controller directly:
+
+```bash
+harness-symphony doctor
+harness-symphony web
+```
+
 `harness --init` is an alias for `harness init`. The command preserves the
 installer's safe conflict flow: interactive runs offer Merge, Override, or
 Stop; non-interactive runs require `--merge` or `--override` when the project
@@ -233,7 +241,8 @@ validation and harness maintenance expectations.
 Harness Symphony is the local runner for Harness stories. It prepares an
 isolated run workspace, passes an explicit contract to an agent, collects
 `SUMMARY.md` and `RESULT.json`, and keeps durable Harness updates reviewable
-through semantic changesets.
+through semantic changesets. It is a Harness-local Symphony profile, not an
+OpenAI-core-conformant or drop-in OpenAI Symphony runtime.
 
 Start here:
 
