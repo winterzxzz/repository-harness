@@ -74,6 +74,28 @@ function Assert-ManagedPathSafe([string]$Relative) {
     }
 }
 
+function Assert-StatePathsSafe {
+    $targetItem = Get-Item -LiteralPath $script:TargetDir -Force -ErrorAction SilentlyContinue
+    if ($null -ne $targetItem -and
+        (($targetItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)) {
+        Fail "Refusing to use a reparse-point target project: $script:TargetDir"
+    }
+
+    foreach ($relative in @(".harness", ".harness-backup")) {
+        $path = Join-Path $script:TargetDir $relative
+        $item = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+        if ($null -eq $item) {
+            continue
+        }
+        if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            Fail "Refusing to use a reparse-point Harness state path: $relative"
+        }
+        if (!$item.PSIsContainer) {
+            Fail "Harness state path is not a directory: $relative"
+        }
+    }
+}
+
 function Get-SourceMode {
     if ($PSScriptRoot) {
         $candidate = Split-Path -Parent $PSScriptRoot
@@ -416,6 +438,7 @@ $script:PayloadManifest = "scripts/harness-install-files.txt"
 $script:SchemaDir = "scripts/schema"
 $script:CliBaseUrl = if ($env:HARNESS_CLI_BASE_URL) { $env:HARNESS_CLI_BASE_URL.TrimEnd("/") } else { Get-DefaultCliBaseUrl }
 $script:TargetDir = Resolve-TargetPath $Directory
+Assert-StatePathsSafe
 $script:BackupDir = Join-Path $script:TargetDir (".harness-backup/" + (Get-Date -Format "yyyyMMddHHmmss"))
 $script:ConflictAction = "install"
 

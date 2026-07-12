@@ -258,6 +258,34 @@ fi
 test "$(cat "$INITIAL_SYMLINK_OUTSIDE")" = 'outside project' || \
   fail "initial force install wrote through a managed-file symlink"
 
+STATE_SYMLINK_TARGET="$TMP_DIR/state-symlink-target"
+STATE_SYMLINK_OUTSIDE="$TMP_DIR/state-symlink-outside"
+mkdir -p "$STATE_SYMLINK_TARGET" "$STATE_SYMLINK_OUTSIDE"
+ln -s "$STATE_SYMLINK_OUTSIDE" "$STATE_SYMLINK_TARGET/.harness"
+if HARNESS_CLI_BINARY_PATH="$CLI_SOURCE" \
+  HARNESS_CLI_CHECKSUM_PATH="$RELEASE_DIR/harness-cli-test-platform.sha256" \
+  HARNESS_CLI_PLATFORM=test-platform \
+  "$ROOT_DIR/scripts/install-harness.sh" --directory "$STATE_SYMLINK_TARGET" --force --yes \
+  >"$TMP_DIR/state-symlink-install.txt" 2>&1; then
+  fail "initial install accepted a symlinked Harness state directory"
+fi
+test ! -e "$STATE_SYMLINK_OUTSIDE/install-state.tsv" || \
+  fail "initial install wrote through a symlinked Harness state directory"
+
+BACKUP_SYMLINK_TARGET="$TMP_DIR/backup-symlink-target"
+BACKUP_SYMLINK_OUTSIDE="$TMP_DIR/backup-symlink-outside"
+mkdir -p "$BACKUP_SYMLINK_TARGET" "$BACKUP_SYMLINK_OUTSIDE"
+ln -s "$BACKUP_SYMLINK_OUTSIDE" "$BACKUP_SYMLINK_TARGET/.harness-backup"
+if HARNESS_CLI_BINARY_PATH="$CLI_SOURCE" \
+  HARNESS_CLI_CHECKSUM_PATH="$RELEASE_DIR/harness-cli-test-platform.sha256" \
+  HARNESS_CLI_PLATFORM=test-platform \
+  "$ROOT_DIR/scripts/install-harness.sh" --directory "$BACKUP_SYMLINK_TARGET" --force --yes \
+  >"$TMP_DIR/backup-symlink-install.txt" 2>&1; then
+  fail "initial install accepted a symlinked Harness backup directory"
+fi
+test ! -e "$BACKUP_SYMLINK_OUTSIDE/AGENTS.md" || \
+  fail "initial install wrote through a symlinked Harness backup directory"
+
 MERGE_TARGET="$TMP_DIR/merge-target"
 mkdir -p "$MERGE_TARGET/docs/decisions"
 printf 'target readme\n' >"$MERGE_TARGET/README.md"

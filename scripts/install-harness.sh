@@ -747,6 +747,20 @@ state_file() {
   printf '%s\n' "$TARGET_DIR/.harness/install-state.tsv"
 }
 
+assert_state_paths_are_safe() {
+  local relative path
+
+  [ ! -L "$TARGET_DIR" ] || fail "Refusing to use symlinked target project: $TARGET_DIR"
+
+  for relative in .harness .harness-backup; do
+    path="$TARGET_DIR/$relative"
+    [ ! -L "$path" ] || fail "Refusing to use symlinked Harness state path: $relative"
+    if [ -e "$path" ] && [ ! -d "$path" ]; then
+      fail "Harness state path is not a directory: $relative"
+    fi
+  done
+}
+
 read_kit_version() {
   local version_file="scripts/harness-kit-version"
   local version=""
@@ -1279,6 +1293,7 @@ if [ "$UPDATE_MODE" -eq 0 ] && [ "$YES" -eq 0 ] && can_prompt; then
 fi
 
 TARGET_DIR="$(make_absolute_parent "$(expand_path "$TARGET_INPUT")")"
+assert_state_paths_are_safe
 BACKUP_DIR="$TARGET_DIR/.harness-backup/$(date +%Y%m%d%H%M%S)"
 CREATED=0
 UPDATED=0
