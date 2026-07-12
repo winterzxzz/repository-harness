@@ -8,11 +8,11 @@ fail() {
   exit 1
 }
 
-if rg -n 'crate::infrastructure' "$ROOT_DIR/crates/harness-cli/src/application.rs" >/dev/null; then
+if grep -n 'crate::infrastructure' "$ROOT_DIR/crates/harness-cli/src/application.rs" >/dev/null; then
   fail "application layer imports infrastructure directly"
 fi
 
-if rg -n '^use crate::(application|interface|infrastructure)' "$ROOT_DIR/crates/harness-cli/src/domain.rs" >/dev/null; then
+if grep -E -n '^use crate::(application|interface|infrastructure)' "$ROOT_DIR/crates/harness-cli/src/domain.rs" >/dev/null; then
   fail "domain layer imports an outer layer"
 fi
 

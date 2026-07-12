@@ -72,7 +72,7 @@ version="$({
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || \
   fail "harness-cli version is not stable semver: $version"
 
-tag="$(awk 'NF && $1 !~ /^#/ { print $1; exit }' "$tag_file")"
+tag="$(awk 'NF && $1 !~ /^#/ { sub(/\r$/, ""); print $1; exit }' "$tag_file")"
 [ -n "$tag" ] || fail "release tag file is empty: $tag_file"
 expected_tag="harness-cli-v$version"
 [ "$tag" = "$expected_tag" ] || \
@@ -107,7 +107,7 @@ if [ -n "$ARTIFACT_DIR" ]; then
     esac
     checksum="$artifact.sha256"
     [ -f "$checksum" ] || fail "checksum file is missing: $checksum"
-    expected_checksum="$(awk 'NF { print $1; exit }' "$checksum")"
+    expected_checksum="$(awk 'NF { sub(/\r$/, ""); print $1; exit }' "$checksum")"
     [[ "$expected_checksum" =~ ^[[:xdigit:]]{64}$ ]] || \
       fail "checksum file is invalid: $checksum"
     actual_checksum="$(sha256_file "$artifact")"
