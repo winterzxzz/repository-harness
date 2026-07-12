@@ -1,5 +1,6 @@
 mod application;
 mod domain;
+mod epoch_fence;
 mod infrastructure;
 mod interface;
 

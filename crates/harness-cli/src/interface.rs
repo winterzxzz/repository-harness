@@ -7,6 +7,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use clap::{Args, Parser, Subcommand};
 use thiserror::Error;
 
+use crate::epoch_fence::{acquire_command_guard, EpochFenceError};
+
 use crate::application::{
     BacklogAddInput, BacklogCloseInput, BacklogOutcomeInput, BrownfieldImportResult,
     ChangesetApplyResult, DbRebuildResult, DecisionAddInput, HarnessContext, HarnessService,
@@ -713,12 +715,45 @@ pub enum InterfaceError {
     Output(std::io::Error),
     #[error("path cannot be represented as UTF-8 for protocol JSON")]
     NonUtf8Path,
+    #[error("{0}")]
+    EpochFence(#[from] EpochFenceError),
 }
 
 const PROTOCOL_VERSION: u32 = 1;
 const MAX_MACHINE_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
 
 impl Cli {
+    fn mutates_state(&self) -> bool {
+        match &self.command {
+            Command::Init
+            | Command::Migrate
+            | Command::Import(_)
+            | Command::Intake(_)
+            | Command::Intervention(_)
+            | Command::Trace(_) => true,
+            Command::Story(args) => !matches!(
+                &args.action,
+                StoryAction::Backlog(StoryBacklogArgs {
+                    action: StoryBacklogAction::List(_)
+                })
+            ),
+            Command::Decision(_) | Command::Tool(_) => true,
+            Command::Backlog(args) => !matches!(
+                &args.action,
+                BacklogAction::Reconcile(BacklogReconcileArgs { apply: false, .. })
+            ),
+            Command::Audit(args) => args.record_evidence,
+            Command::Propose(args) => args.commit || args.accept.is_some() || args.reject.is_some(),
+            Command::Db(args) => matches!(
+                &args.action,
+                DbAction::Changeset(ChangesetArgs {
+                    action: ChangesetAction::Apply { .. }
+                }) | DbAction::Rebuild { .. }
+            ),
+            Command::ScoreTrace(_) | Command::ScoreContext { .. } | Command::Query(_) => false,
+        }
+    }
+
     pub fn machine_mode(&self) -> bool {
         match &self.command {
             Command::Story(args) => match &args.action {
@@ -900,7 +935,9 @@ pub fn emit_parse_error(message: &str) -> i32 {
 }
 
 pub fn run(cli: Cli) -> Result<(), InterfaceError> {
-    let service = HarnessService::new(resolve_context()?);
+    let context = resolve_context()?;
+    let _epoch_write_guard = acquire_command_guard(&context.repo_root, cli.mutates_state())?;
+    let service = HarnessService::new(context);
 
     match cli.command {
         Command::Init => print_init_result(service.init()?),
