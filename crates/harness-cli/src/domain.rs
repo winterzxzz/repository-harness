@@ -1065,9 +1065,11 @@ pub struct AuditResult {
     pub orphaned_stories: Vec<AuditFinding>,
     pub unverified_stories: Vec<AuditFinding>,
     pub unverified_decisions: Vec<AuditFinding>,
+    pub untracked_decisions: Vec<AuditFinding>,
     pub backlog_without_outcomes: Vec<AuditFinding>,
     pub stale_stories: Vec<AuditFinding>,
     pub broken_tools: Vec<AuditFinding>,
+    pub unresolved_friction: Vec<AuditFinding>,
 }
 
 impl AuditResult {
@@ -1075,9 +1077,11 @@ impl AuditResult {
         let raw = (self.orphaned_stories.len() as i64 * 10)
             + (self.unverified_stories.len() as i64 * 5)
             + (self.unverified_decisions.len() as i64 * 5)
+            + (self.untracked_decisions.len() as i64 * 3)
             + (self.backlog_without_outcomes.len() as i64 * 2)
             + (self.stale_stories.len() as i64 * 3)
-            + (self.broken_tools.len() as i64 * 8);
+            + (self.broken_tools.len() as i64 * 8)
+            + (self.unresolved_friction.len() as i64 * 2);
         raw.min(100)
     }
 }

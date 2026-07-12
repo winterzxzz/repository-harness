@@ -647,9 +647,7 @@ mod tests {
         );
         assert_eq!(strip_symphony_shim(&shimmed), original);
 
-        let edited = format!(
-            "# Agents\n\nkeep this\nagent added a real rule\n\n<!-- HARNESS-SYMPHONY:BEGIN -->\nblock\n<!-- HARNESS-SYMPHONY:END -->\ntrailing agent note\n"
-        );
+        let edited = "# Agents\n\nkeep this\nagent added a real rule\n\n<!-- HARNESS-SYMPHONY:BEGIN -->\nblock\n<!-- HARNESS-SYMPHONY:END -->\ntrailing agent note\n".to_string();
         let stripped = strip_symphony_shim(&edited);
         assert!(stripped.contains("agent added a real rule"));
         assert!(stripped.contains("trailing agent note"));
@@ -657,9 +655,7 @@ mod tests {
 
         assert_eq!(strip_symphony_shim(original), original);
 
-        let double = format!(
-            "# Agents\n\n<!-- HARNESS-SYMPHONY:BEGIN -->\none\n<!-- HARNESS-SYMPHONY:END -->\n\n<!-- HARNESS-SYMPHONY:BEGIN -->\ntwo\n<!-- HARNESS-SYMPHONY:END -->\n"
-        );
+        let double = "# Agents\n\n<!-- HARNESS-SYMPHONY:BEGIN -->\none\n<!-- HARNESS-SYMPHONY:END -->\n\n<!-- HARNESS-SYMPHONY:BEGIN -->\ntwo\n<!-- HARNESS-SYMPHONY:END -->\n".to_string();
         assert!(!strip_symphony_shim(&double).contains("HARNESS-SYMPHONY"));
 
         let mangled =

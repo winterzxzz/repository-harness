@@ -59,10 +59,15 @@ reject_pattern '^harness\.db(-wal|-shm)?$'
 
 grep -Fq 'PAYLOAD_MANIFEST="scripts/harness-install-files.txt"' \
   "$ROOT_DIR/scripts/install-harness.sh" || fail "Bash installer does not use the shared manifest"
-grep -Fq '$script:PayloadManifest = "scripts/harness-install-files.txt"' \
+grep -Fq "\$script:PayloadManifest = \"scripts/harness-install-files.txt\"" \
   "$ROOT_DIR/scripts/install-harness.ps1" || fail "PowerShell installer does not use the shared manifest"
+grep -Fq 'function Assert-ManagedPathSafe' \
+  "$ROOT_DIR/scripts/install-harness.ps1" || fail "PowerShell installer lacks managed-path safety checks"
+grep -Fq "Assert-ManagedPathSafe \$file" \
+  "$ROOT_DIR/scripts/install-harness.ps1" || fail "PowerShell installer does not preflight managed paths"
 
 bash -n "$ROOT_DIR/scripts/install-harness.sh"
+"$ROOT_DIR/scripts/validate-harness-cli-release.sh"
 
 DRY_TARGET="$TMP_DIR/dry-target"
 DRY_OUTPUT="$TMP_DIR/dry-run.txt"
@@ -138,6 +143,10 @@ if grep -Fq 'symphony-web-ui-controller.md' "$FRESH_TARGET/docs/product/README.m
 fi
 if grep -Eq 'Phase [0-9]+ pins `harness-cli-v' "$FRESH_TARGET/scripts/README.md"; then
   fail "fresh install scripts guide contains a stale source release claim"
+fi
+if grep -Fq 'docs/decisions/0004-sqlite-durable-layer.md' "$FRESH_TARGET/docs/CONTEXT_RULES.md" || \
+   grep -Fq 'docs/decisions/0005-prebuilt-rust-harness-cli.md' "$FRESH_TARGET/docs/CONTEXT_RULES.md"; then
+  fail "fresh install context rules reference source-only decision history"
 fi
 
 LOCAL_CLI_TARGET="$TMP_DIR/local-cli-target"
@@ -233,6 +242,21 @@ if HARNESS_CLI_BINARY_PATH="$CLI_SOURCE" \
 fi
 test "$(cat "$SYMLINK_TARGET")" = 'outside project' || \
   fail "forced update wrote through a managed-file symlink"
+
+INITIAL_SYMLINK_TARGET="$TMP_DIR/initial-symlink-target"
+INITIAL_SYMLINK_OUTSIDE="$TMP_DIR/initial-symlink-outside.txt"
+mkdir -p "$INITIAL_SYMLINK_TARGET"
+printf 'outside project\n' >"$INITIAL_SYMLINK_OUTSIDE"
+ln -s "$INITIAL_SYMLINK_OUTSIDE" "$INITIAL_SYMLINK_TARGET/.gitignore"
+if HARNESS_CLI_BINARY_PATH="$CLI_SOURCE" \
+  HARNESS_CLI_CHECKSUM_PATH="$RELEASE_DIR/harness-cli-test-platform.sha256" \
+  HARNESS_CLI_PLATFORM=test-platform \
+  "$ROOT_DIR/scripts/install-harness.sh" --directory "$INITIAL_SYMLINK_TARGET" --force --yes \
+  >"$TMP_DIR/initial-symlink-install.txt" 2>&1; then
+  fail "initial force install accepted a symlinked managed file"
+fi
+test "$(cat "$INITIAL_SYMLINK_OUTSIDE")" = 'outside project' || \
+  fail "initial force install wrote through a managed-file symlink"
 
 MERGE_TARGET="$TMP_DIR/merge-target"
 mkdir -p "$MERGE_TARGET/docs/decisions"

@@ -9,7 +9,7 @@ use crate::application::{
     BacklogAddInput, BacklogCloseInput, BrownfieldImportResult, ChangesetApplyResult,
     ContextPackInput, DbRebuildResult, DecisionAddInput, HarnessContext, HarnessService,
     InitResult, IntakeInput, InterventionAddInput, InterventionFilter, MigrateResult, QueryTable,
-    StoryAddInput, StoryUpdateInput, ToolRegisterInput, TraceInput,
+    StoryAddInput, StoryUpdateInput, ToolCheckResult, ToolRegisterInput, TraceInput,
 };
 use crate::domain::{
     normalize_capability, parse_optional_integer, parse_tool_args, proof_display,
@@ -18,7 +18,7 @@ use crate::domain::{
     InputType, IntakeRecord, InterventionRecord, RiskLane, StoryMatrixRecord, StoryVerifyAllResult,
     ToolEntry, TraceQualityTier, TraceRecord, TraceScoreResult, RISK_LANE_HELP,
 };
-use crate::infrastructure::ToolCheckResult;
+use crate::infrastructure::{HarnessInfraError, SqliteHarnessRepository};
 
 #[derive(Parser, Debug)]
 #[command(name = "harness-cli")]
@@ -480,7 +480,7 @@ pub enum InterfaceError {
     #[error("{0}")]
     ToolValidation(#[from] crate::domain::ToolValidationError),
     #[error("{0}")]
-    Infrastructure(#[from] crate::infrastructure::HarnessInfraError),
+    Infrastructure(#[from] HarnessInfraError),
     #[error("could not determine current directory: {0}")]
     CurrentDir(std::io::Error),
     #[error("context out write failed: {0}")]
@@ -490,7 +490,12 @@ pub enum InterfaceError {
 }
 
 pub fn run(cli: Cli) -> Result<(), InterfaceError> {
-    let service = HarnessService::new(resolve_context()?);
+    let context = resolve_context()?;
+    let service = HarnessService::new(SqliteHarnessRepository::new(
+        context.repo_root,
+        context.db_path,
+        context.schema_dir,
+    ));
 
     match cli.command {
         Command::Init => print_init_result(service.init()?),
@@ -883,11 +888,16 @@ fn print_audit(result: &crate::domain::AuditResult) {
     print_audit_category("Unverified stories", &result.unverified_stories);
     print_audit_category("Unverified decisions", &result.unverified_decisions);
     print_audit_category(
+        "Markdown decisions missing durable records",
+        &result.untracked_decisions,
+    );
+    print_audit_category(
         "Open backlog without outcomes",
         &result.backlog_without_outcomes,
     );
     print_audit_category("Stale stories", &result.stale_stories);
     print_audit_category("Broken tools", &result.broken_tools);
+    print_audit_category("Unresolved harness friction", &result.unresolved_friction);
     println!(
         "Entropy score: {}/100 (lower is better)",
         result.entropy_score()
@@ -964,7 +974,7 @@ fn print_db_rebuild_result(result: DbRebuildResult) {
 }
 
 fn print_story_verify_warning(
-    service: &HarnessService,
+    service: &HarnessService<SqliteHarnessRepository>,
     story_id: &str,
 ) -> Result<(), InterfaceError> {
     let status = service.story_verify_status(story_id)?;
