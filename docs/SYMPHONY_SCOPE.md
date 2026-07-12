@@ -47,6 +47,11 @@ grow toward that model, but the first version should prove the Harness-specific
 loop before adding daemon scheduling, external issue trackers, concurrent
 agents, or automatic repair.
 
+This document therefore defines a **Harness-local Symphony profile**, not an
+OpenAI-core-conformant runtime. Compatibility with the local Harness story,
+changeset, and review contracts takes precedence over drop-in conformance with
+OpenAI Symphony.
+
 ## 2. Why This Belongs In repository-harness
 
 `repository-harness` already defines the agent operating system:
@@ -732,11 +737,25 @@ auto:
   source: harness-db
   poll_interval_seconds: 30
   max_attempts: 3
+  # Fail closed when upstream refresh fails unless explicitly opted in.
+  allow_stale_base: false
 
 cleanup:
   keep_failed_worktrees: true
   cleanup_after_sync: false
 ```
+
+The default agent deadline is 10 minutes, and controller identity probes use
+bounded 300 ms connect, read, and write timeouts. A listener is reusable only
+when `/health` reports the expected service, crate version, and deterministic
+repository-root identity. Foreign listeners and controllers for other checkouts
+are treated as occupied ports, with an actionable warning and no reuse.
+
+Recovery is explicit: preserve failed-run evidence, surface the recorded
+recovery action, and create a retry or replacement run only after the operator
+fixes the cause. Automatic mode refreshes the upstream base before preparation;
+`auto.allow_stale_base` defaults to `false`, while opt-in stale-base runs record
+the base SHA used for diagnosis.
 
 ## 10. Git Ignore Requirements
 

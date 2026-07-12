@@ -1,8 +1,8 @@
 use std::fs::OpenOptions;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::Path;
-use std::process::{Command, Stdio};
-use std::sync::mpsc;
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
@@ -15,6 +15,8 @@ use crate::run::PreparedRun;
 const CODEX_IDLE_RECONCILE_SECONDS: u64 = 30;
 #[cfg(test)]
 const CODEX_IDLE_RECONCILE_SECONDS: u64 = 1;
+const AGENT_OUTPUT_MAX_BYTES: usize = 1024 * 1024;
+const OUTPUT_TRUNCATION_MARKER: &str = "\n[output truncated by Harness Symphony]\n";
 
 #[derive(Debug, Error)]
 pub enum AgentError {
@@ -24,6 +26,8 @@ pub enum AgentError {
     UnsupportedAdapter(String),
     #[error("agent command failed with status {status}: {stderr}")]
     CommandFailed { status: String, stderr: String },
+    #[error("agent exceeded wall-clock timeout of {timeout_minutes} minute(s)")]
+    Timeout { timeout_minutes: u32 },
     #[error("codex app-server failed: {0}")]
     Codex(String),
     #[error("agent io error: {0}")]
@@ -65,29 +69,55 @@ pub fn agent_adapter_status(config: &ResolvedConfig) -> Result<String, AgentErro
             }
         }
         "codex" => Ok(format!(
-            "codex app-server command: {}; runtime: uncapped",
-            resolved_agent_command(config).join(" ")
+            "codex app-server command: {}; runtime: {} minute(s)",
+            resolved_agent_command(config).join(" "),
+            config.agent_timeout_minutes
         )),
         "opencode" => Ok(format!(
-            "opencode headless command: {}; runtime: uncapped",
-            resolved_agent_command(config).join(" ")
+            "opencode headless command: {}; runtime: {} minute(s)",
+            resolved_agent_command(config).join(" "),
+            config.agent_timeout_minutes
         )),
         other => Err(AgentError::UnsupportedAdapter(other.to_owned())),
     }
 }
 
 fn run_custom_agent(config: &ResolvedConfig, prepared: &PreparedRun) -> Result<(), AgentError> {
+    run_custom_agent_with_timeout(config, prepared, agent_timeout(config))
+}
+
+fn run_custom_agent_with_timeout(
+    config: &ResolvedConfig,
+    prepared: &PreparedRun,
+    timeout: Duration,
+) -> Result<(), AgentError> {
+    run_custom_agent_with_limits(config, prepared, timeout, AGENT_OUTPUT_MAX_BYTES)
+}
+
+fn run_custom_agent_with_limits(
+    config: &ResolvedConfig,
+    prepared: &PreparedRun,
+    timeout: Duration,
+    output_limit: usize,
+) -> Result<(), AgentError> {
     let command = resolved_agent_command(config);
     if command.is_empty() {
         return Err(AgentError::MissingCommand);
     }
-    let output = base_command(&command, prepared).output()?;
-    if output.status.success() {
+    let output_log_path = agent_output_path(prepared);
+    let (status, stderr) = run_streaming_command(
+        base_command(&command, prepared),
+        &output_log_path,
+        timeout,
+        output_limit,
+        config.agent_timeout_minutes,
+    )?;
+    if status.success() {
         return Ok(());
     }
     Err(AgentError::CommandFailed {
-        status: output.status.to_string(),
-        stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        status: status.to_string(),
+        stderr,
     })
 }
 
@@ -97,38 +127,46 @@ fn run_opencode_agent(config: &ResolvedConfig, prepared: &PreparedRun) -> Result
         return Err(AgentError::MissingCommand);
     }
     command.push(agent_prompt(config, prepared));
-    let output = base_command(&command, prepared).output()?;
-    let output_log_path = prepared
-        .contract_path
-        .parent()
-        .unwrap_or(&prepared.worktree)
-        .join("AGENT_OUTPUT.log");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    append_event_log(
+    let output_log_path = agent_output_path(prepared);
+    let (status, stderr) = run_streaming_command(
+        base_command(&command, prepared),
         &output_log_path,
-        &format!("--- opencode exit: {}\n{stdout}\n{stderr}", output.status),
+        agent_timeout(config),
+        AGENT_OUTPUT_MAX_BYTES,
+        config.agent_timeout_minutes,
     )?;
-    if output.status.success() {
+    if status.success() {
         return Ok(());
     }
     Err(AgentError::CommandFailed {
-        status: output.status.to_string(),
-        stderr: stderr.trim().to_owned(),
+        status: status.to_string(),
+        stderr,
     })
 }
 
 fn run_codex_agent(config: &ResolvedConfig, prepared: &PreparedRun) -> Result<(), AgentError> {
+    run_codex_agent_with_timeout(config, prepared, agent_timeout(config))
+}
+
+fn run_codex_agent_with_timeout(
+    config: &ResolvedConfig,
+    prepared: &PreparedRun,
+    timeout: Duration,
+) -> Result<(), AgentError> {
     let command = resolved_agent_command(config);
     if command.is_empty() {
         return Err(AgentError::MissingCommand);
     }
 
-    let mut child = base_command(&command, prepared)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+    let mut process = base_command(&command, prepared);
+    configure_process_group(&mut process);
+    let mut child = ProcessTreeGuard::new(
+        process
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?,
+    );
 
     let mut stdin = child
         .stdin
@@ -143,6 +181,39 @@ fn run_codex_agent(config: &ResolvedConfig, prepared: &PreparedRun) -> Result<()
         .take()
         .ok_or_else(|| AgentError::Codex("failed to open app-server stderr".to_owned()))?;
 
+    let stderr_text = Arc::new(Mutex::new(Vec::new()));
+    let stderr_log_path = agent_output_path(prepared);
+    if let Some(parent) = stderr_log_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let stderr_log = Arc::new(Mutex::new(CappedWriter::new(
+        &stderr_log_path,
+        AGENT_OUTPUT_MAX_BYTES,
+    )?));
+    let stderr_capture = Arc::clone(&stderr_text);
+    let stderr_writer = Arc::clone(&stderr_log);
+    std::thread::spawn(move || {
+        let mut reader = stderr;
+        let mut buffer = [0_u8; 8192];
+        let mut captured_len = 0;
+        while let Ok(count) = reader.read(&mut buffer) {
+            if count == 0 {
+                break;
+            }
+            if captured_len < AGENT_OUTPUT_MAX_BYTES {
+                let mut captured = stderr_capture.lock().expect("stderr capture poisoned");
+                let remaining = AGENT_OUTPUT_MAX_BYTES.saturating_sub(captured.len());
+                captured.extend_from_slice(&buffer[..count.min(remaining)]);
+                captured_len = captured.len();
+            }
+            let _ = stderr_writer
+                .lock()
+                .expect("stderr log poisoned")
+                .write_chunk(&buffer[..count]);
+        }
+        let _ = stderr_writer.lock().expect("stderr log poisoned").finish();
+    });
+
     let (line_tx, line_rx) = mpsc::channel::<String>();
     std::thread::spawn(move || {
         let reader = BufReader::new(stdout);
@@ -153,23 +224,26 @@ fn run_codex_agent(config: &ResolvedConfig, prepared: &PreparedRun) -> Result<()
         }
     });
 
-    send(
-        &mut stdin,
-        json!({
-            "method": "initialize",
-            "id": 0,
-            "params": {
-                "clientInfo": {
-                    "name": "harness_symphony",
-                    "title": "Harness Symphony",
-                    "version": env!("CARGO_PKG_VERSION")
-                },
-                "capabilities": {
-                    "experimentalApi": true,
-                    "requestAttestation": false
+    terminate_on_error(
+        send(
+            &mut stdin,
+            json!({
+                "method": "initialize",
+                "id": 0,
+                "params": {
+                    "clientInfo": {
+                        "name": "harness_symphony",
+                        "title": "Harness Symphony",
+                        "version": env!("CARGO_PKG_VERSION")
+                    },
+                    "capabilities": {
+                        "experimentalApi": true,
+                        "requestAttestation": false
+                    }
                 }
-            }
-        }),
+            }),
+        ),
+        &mut child,
     )?;
 
     let event_log_path = prepared
@@ -185,12 +259,19 @@ fn run_codex_agent(config: &ResolvedConfig, prepared: &PreparedRun) -> Result<()
     let mut event_count: u64 = 0;
     let mut next_request_id: i64 = 3;
     let mut pending_state_query: Option<i64> = None;
+    let deadline = Instant::now() + timeout;
     loop {
+        if Instant::now() >= deadline {
+            terminate_child(&mut child);
+            return Err(AgentError::Timeout {
+                timeout_minutes: config.agent_timeout_minutes,
+            });
+        }
         let line = match line_rx.recv_timeout(Duration::from_millis(250)) {
             Ok(line) => line,
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if let Some(status) = child.try_wait()? {
-                    let stderr = read_child_stderr(stderr)?;
+                    let stderr = captured_stderr(&stderr_text);
                     return Err(AgentError::CommandFailed {
                         status: status.to_string(),
                         stderr,
@@ -214,7 +295,10 @@ fn run_codex_agent(config: &ResolvedConfig, prepared: &PreparedRun) -> Result<()
                     {
                         let request_id = next_request_id;
                         next_request_id += 1;
-                        send_turn_state_query(&mut stdin, request_id, thread_id)?;
+                        terminate_on_error(
+                            send_turn_state_query(&mut stdin, request_id, thread_id),
+                            &mut child,
+                        )?;
                         pending_state_query = Some(request_id);
                         last_event_at = Instant::now();
                     }
@@ -223,7 +307,7 @@ fn run_codex_agent(config: &ResolvedConfig, prepared: &PreparedRun) -> Result<()
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 let status = child.wait()?;
-                let stderr = read_child_stderr(stderr)?;
+                let stderr = captured_stderr(&stderr_text);
                 return Err(AgentError::CommandFailed {
                     status: status.to_string(),
                     stderr,
@@ -231,8 +315,11 @@ fn run_codex_agent(config: &ResolvedConfig, prepared: &PreparedRun) -> Result<()
             }
         };
 
-        append_event_log(&event_log_path, &line)?;
-        let message: Value = serde_json::from_str(&line)?;
+        terminate_on_error(append_event_log(&event_log_path, &line), &mut child)?;
+        let message: Value = terminate_on_error(
+            serde_json::from_str(&line).map_err(AgentError::from),
+            &mut child,
+        )?;
         event_count += 1;
         last_event_at = Instant::now();
         if let Some(method) = message.get("method").and_then(Value::as_str) {
@@ -267,19 +354,25 @@ fn run_codex_agent(config: &ResolvedConfig, prepared: &PreparedRun) -> Result<()
         let response_id = message.get("id").and_then(Value::as_i64);
         match response_id {
             Some(0) => {
-                send(&mut stdin, json!({ "method": "initialized", "params": {} }))?;
-                send(
-                    &mut stdin,
-                    json!({
-                        "method": "thread/start",
-                        "id": 1,
-                        "params": {
-                            "cwd": prepared.worktree,
-                            "runtimeWorkspaceRoots": [prepared.worktree],
-                            "approvalPolicy": "never",
-                            "sandbox": "danger-full-access"
-                        }
-                    }),
+                terminate_on_error(
+                    send(&mut stdin, json!({ "method": "initialized", "params": {} })),
+                    &mut child,
+                )?;
+                terminate_on_error(
+                    send(
+                        &mut stdin,
+                        json!({
+                            "method": "thread/start",
+                            "id": 1,
+                            "params": {
+                                "cwd": prepared.worktree,
+                                "runtimeWorkspaceRoots": [prepared.worktree],
+                                "approvalPolicy": "never",
+                                "sandbox": "danger-full-access"
+                            }
+                        }),
+                    ),
+                    &mut child,
                 )?;
             }
             Some(1) => {
@@ -291,7 +384,10 @@ fn run_codex_agent(config: &ResolvedConfig, prepared: &PreparedRun) -> Result<()
                     })?
                     .to_owned();
                 thread_id = Some(id.clone());
-                send_turn_start(&mut stdin, config, &id, prepared)?;
+                terminate_on_error(
+                    send_turn_start(&mut stdin, config, &id, prepared),
+                    &mut child,
+                )?;
             }
             Some(2) => {
                 turn_id = message
@@ -371,6 +467,256 @@ fn base_command(command: &[String], prepared: &PreparedRun) -> Command {
     process
 }
 
+fn agent_timeout(config: &ResolvedConfig) -> Duration {
+    Duration::from_secs(u64::from(config.agent_timeout_minutes) * 60)
+}
+
+fn agent_output_path(prepared: &PreparedRun) -> std::path::PathBuf {
+    prepared
+        .contract_path
+        .parent()
+        .unwrap_or(&prepared.worktree)
+        .join("AGENT_OUTPUT.log")
+}
+
+fn run_streaming_command(
+    command: Command,
+    output_path: &Path,
+    timeout: Duration,
+    output_limit: usize,
+    timeout_minutes: u32,
+) -> Result<(ExitStatus, String), AgentError> {
+    run_streaming_command_with_writer(
+        command,
+        output_path,
+        timeout,
+        output_limit,
+        timeout_minutes,
+        CappedWriter::new,
+    )
+}
+
+fn run_streaming_command_with_writer<F>(
+    mut command: Command,
+    output_path: &Path,
+    timeout: Duration,
+    output_limit: usize,
+    timeout_minutes: u32,
+    create_writer: F,
+) -> Result<(ExitStatus, String), AgentError>
+where
+    F: FnOnce(&Path, usize) -> Result<CappedWriter, std::io::Error>,
+{
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    configure_process_group(&mut command);
+    let mut child = ProcessTreeGuard::new(
+        command
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?,
+    );
+    let stdout = child.stdout.take().expect("piped stdout missing");
+    let stderr = child.stderr.take().expect("piped stderr missing");
+    let writer = Arc::new(Mutex::new(create_writer(output_path, output_limit)?));
+    let stderr_text = Arc::new(Mutex::new(Vec::new()));
+
+    let stdout_thread = spawn_output_drain(stdout, Arc::clone(&writer), None);
+    let stderr_thread =
+        spawn_output_drain(stderr, Arc::clone(&writer), Some(Arc::clone(&stderr_text)));
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            child.terminate();
+            let _ = stdout_thread.join();
+            let _ = stderr_thread.join();
+            writer.lock().expect("output writer poisoned").finish()?;
+            return Err(AgentError::Timeout { timeout_minutes });
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let _ = stdout_thread.join();
+    let _ = stderr_thread.join();
+    writer.lock().expect("output writer poisoned").finish()?;
+    let stderr = captured_stderr(&stderr_text);
+    Ok((status, stderr))
+}
+
+fn spawn_output_drain<R: Read + Send + 'static>(
+    mut reader: R,
+    writer: Arc<Mutex<CappedWriter>>,
+    capture: Option<Arc<Mutex<Vec<u8>>>>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let mut buffer = [0_u8; 8192];
+        let mut captured_len = 0;
+        while let Ok(count) = reader.read(&mut buffer) {
+            if count == 0 {
+                break;
+            }
+            if let Some(capture) = &capture {
+                if captured_len < AGENT_OUTPUT_MAX_BYTES {
+                    let mut captured = capture.lock().expect("stderr capture poisoned");
+                    let remaining = AGENT_OUTPUT_MAX_BYTES.saturating_sub(captured.len());
+                    captured.extend_from_slice(&buffer[..count.min(remaining)]);
+                    captured_len = captured.len();
+                }
+            }
+            let _ = writer
+                .lock()
+                .expect("output writer poisoned")
+                .write_chunk(&buffer[..count]);
+        }
+    })
+}
+
+struct CappedWriter {
+    file: std::fs::File,
+    limit: usize,
+    remaining: usize,
+    truncated: bool,
+}
+
+impl CappedWriter {
+    fn new(path: &Path, limit: usize) -> Result<Self, std::io::Error> {
+        Ok(Self {
+            file: OpenOptions::new()
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .open(path)?,
+            limit,
+            remaining: limit,
+            truncated: false,
+        })
+    }
+
+    fn write_chunk(&mut self, bytes: &[u8]) -> Result<(), std::io::Error> {
+        if self.truncated {
+            return Ok(());
+        }
+        let count = bytes.len().min(self.remaining);
+        self.file.write_all(&bytes[..count])?;
+        self.remaining -= count;
+        if count < bytes.len() {
+            self.mark_truncated()?;
+        }
+        Ok(())
+    }
+
+    fn mark_truncated(&mut self) -> Result<(), std::io::Error> {
+        let marker = OUTPUT_TRUNCATION_MARKER.as_bytes();
+        let content_len = self.limit.saturating_sub(marker.len());
+        self.file.set_len(content_len as u64)?;
+        self.file.seek(SeekFrom::End(0))?;
+        self.file
+            .write_all(&marker[..marker.len().min(self.limit)])?;
+        self.remaining = 0;
+        self.truncated = true;
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<(), std::io::Error> {
+        self.file.flush()
+    }
+}
+
+fn captured_stderr(stderr: &Arc<Mutex<Vec<u8>>>) -> String {
+    String::from_utf8_lossy(&stderr.lock().expect("stderr capture poisoned"))
+        .trim()
+        .to_owned()
+}
+
+struct ProcessTreeGuard {
+    child: Child,
+    armed: bool,
+}
+
+impl ProcessTreeGuard {
+    fn new(child: Child) -> Self {
+        Self { child, armed: true }
+    }
+
+    fn terminate(&mut self) {
+        if self.armed {
+            terminate_process_tree(&mut self.child);
+            self.armed = false;
+        }
+    }
+}
+
+impl std::ops::Deref for ProcessTreeGuard {
+    type Target = Child;
+
+    fn deref(&self) -> &Self::Target {
+        &self.child
+    }
+}
+
+impl std::ops::DerefMut for ProcessTreeGuard {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.child
+    }
+}
+
+impl Drop for ProcessTreeGuard {
+    fn drop(&mut self) {
+        self.terminate();
+    }
+}
+
+fn terminate_on_error<T>(
+    result: Result<T, AgentError>,
+    child: &mut ProcessTreeGuard,
+) -> Result<T, AgentError> {
+    if result.is_err() {
+        child.terminate();
+    }
+    result
+}
+
+#[cfg(unix)]
+fn configure_process_group(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    command.process_group(0);
+}
+
+#[cfg(not(unix))]
+fn configure_process_group(_command: &mut Command) {}
+
+#[cfg(unix)]
+fn terminate_process_tree(child: &mut Child) {
+    unsafe extern "C" {
+        fn kill(pid: i32, signal: i32) -> i32;
+    }
+    const SIGTERM: i32 = 15;
+    const SIGKILL: i32 = 9;
+    let process_group = -(child.id() as i32);
+    unsafe {
+        kill(process_group, SIGTERM);
+    }
+    for _ in 0..10 {
+        if child.try_wait().ok().flatten().is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    unsafe {
+        kill(process_group, SIGKILL);
+    }
+    let _ = child.wait();
+}
+
+#[cfg(not(unix))]
+fn terminate_process_tree(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 fn send(stdin: &mut impl Write, message: Value) -> Result<(), AgentError> {
     writeln!(stdin, "{message}")?;
     stdin.flush()?;
@@ -381,8 +727,30 @@ fn append_event_log(path: &Path, line: &str) -> Result<(), AgentError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-    writeln!(file, "{line}")?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)?;
+    let current_len = file.metadata()?.len() as usize;
+    let bytes = format!("{line}\n").into_bytes();
+    if current_len.saturating_add(bytes.len()) <= AGENT_OUTPUT_MAX_BYTES {
+        file.seek(SeekFrom::End(0))?;
+        file.write_all(&bytes)?;
+    } else {
+        let marker = OUTPUT_TRUNCATION_MARKER.as_bytes();
+        let content_len = AGENT_OUTPUT_MAX_BYTES.saturating_sub(marker.len());
+        if current_len < content_len {
+            file.seek(SeekFrom::End(0))?;
+            let fill = content_len - current_len;
+            file.write_all(&bytes[..fill.min(bytes.len())])?;
+        } else {
+            file.set_len(content_len as u64)?;
+        }
+        file.seek(SeekFrom::End(0))?;
+        file.write_all(&marker[..marker.len().min(AGENT_OUTPUT_MAX_BYTES)])?;
+    }
     Ok(())
 }
 
@@ -484,17 +852,8 @@ fn agent_prompt(config: &ResolvedConfig, prepared: &PreparedRun) -> String {
     prompt
 }
 
-fn terminate_child(child: &mut std::process::Child) {
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
-fn read_child_stderr(stderr: std::process::ChildStderr) -> Result<String, AgentError> {
-    let mut reader = BufReader::new(stderr);
-    let mut text = String::new();
-    use std::io::Read;
-    reader.read_to_string(&mut text)?;
-    Ok(text.trim().to_owned())
+fn terminate_child(child: &mut ProcessTreeGuard) {
+    child.terminate();
 }
 
 #[cfg(test)]
@@ -529,6 +888,7 @@ mod tests {
             auto_source: "harness-db".to_owned(),
             auto_poll_interval_seconds: 30,
             auto_max_attempts: 3,
+            auto_allow_stale_base: false,
         }
     }
 
@@ -678,6 +1038,277 @@ exit 3
     }
 
     #[test]
+    fn custom_adapter_times_out_at_wall_clock_deadline() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let worktree = temp_dir.path().join("worktree");
+        fs::create_dir_all(&worktree).unwrap();
+        let sleeper = temp_dir.path().join("sleeper");
+        fs::write(&sleeper, "#!/usr/bin/env sh\nsleep 30\n").unwrap();
+        let mut permissions = fs::metadata(&sleeper).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&sleeper, permissions).unwrap();
+
+        let config = config("custom", vec![sleeper.to_str().unwrap()]);
+        let mut prepared = prepared();
+        prepared.worktree = worktree.clone();
+        prepared.harness_db_path = worktree.join("harness.db");
+        prepared.contract_path = worktree.join(".harness/runs/run_1/RUN_CONTRACT.json");
+
+        let started = Instant::now();
+        let error = run_custom_agent_with_timeout(&config, &prepared, Duration::from_millis(100))
+            .unwrap_err();
+        assert!(matches!(error, AgentError::Timeout { .. }));
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn custom_adapter_caps_streamed_output_artifact() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let worktree = temp_dir.path().join("worktree");
+        fs::create_dir_all(&worktree).unwrap();
+        let noisy = temp_dir.path().join("noisy");
+        fs::write(&noisy, "#!/usr/bin/env sh\nyes x | head -c 20000\n").unwrap();
+        let mut permissions = fs::metadata(&noisy).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&noisy, permissions).unwrap();
+
+        let config = config("custom", vec![noisy.to_str().unwrap()]);
+        let mut prepared = prepared();
+        prepared.worktree = worktree.clone();
+        prepared.harness_db_path = worktree.join("harness.db");
+        prepared.contract_path = worktree.join(".harness/runs/run_1/RUN_CONTRACT.json");
+
+        run_custom_agent_with_limits(&config, &prepared, Duration::from_secs(5), 1024).unwrap();
+
+        let log =
+            fs::read_to_string(worktree.join(".harness/runs/run_1/AGENT_OUTPUT.log")).unwrap();
+        assert!(log.len() <= 1024);
+        assert!(log.ends_with(OUTPUT_TRUNCATION_MARKER));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn streaming_setup_failure_kills_spawned_process_tree() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let worktree = temp_dir.path().join("worktree");
+        fs::create_dir_all(&worktree).unwrap();
+        let ready_path = temp_dir.path().join("descendant-ready");
+        let survived_path = temp_dir.path().join("descendant-survived");
+        let fixture = temp_dir.path().join("setup-failure-tree");
+        fs::write(
+            &fixture,
+            r#"#!/usr/bin/env sh
+sh -c 'touch "$1"; sleep 1; touch "$2"; sleep 30' sh "$1" "$2" &
+wait
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&fixture).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&fixture, permissions).unwrap();
+        let output_path = temp_dir.path().join("AGENT_OUTPUT.log");
+
+        let mut command = Command::new(&fixture);
+        command
+            .arg(&ready_path)
+            .arg(&survived_path)
+            .current_dir(&worktree);
+        let error = run_streaming_command_with_writer(
+            command,
+            &output_path,
+            Duration::from_secs(5),
+            1024,
+            1,
+            |_, _| {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while !ready_path.exists() && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                assert!(ready_path.exists(), "descendant did not become ready");
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "injected writer setup failure",
+                ))
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, AgentError::Io(_)));
+        std::thread::sleep(Duration::from_millis(1200));
+        assert!(
+            !survived_path.exists(),
+            "descendant survived post-spawn writer setup failure"
+        );
+    }
+
+    #[test]
+    fn app_server_event_log_includes_marker_within_cap() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("APP_SERVER_EVENTS.jsonl");
+        let oversized = "x".repeat(AGENT_OUTPUT_MAX_BYTES + 1024);
+
+        append_event_log(&path, &oversized).unwrap();
+
+        let log = fs::read(&path).unwrap();
+        assert!(log.len() <= AGENT_OUTPUT_MAX_BYTES);
+        assert!(log.ends_with(OUTPUT_TRUNCATION_MARKER.as_bytes()));
+    }
+
+    #[test]
+    fn app_server_event_log_replaces_near_cap_tail_with_marker() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("APP_SERVER_EVENTS.jsonl");
+        fs::write(&path, vec![b'x'; AGENT_OUTPUT_MAX_BYTES - 5]).unwrap();
+
+        append_event_log(&path, "more than five bytes").unwrap();
+
+        let log = fs::read(&path).unwrap();
+        assert!(log.len() <= AGENT_OUTPUT_MAX_BYTES);
+        assert!(log.ends_with(OUTPUT_TRUNCATION_MARKER.as_bytes()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn timeout_kills_descendants_after_direct_child_exits() {
+        unsafe extern "C" {
+            fn kill(pid: i32, signal: i32) -> i32;
+        }
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let worktree = temp_dir.path().join("worktree");
+        fs::create_dir_all(&worktree).unwrap();
+        let fixture = temp_dir.path().join("process-tree");
+        fs::write(
+            &fixture,
+            r#"#!/usr/bin/env sh
+trap 'exit 0' TERM
+sh -c 'trap "" TERM; sleep 30' &
+echo $! > "$1"
+wait
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&fixture).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&fixture, permissions).unwrap();
+
+        let pid_path = temp_dir.path().join("grandchild.pid");
+        let mut command = Command::new(&fixture);
+        command.arg(&pid_path).current_dir(&worktree);
+        configure_process_group(&mut command);
+        let mut child = command.spawn().unwrap();
+        let ready_deadline = Instant::now() + Duration::from_secs(5);
+        while !pid_path.exists() && Instant::now() < ready_deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let pid: i32 = fs::read_to_string(pid_path)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        terminate_process_tree(&mut child);
+        std::thread::sleep(Duration::from_millis(50));
+        let exists = unsafe { kill(pid, 0) == 0 };
+        if exists {
+            unsafe {
+                kill(pid, 9);
+            }
+        }
+        assert!(!exists, "grandchild {pid} survived timeout cleanup");
+    }
+
+    #[test]
+    fn codex_adapter_continuously_drains_stderr() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let worktree = temp_dir.path().join("worktree");
+        fs::create_dir_all(&worktree).unwrap();
+        let fake_server = temp_dir.path().join("fake-codex-app-server");
+        fs::write(
+            &fake_server,
+            r#"#!/usr/bin/env sh
+read initialize
+printf '%s\n' '{"id":0,"result":{}}'
+read initialized
+read thread_start
+printf '%s\n' '{"id":1,"result":{"thread":{"id":"thr_1"}}}'
+read turn_start
+dd if=/dev/zero bs=1024 count=1024 1>&2 2>/dev/null
+printf '%s\n' '{"id":2,"result":{}}'
+printf '%s\n' '{"method":"turn/completed","params":{"turn":{"status":"completed"}}}'
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&fake_server).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&fake_server, permissions).unwrap();
+
+        let config = config("codex", vec![fake_server.to_str().unwrap()]);
+        let mut prepared = prepared();
+        prepared.worktree = worktree.clone();
+        prepared.harness_db_path = worktree.join("harness.db");
+        prepared.contract_path = worktree.join(".harness/runs/run_1/RUN_CONTRACT.json");
+
+        run_codex_agent_with_timeout(&config, &prepared, Duration::from_secs(5)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_post_spawn_validation_error_kills_process_tree() {
+        unsafe extern "C" {
+            fn kill(pid: i32, signal: i32) -> i32;
+        }
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let worktree = temp_dir.path().join("worktree");
+        fs::create_dir_all(&worktree).unwrap();
+        let fake_server = temp_dir.path().join("malformed-codex-app-server");
+        fs::write(
+            &fake_server,
+            r#"#!/usr/bin/env sh
+read initialize
+printf '%s\n' '{"id":0,"result":{}}'
+read initialized
+read thread_start
+sh -c 'trap "" TERM; sleep 30' &
+echo $! > "$1"
+printf '%s\n' '{"id":1,"result":{}}'
+wait
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&fake_server).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&fake_server, permissions).unwrap();
+
+        let pid_path = temp_dir.path().join("descendant.pid");
+        let config = config(
+            "codex",
+            vec![fake_server.to_str().unwrap(), pid_path.to_str().unwrap()],
+        );
+        let mut prepared = prepared();
+        prepared.worktree = worktree.clone();
+        prepared.harness_db_path = worktree.join("harness.db");
+        prepared.contract_path = worktree.join(".harness/runs/run_1/RUN_CONTRACT.json");
+
+        let error =
+            run_codex_agent_with_timeout(&config, &prepared, Duration::from_secs(5)).unwrap_err();
+        assert!(matches!(error, AgentError::Codex(_)));
+        let pid: i32 = fs::read_to_string(pid_path)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        let exists = unsafe { kill(pid, 0) == 0 };
+        if exists {
+            unsafe {
+                kill(pid, 9);
+            }
+        }
+        assert!(!exists, "descendant {pid} survived protocol error cleanup");
+    }
+
+    #[test]
     fn codex_adapter_completes_json_rpc_handshake() {
         let temp_dir = tempfile::tempdir().unwrap();
         let worktree = temp_dir.path().join("worktree");
@@ -713,7 +1344,7 @@ printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thr_1","turn":{"
     }
 
     #[test]
-    fn codex_adapter_does_not_use_agent_timeout_as_wall_clock_deadline() {
+    fn codex_adapter_reconciles_before_wall_clock_deadline() {
         let temp_dir = tempfile::tempdir().unwrap();
         let worktree = temp_dir.path().join("worktree");
         fs::create_dir_all(&worktree).unwrap();
@@ -741,7 +1372,7 @@ printf '%s\n' '{"id":4,"result":{"data":[{"id":"turn_1","items":[],"itemsView":"
         fs::set_permissions(&fake_server, permissions).unwrap();
 
         let mut config = config("codex", vec![fake_server.to_str().unwrap()]);
-        config.agent_timeout_minutes = 0;
+        config.agent_timeout_minutes = 1;
         let mut prepared = prepared();
         prepared.worktree = worktree.clone();
         prepared.harness_db_path = worktree.join("harness.db");

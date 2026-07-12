@@ -443,6 +443,7 @@ mod tests {
             auto_source: "harness-db".to_owned(),
             auto_poll_interval_seconds: 30,
             auto_max_attempts: 3,
+            auto_allow_stale_base: false,
         }
     }
 

@@ -175,8 +175,20 @@ the server available for manual opening.
 
 Manual start is optional for execution: `harness-symphony run` and
 `harness-symphony auto` automatically spawn this server on `127.0.0.1:4317`
-when nothing is listening there, and reuse it when it is already running. Pass
-`--no-web` to either command to skip that.
+when the health endpoint identifies the same Symphony version and repository.
+The identity probe uses bounded 300 ms connect, read, and write timeouts. A
+foreign listener or a Symphony process for another checkout is not reused; stop
+the process occupying the port or choose another port, then retry. Pass
+`--no-web` to either command to skip controller startup.
+
+If you installed Harness with Homebrew, the same commands are available without
+the `target/debug/` prefix:
+
+```bash
+brew install winterzxzz/tap/harness
+harness-symphony doctor
+harness-symphony web
+```
 
 ### 4. See Runnable Work
 
@@ -367,6 +379,24 @@ agent:
     - ./scripts/run-agent.sh
 ```
 
+Agent execution defaults to a 10-minute timeout. Automatic runs also fail
+closed when the upstream base cannot be refreshed: `auto.allow_stale_base`
+defaults to `false`. Opt in only when running from the current, recorded base is
+an acceptable recovery tradeoff:
+
+```yaml
+version: 1
+agent:
+  timeout_minutes: 10
+auto:
+  allow_stale_base: true
+```
+
+After a timeout or preparation/execution failure, inspect `runs show <run_id>`
+and its recovery action. Fix the reported cause, then use the offered retry,
+replacement-run, or PR retry path; Symphony keeps the failed run as evidence
+instead of silently resuming it.
+
 Inspect the resolved configuration:
 
 ```bash
@@ -374,6 +404,10 @@ target/debug/harness-symphony config show
 ```
 
 ## The Mental Model
+
+This implementation is the Harness-local Symphony profile. It borrows the
+Symphony operating model but is not an OpenAI-core-conformant runtime or a
+drop-in implementation of OpenAI Symphony.
 
 | If you want to... | Run... |
 | --- | --- |

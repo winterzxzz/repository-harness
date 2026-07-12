@@ -44,6 +44,7 @@ pub struct ResolvedConfig {
     pub auto_source: String,
     pub auto_poll_interval_seconds: u64,
     pub auto_max_attempts: u32,
+    pub auto_allow_stale_base: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -94,7 +95,10 @@ pub struct AgentConfig {
     pub adapter: String,
     #[serde(default)]
     pub command: Vec<String>,
-    #[serde(default = "default_timeout_minutes")]
+    #[serde(
+        default = "default_timeout_minutes",
+        deserialize_with = "deserialize_timeout_minutes"
+    )]
     pub timeout_minutes: u32,
 }
 
@@ -140,6 +144,8 @@ pub struct AutoConfig {
     pub poll_interval_seconds: u64,
     #[serde(default = "default_auto_max_attempts")]
     pub max_attempts: u32,
+    #[serde(default)]
+    pub allow_stale_base: bool,
 }
 
 impl Default for SymphonyConfig {
@@ -231,6 +237,7 @@ impl Default for AutoConfig {
             source: default_auto_source(),
             poll_interval_seconds: default_auto_poll_interval_seconds(),
             max_attempts: default_auto_max_attempts(),
+            allow_stale_base: false,
         }
     }
 }
@@ -276,6 +283,7 @@ impl SymphonyConfig {
             auto_source: self.auto.source.clone(),
             auto_poll_interval_seconds: self.auto.poll_interval_seconds,
             auto_max_attempts: self.auto.max_attempts,
+            auto_allow_stale_base: self.auto.allow_stale_base,
             repo_root,
         }
     }
@@ -336,6 +344,19 @@ fn default_timeout_minutes() -> u32 {
     10
 }
 
+fn deserialize_timeout_minutes<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = u32::deserialize(deserializer)?;
+    if value == 0 {
+        return Err(serde::de::Error::custom(
+            "timeout_minutes must be greater than zero",
+        ));
+    }
+    Ok(value)
+}
+
 fn default_pull_request_create() -> String {
     "ask".to_owned()
 }
@@ -376,6 +397,10 @@ fn default_auto_max_attempts() -> u32 {
     3
 }
 
+pub const AUTO_RETRY_INITIAL_SECONDS: u64 = 10;
+pub const AUTO_RETRY_MULTIPLIER: u32 = 2;
+pub const AUTO_RETRY_MAX_SECONDS: u64 = 300;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -412,6 +437,10 @@ mod tests {
         assert_eq!(resolved.auto_source, "harness-db");
         assert_eq!(resolved.auto_poll_interval_seconds, 30);
         assert_eq!(resolved.auto_max_attempts, 3);
+        assert!(!resolved.auto_allow_stale_base);
+        assert_eq!(AUTO_RETRY_INITIAL_SECONDS, 10);
+        assert_eq!(AUTO_RETRY_MULTIPLIER, 2);
+        assert_eq!(AUTO_RETRY_MAX_SECONDS, 300);
     }
 
     #[test]
@@ -433,6 +462,7 @@ cleanup:
 auto:
   poll_interval_seconds: 5
   max_attempts: 2
+  allow_stale_base: true
 "#,
         )
         .unwrap();
@@ -449,6 +479,7 @@ auto:
         assert_eq!(resolved.auto_source, "harness-db");
         assert_eq!(resolved.auto_poll_interval_seconds, 5);
         assert_eq!(resolved.auto_max_attempts, 2);
+        assert!(resolved.auto_allow_stale_base);
         assert_eq!(
             resolved.worktrees_dir,
             PathBuf::from("/repo/workspace/.symphony/worktrees")
@@ -465,5 +496,15 @@ auto:
         let error = SymphonyConfig::load(temp_dir.path()).unwrap_err();
         assert!(error.to_string().contains("config parse failed"));
         assert!(error.to_string().contains(".harness/symphony.yml"));
+    }
+
+    #[test]
+    fn rejects_zero_agent_timeout() {
+        let error =
+            serde_yaml::from_str::<SymphonyConfig>("agent:\n  timeout_minutes: 0\n").unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("timeout_minutes must be greater than zero"));
     }
 }

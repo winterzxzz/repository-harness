@@ -4,6 +4,7 @@ use std::process::Command;
 use thiserror::Error;
 
 use crate::config::ResolvedConfig;
+use crate::run::result_has_passing_completion_proof;
 use crate::state::{RunRecord, RunStateStore, StateError};
 
 #[derive(Debug, Error)]
@@ -14,6 +15,8 @@ pub enum PrError {
     OutcomeNotAllowed(String),
     #[error("run artifacts are missing for {0}")]
     MissingArtifacts(String),
+    #[error("run completion proof is not passing: {0}")]
+    InvalidCompletionProof(String),
     #[error("unsupported PR provider: {0}")]
     UnsupportedProvider(String),
     #[error("gh command failed: {0}")]
@@ -72,6 +75,7 @@ pub fn plan_pr(config: &ResolvedConfig, run: &RunRecord) -> Result<PrPlan, PrErr
     if !summary.exists() || !result.exists() {
         return Err(PrError::MissingArtifacts(run.run_id.clone()));
     }
+    ensure_completion_proof(run, &result)?;
     // The changeset only exists when the run wrote durable Harness records;
     // a code/docs-only run is still allowed to open a PR without one.
     let files = if changeset.exists() {
@@ -115,6 +119,7 @@ pub fn create_pr(
         ));
     }
     prepare_review_branch(&run, &plan)?;
+    run_pre_create_gate(config, &run, || Ok(()))?;
     let mut command = Command::new("gh");
     command
         .args(["pr", "create", "--title", &plan.title, "--body-file"])
@@ -135,6 +140,31 @@ pub fn create_pr(
         plan,
         url: Some(url),
     })
+}
+
+fn run_pre_create_gate<F>(
+    config: &ResolvedConfig,
+    run: &RunRecord,
+    before_validation: F,
+) -> Result<(), PrError>
+where
+    F: FnOnce() -> Result<(), PrError>,
+{
+    before_validation()?;
+    let result = config.runs_dir.join(&run.run_id).join("RESULT.json");
+    ensure_completion_proof(run, &result)
+}
+
+fn ensure_completion_proof(run: &RunRecord, result: &Path) -> Result<(), PrError> {
+    if run.status != "completed" {
+        return Ok(());
+    }
+    let passing = result_has_passing_completion_proof(result, &run.run_id, &run.story_id)
+        .map_err(|error| PrError::InvalidCompletionProof(error.to_string()))?;
+    if !passing {
+        return Err(PrError::InvalidCompletionProof(run.run_id.clone()));
+    }
+    Ok(())
 }
 
 fn ensure_forbidden_files_not_staged(repo_root: &Path) -> Result<(), PrError> {
@@ -399,6 +429,7 @@ mod tests {
             auto_source: "harness-db".to_owned(),
             auto_poll_interval_seconds: 30,
             auto_max_attempts: 3,
+            auto_allow_stale_base: false,
         }
     }
 
@@ -417,6 +448,20 @@ mod tests {
             next_action: "review".to_owned(),
             agent: "codex".to_owned(),
         }
+    }
+
+    fn passing_result() -> &'static str {
+        r#"{
+            "version": 1,
+            "run_id": "run_1",
+            "story_id": "US-041",
+            "outcome": "completed",
+            "validation": {
+                "commands": [
+                    { "command": "cargo test", "result": "pass" }
+                ]
+            }
+        }"#
     }
 
     #[test]
@@ -438,7 +483,7 @@ mod tests {
         .unwrap();
         fs::write(
             temp_dir.path().join(".harness/runs/run_1/RESULT.json"),
-            "{}",
+            passing_result(),
         )
         .unwrap();
         fs::write(
@@ -502,6 +547,77 @@ mod tests {
     }
 
     #[test]
+    fn completed_run_rechecks_promoted_result_before_ready_pr() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        init_git_repo(temp_dir.path());
+        let config = config(temp_dir.path());
+        fs::create_dir_all(temp_dir.path().join(".harness/runs/run_1")).unwrap();
+        fs::write(
+            temp_dir.path().join(".harness/runs/run_1/SUMMARY.md"),
+            "summary",
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join(".harness/runs/run_1/RESULT.json"),
+            r#"{
+                "version": 1,
+                "run_id": "run_1",
+                "story_id": "US-041",
+                "outcome": "completed",
+                "validation": {
+                    "commands": [
+                        { "command": "cargo test", "result": "fail" }
+                    ]
+                }
+            }"#,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            plan_pr(&config, &run("completed", temp_dir.path())).unwrap_err(),
+            PrError::InvalidCompletionProof(_)
+        ));
+    }
+
+    #[test]
+    fn pre_create_gate_rechecks_result_after_mutation() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        init_git_repo(temp_dir.path());
+        let config = config(temp_dir.path());
+        fs::create_dir_all(temp_dir.path().join(".harness/runs/run_1")).unwrap();
+        fs::write(
+            temp_dir.path().join(".harness/runs/run_1/SUMMARY.md"),
+            "summary",
+        )
+        .unwrap();
+        let result_path = temp_dir.path().join(".harness/runs/run_1/RESULT.json");
+        fs::write(&result_path, passing_result()).unwrap();
+        let run = run("completed", temp_dir.path());
+        plan_pr(&config, &run).unwrap();
+
+        let error = run_pre_create_gate(&config, &run, || {
+            fs::write(
+                &result_path,
+                r#"{
+                    "version": 1,
+                    "run_id": "run_1",
+                    "story_id": "US-041",
+                    "outcome": "completed",
+                    "validation": {
+                        "commands": [
+                            { "command": "cargo test", "result": "fail" }
+                        ]
+                    }
+                }"#,
+            )?;
+            Ok(())
+        })
+        .unwrap_err();
+
+        assert!(matches!(error, PrError::InvalidCompletionProof(_)));
+    }
+
+    #[test]
     fn plan_allows_missing_changeset_for_docs_only_runs() {
         let temp_dir = tempfile::tempdir().unwrap();
         init_git_repo(temp_dir.path());
@@ -514,7 +630,7 @@ mod tests {
         .unwrap();
         fs::write(
             temp_dir.path().join(".harness/runs/run_1/RESULT.json"),
-            "{}",
+            passing_result(),
         )
         .unwrap();
 
