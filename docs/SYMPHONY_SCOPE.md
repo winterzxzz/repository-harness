@@ -555,7 +555,15 @@ Local run artifacts grow with every run. v1 must define retention up front:
   Compaction may fold old summaries into a single archive file or delete them,
   but must never touch `.harness/changesets/`.
 - `.symphony/` runtime state (worktrees, logs, state db) is local, ignored,
-  and freely cleanable.
+  and cleanable through `harness-symphony runs cleanup [--dry-run]`. Done
+  worktrees are removed after successful sync when cleanup is enabled. Failed,
+  interrupted, and orphan worktrees are retained for seven days by default.
+  Cleanup never removes Symphony branches, active worktrees, or paths outside
+  the configured worktree root. Automatic run compaction applies only to
+  terminal run evidence and never removes active-run artifacts.
+- Fresh Harness installs add `.symphony/`, `.worktrees/`, and local
+  `.harness/` runtime rules to the target `.gitignore` while leaving
+  `.harness/changesets/*.changeset.jsonl` visible to Git.
 
 ## 5. v1 Non-Goals
 
@@ -742,7 +750,8 @@ auto:
 
 cleanup:
   keep_failed_worktrees: true
-  cleanup_after_sync: false
+  cleanup_after_sync: true
+  failed_worktree_retention_days: 7
 ```
 
 The default agent deadline is 10 minutes, and controller identity probes use
