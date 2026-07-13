@@ -5,6 +5,7 @@ use clap::{Args, Parser, Subcommand};
 use thiserror::Error;
 
 use crate::auto::{options_from_config, run_auto_mode, AutoError, AutoRunSummary};
+use crate::cleanup::{cleanup_runtime, CleanupError, CleanupResult};
 use crate::config::{ConfigError, ResolvedConfig, SymphonyConfig};
 use crate::doctor::{print_report, run_doctor, DoctorError};
 use crate::pr::{create_pr, PrCreateResult, PrError};
@@ -144,6 +145,12 @@ enum RunsAction {
         #[arg(long)]
         keep_last: Option<u32>,
     },
+    /// Remove eligible local Symphony worktrees and compact terminal evidence.
+    Cleanup {
+        /// Report candidates without deleting them.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -199,6 +206,8 @@ pub enum InterfaceError {
     #[error("{0}")]
     Retention(#[from] RetentionError),
     #[error("{0}")]
+    Cleanup(#[from] CleanupError),
+    #[error("{0}")]
     Pr(#[from] PrError),
     #[error("{0}")]
     Auto(#[from] AutoError),
@@ -235,6 +244,7 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
             }
         },
         Command::Run(args) => {
+            cleanup_best_effort(&resolved);
             if !args.prepare_only && !args.no_web {
                 print_ensure_web(&ensure_web_server(&repo_root, &default_web_options()));
             }
@@ -262,13 +272,29 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                     keep_last.unwrap_or(resolved.compact_keep_last),
                 )?);
             }
+            RunsAction::Cleanup { dry_run } => {
+                let result = cleanup_runtime(&resolved, dry_run)?;
+                print_cleanup_result(&result, dry_run);
+                if result.failures() > 0 {
+                    return Err(InterfaceError::Cleanup(CleanupError::DeletionFailures(
+                        result.failures(),
+                    )));
+                }
+                if !dry_run {
+                    print_compact_result(&compact_runs(&resolved, resolved.compact_keep_last)?);
+                }
+            }
         },
         Command::Pr(args) => match args.action {
             PrAction::Create { run_id, dry_run } | PrAction::Retry { run_id, dry_run } => {
                 print_pr_result(&create_pr(&resolved, &run_id, dry_run)?);
             }
         },
-        Command::Sync => print_sync_result(&sync_changesets(&resolved)?),
+        Command::Sync => {
+            let result = sync_changesets(&resolved)?;
+            print_sync_result(&result);
+            cleanup_best_effort(&resolved);
+        }
         Command::Web(args) => run_web_server(
             &resolved,
             WebServerOptions {
@@ -278,6 +304,7 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
             },
         )?,
         Command::Auto(args) => {
+            cleanup_best_effort(&resolved);
             if !args.no_web {
                 print_ensure_web(&ensure_web_server(&repo_root, &default_web_options()));
             }
@@ -390,6 +417,10 @@ fn print_config(config: &ResolvedConfig) {
     println!("compact_keep_last: {}", config.compact_keep_last);
     println!("keep_failed_worktrees: {}", config.keep_failed_worktrees);
     println!("cleanup_after_sync: {}", config.cleanup_after_sync);
+    println!(
+        "failed_worktree_retention_days: {}",
+        config.failed_worktree_retention_days
+    );
     println!("auto_source: {}", config.auto_source);
     println!(
         "auto_poll_interval_seconds: {}",
@@ -468,6 +499,7 @@ fn print_runs(runs: &[RunRecord]) {
                 run.story_id.clone(),
                 run.branch.clone().unwrap_or_default(),
                 run.worktree.display().to_string(),
+                worktree_state(run).to_owned(),
                 if run.lightweight {
                     "yes".to_owned()
                 } else {
@@ -491,6 +523,7 @@ fn print_runs(runs: &[RunRecord]) {
             "Story",
             "Branch",
             "Worktree",
+            "Worktree State",
             "Light",
             "Status",
             "Result",
@@ -508,6 +541,7 @@ fn print_run_detail(run: &RunRecord) {
     println!("story_id: {}", run.story_id);
     println!("branch: {}", run.branch.clone().unwrap_or_default());
     println!("worktree: {}", run.worktree.display());
+    println!("worktree_state: {}", worktree_state(run));
     println!("lightweight: {}", run.lightweight);
     println!("status: {}", run.status);
     println!(
@@ -570,6 +604,57 @@ fn print_compact_result(result: &CompactResult) {
     );
     for path in &result.removed {
         println!("removed {}", path.display());
+    }
+}
+
+fn worktree_state(run: &RunRecord) -> &'static str {
+    if run.worktree.exists() {
+        "present"
+    } else if matches!(run.status.as_str(), "prepared" | "running") {
+        "missing"
+    } else {
+        "cleaned"
+    }
+}
+
+fn print_cleanup_result(result: &CleanupResult, dry_run: bool) {
+    println!(
+        "Cleanup {}: {} candidate(s), {} removed, {} failed, {} byte(s) reclaimable.",
+        if dry_run { "dry run" } else { "complete" },
+        result.items.len(),
+        result.removed_count(),
+        result.failures(),
+        result.reclaimed_bytes()
+    );
+    for item in &result.items {
+        println!(
+            "{} {} {}{}",
+            item.reason,
+            if item.removed { "removed" } else { "kept" },
+            item.path.display(),
+            item.error
+                .as_ref()
+                .map(|error| format!(" ({error})"))
+                .unwrap_or_default()
+        );
+    }
+}
+
+fn cleanup_best_effort(config: &ResolvedConfig) {
+    match cleanup_runtime(config, false) {
+        Ok(result) => {
+            for item in result.items.iter().filter(|item| item.error.is_some()) {
+                eprintln!(
+                    "warning: Symphony cleanup skipped {}: {}",
+                    item.path.display(),
+                    item.error.as_deref().unwrap_or("unknown error")
+                );
+            }
+        }
+        Err(error) => eprintln!("warning: Symphony cleanup failed: {error}"),
+    }
+    if let Err(error) = compact_runs(config, config.compact_keep_last) {
+        eprintln!("warning: Symphony run compaction failed: {error}");
     }
 }
 
@@ -680,6 +765,16 @@ mod tests {
             panic!("expected run command");
         };
         assert!(args.no_web);
+    }
+
+    #[test]
+    fn runs_cleanup_cli_accepts_dry_run() {
+        let cli =
+            Cli::try_parse_from(["harness-symphony", "runs", "cleanup", "--dry-run"]).unwrap();
+        let Command::Runs(args) = cli.command else {
+            panic!("expected runs command");
+        };
+        assert!(matches!(args.action, RunsAction::Cleanup { dry_run: true }));
     }
 
     #[test]

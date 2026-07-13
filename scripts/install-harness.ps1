@@ -224,7 +224,13 @@ function Merge-Gitignore([string]$Target) {
         "harness.db-wal",
         "harness.db-shm",
         "scripts/bin/harness-cli",
-        "scripts/bin/harness-cli.exe"
+        "scripts/bin/harness-cli.exe",
+        ".symphony/",
+        ".worktrees/",
+        "!.harness/",
+        ".harness/*",
+        "!.harness/changesets/",
+        "!.harness/changesets/*.changeset.jsonl"
     )
 
     $existing = if (Test-Path $Target) { Get-Content -LiteralPath $Target } else { @() }
@@ -248,7 +254,7 @@ function Merge-Gitignore([string]$Target) {
 function Copy-HarnessFile([string]$Relative) {
     $target = Join-Path $script:TargetDir $Relative
 
-    if ($Relative -eq ".gitignore" -and (Test-Path $target) -and !$Force) {
+    if ($Relative -eq ".gitignore" -and (Test-Path $target)) {
         Merge-Gitignore $target
         return
     }
