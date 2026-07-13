@@ -15,7 +15,7 @@ use crate::run::{
     execute_prepared_run, prepare_replacement_run, prepare_run, FeedbackFile, PreparedRun,
     ReplacementFeedback, RunContract, RunError,
 };
-use crate::state::{RunStateStore, StateError};
+use crate::state::{RunRecord, RunStateStore, StateError};
 use crate::sync::{sync_changeset, SyncChange, SyncError};
 use crate::upload::{HttpRequest, UploadError};
 use crate::work::{
@@ -334,6 +334,24 @@ impl HttpResponse {
 #[derive(Debug, Serialize)]
 struct BoardResponse {
     items: Vec<BoardItemResponse>,
+    task_flow: Option<TaskFlowResponse>,
+}
+
+#[derive(Debug, Serialize)]
+struct TaskFlowResponse {
+    story_id: String,
+    title: String,
+    state: String,
+    current_step: Option<String>,
+    message: String,
+    steps: Vec<TaskFlowStepResponse>,
+    recovery_action: Option<RecoveryAction>,
+}
+
+#[derive(Debug, Serialize)]
+struct TaskFlowStepResponse {
+    id: &'static str,
+    state: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -724,7 +742,9 @@ fn handle_http_request(
                 .into_iter()
                 .map(|item| BoardItemResponse::from_item(config, item))
                 .collect::<Vec<_>>();
-            json_response(200, &BoardResponse { items })
+            let runs = RunStateStore::new(config.state_db.clone()).list_runs()?;
+            let task_flow = derive_task_flow(&items, &runs);
+            json_response(200, &BoardResponse { items, task_flow })
         }
         ("POST", "/api/intake") => create_guided_intake_response(config, request),
         ("GET", "/api/settings") => settings_response(config),
@@ -2598,6 +2618,102 @@ fn content_type(path: &Path) -> &'static str {
     }
 }
 
+const TASK_FLOW_STEPS: [&str; 7] = [
+    "start",
+    "agent",
+    "validation",
+    "pr",
+    "review",
+    "sync",
+    "done",
+];
+
+fn derive_task_flow(items: &[BoardItemResponse], runs: &[RunRecord]) -> Option<TaskFlowResponse> {
+    let active = items.iter().find(|item| item.active_run.is_some());
+    let (item, run) = if let Some(item) = active {
+        let run = runs
+            .iter()
+            .find(|run| item.run_id.as_deref() == Some(run.run_id.as_str()))?;
+        (item, run)
+    } else {
+        runs.iter().find_map(|run| {
+            items
+                .iter()
+                .find(|item| {
+                    item.run_id.as_deref() == Some(run.run_id.as_str())
+                        && matches!(item.board_state.as_str(), "Review" | "Needs Attention")
+                })
+                .map(|item| (item, run))
+        })?
+    };
+
+    let (flow_state, current, failed, message) = match item.board_state.as_str() {
+        "In Progress" => (
+            "active",
+            "agent",
+            None,
+            "Agent is implementing the task.".to_owned(),
+        ),
+        "Review" if run.pr_status == "merged" => (
+            "waiting",
+            "sync",
+            None,
+            "Pull request merged. Waiting for local sync.".to_owned(),
+        ),
+        "Review" => (
+            "waiting",
+            "review",
+            None,
+            "Agent work is ready for review and merge.".to_owned(),
+        ),
+        "Needs Attention" if run.pr_status == "failed" => {
+            ("failed", "pr", Some("pr"), item.reason.clone())
+        }
+        "Needs Attention" => {
+            let validation_failed = item.failure_summary.as_ref().is_some_and(|summary| {
+                let value = format!("{} {}", summary.category, summary.reason).to_lowercase();
+                value.contains("validation")
+                    || value.contains("result")
+                    || value.contains("artifact")
+            });
+            let step = if validation_failed {
+                "validation"
+            } else {
+                "agent"
+            };
+            ("failed", step, Some(step), item.reason.clone())
+        }
+        "Done" => ("done", "done", None, "Task lifecycle completed.".to_owned()),
+        _ => return None,
+    };
+    let current_index = TASK_FLOW_STEPS.iter().position(|step| *step == current)?;
+    let steps = TASK_FLOW_STEPS
+        .iter()
+        .enumerate()
+        .map(|(index, id)| TaskFlowStepResponse {
+            id,
+            state: if failed == Some(*id) {
+                "failed"
+            } else if index < current_index || flow_state == "done" {
+                "complete"
+            } else if index == current_index {
+                "current"
+            } else {
+                "pending"
+            },
+        })
+        .collect();
+    Some(TaskFlowResponse {
+        story_id: item.id.clone(),
+        title: item.title.clone(),
+        state: flow_state.to_owned(),
+        current_step: (flow_state != "done").then(|| current.to_owned()),
+        message,
+        steps,
+        recovery_action: item.recovery_action.clone(),
+    })
+}
+
 impl BoardItemResponse {
     fn from_item(config: &ResolvedConfig, item: BoardItem) -> Self {
         let run = item.run_id.as_deref().and_then(|run_id| {
@@ -3537,6 +3653,22 @@ exit 1
         assert!(response.starts_with("HTTP/1.1 200 OK"));
         assert!(response.contains(r#""id":"US-WEB""#));
         assert!(response.contains(r#""board_state":"Ready""#));
+        assert!(response.contains(r#""task_flow":null"#));
+    }
+
+    #[test]
+    fn board_request_exposes_active_task_flow() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = test_config(&temp_dir);
+        seed_story_with_status(&config.harness_db, "US-FLOW", "Active lifecycle", "planned");
+        add_story_run(&config, "run_flow", "US-FLOW", "prepared");
+
+        let response = handle_request(&config, "GET /api/board HTTP/1.1\r\n\r\n").unwrap();
+
+        assert!(response.contains(r#""story_id":"US-FLOW""#));
+        assert!(response.contains(r#""current_step":"agent""#));
+        assert!(response.contains(r#""id":"start","state":"complete""#));
+        assert!(response.contains(r#""id":"agent","state":"current""#));
     }
 
     #[test]

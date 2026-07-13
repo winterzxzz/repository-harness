@@ -17,6 +17,10 @@ import type {
   ReviewResponse,
   SettingsResponse,
   SyncResponse,
+  TaskFlow,
+  TaskFlowState,
+  TaskFlowStepId,
+  TaskFlowStepState,
   ToolItem,
   ToolsResponse,
   TraceItem,
@@ -181,7 +185,40 @@ function errorMessage(value: unknown): string | null {
 
 function parseBoardResponse(value: unknown): BoardResponse {
   const record = expectRecord(value, "board response");
-  return { items: expectArray(record.items, "items").map(parseBoardItem) };
+  return {
+    items: expectArray(record.items, "items").map(parseBoardItem),
+    task_flow: record.task_flow === undefined ? null : parseNullable(record.task_flow, parseTaskFlow)
+  };
+}
+
+const taskFlowStepIds: TaskFlowStepId[] = ["start", "agent", "validation", "pr", "review", "sync", "done"];
+const taskFlowStepStates: TaskFlowStepState[] = ["pending", "current", "complete", "failed"];
+const taskFlowStates: TaskFlowState[] = ["active", "waiting", "failed", "done"];
+
+function parseTaskFlow(value: unknown): TaskFlow {
+  const record = expectRecord(value, "task_flow");
+  const state = expectString(record.state, "task_flow.state") as TaskFlowState;
+  if (!taskFlowStates.includes(state)) throw new Error("task_flow.state is invalid");
+  const currentStep = parseNullableString(record.current_step, "task_flow.current_step") as TaskFlowStepId | null;
+  if (currentStep !== null && !taskFlowStepIds.includes(currentStep)) throw new Error("task_flow.current_step is invalid");
+  const steps = expectArray(record.steps, "task_flow.steps").map((value, index) => {
+    const step = expectRecord(value, `task_flow.steps[${index}]`);
+    const id = expectString(step.id, `task_flow.steps[${index}].id`) as TaskFlowStepId;
+    const stepState = expectString(step.state, `task_flow.steps[${index}].state`) as TaskFlowStepState;
+    if (id !== taskFlowStepIds[index]) throw new Error("task_flow.steps must use canonical order");
+    if (!taskFlowStepStates.includes(stepState)) throw new Error(`task_flow.steps[${index}].state is invalid`);
+    return { id, state: stepState };
+  });
+  if (steps.length !== taskFlowStepIds.length) throw new Error("task_flow.steps must contain seven steps");
+  return {
+    story_id: expectString(record.story_id, "task_flow.story_id"),
+    title: expectString(record.title, "task_flow.title"),
+    state,
+    current_step: currentStep,
+    message: expectString(record.message, "task_flow.message"),
+    steps,
+    recovery_action: parseNullable(record.recovery_action, parseRecoveryAction)
+  };
 }
 
 function parseBoardItem(value: unknown): BoardItem {

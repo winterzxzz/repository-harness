@@ -63,4 +63,16 @@ fresh-install Harness template contract.
 
 ## Evidence
 
-Planning only; implementation proof has not been collected.
+- `cargo test -p harness-symphony` — 204 passed, 0 failed.
+- `cargo test --workspace` — Harness Bench 20, Harness CLI 43, and Symphony
+  204 tests passed; doc tests passed.
+- `cargo clippy --workspace -- -D warnings` — passed.
+- `npm --prefix crates/harness-symphony/web-ui run build` — passed.
+- `npm --prefix crates/harness-symphony/web-ui run e2e` — 38 passed, 0 failed,
+  including idle, active, failure recovery, narrow viewport, overflow, reduced
+  motion, review, and done regressions.
+- `node .agents/skills/impeccable/scripts/detect.mjs --json ...` — no
+  deterministic design-quality findings in the changed UI files.
+- Electron desktop smoke is unavailable from a linked git worktree because its
+  root-discovery assertion resolves the shared checkout instead of the worktree;
+  Web build, backend API tests, and browser E2E passed.

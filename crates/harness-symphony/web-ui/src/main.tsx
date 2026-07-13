@@ -24,6 +24,7 @@ import {
   putSettings
 } from "./features/symphony/api";
 import { BoardGrid, SummaryStrip } from "./features/symphony/board";
+import { ActiveTaskFlow } from "./features/symphony/active-task-flow";
 import { ConfettiBurstHost, TaskDetail, TaskDetailOverlay } from "./features/symphony/detail";
 import { GuidedIntakePanel } from "./features/symphony/intake";
 import { SettingsPanel } from "./features/symphony/settings";
@@ -40,7 +41,8 @@ import type {
   PrMergedResponse,
   PrRetryResponse,
   RequestChangesResponse,
-  RecoveryAction
+  RecoveryAction,
+  TaskFlow
 } from "./features/symphony/types";
 import { cn } from "./lib/utils";
 import "./styles.css";
@@ -56,6 +58,8 @@ type AppView = "board" | "intake" | "traces" | "tools" | "settings";
 function App() {
   const toast = useToast();
   const [items, setItems] = React.useState<BoardItem[]>([]);
+  const [taskFlow, setTaskFlow] = React.useState<TaskFlow | null>(null);
+  const [taskFlowStale, setTaskFlowStale] = React.useState(false);
   const [view, setView] = React.useState<AppView>("board");
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const [confettiBursts, setConfettiBursts] = React.useState<ConfettiBurst[]>([]);
@@ -93,7 +97,10 @@ function App() {
         return;
       }
       setItems(data.items);
+      setTaskFlow(data.task_flow);
+      setTaskFlowStale(false);
     } catch (cause) {
+      if (requestId === boardRequestIdRef.current && options?.silent) setTaskFlowStale(true);
       if (requestId === boardRequestIdRef.current && !options?.silent) {
         setError(cause instanceof Error ? cause.message : "Board request failed");
       }
@@ -505,7 +512,8 @@ function App() {
             </div>
           </header>
 
-          {view === "board" ? <SummaryStrip activeRun={activeRun} counts={counts} className="order-1 md:order-none" /> : null}
+          {view === "board" ? <ActiveTaskFlow flow={taskFlow} stale={taskFlowStale} onRecover={(storyId, action) => void recoverTask(storyId, action)} /> : null}
+          {view === "board" ? <SummaryStrip activeRun={activeRun} counts={counts} className="order-1 hidden sm:flex md:order-none md:grid" /> : null}
 
           {view === "board" && error ? (
             <Card role="alert" className="order-1 flex items-center gap-3 border-destructive/35 bg-destructive/5 p-4 text-sm text-destructive md:order-none rounded-xl">
@@ -518,7 +526,7 @@ function App() {
             <section
               id="board"
               aria-busy={loading}
-              className="command-board-surface order-2 grid min-h-[calc(100dvh-232px)] grid-cols-1 gap-4 rounded-xl border border-border bg-background/25 p-3 md:order-none shadow-sm"
+              className="command-board-surface order-2 grid min-h-[calc(100dvh-438px)] grid-cols-1 gap-4 rounded-xl border border-border bg-background/25 p-3 md:order-none shadow-sm"
             >
               <div className="sr-only" role="status" aria-live="polite">
                 {loading
