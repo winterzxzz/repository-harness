@@ -4,6 +4,7 @@
 # Bash and PowerShell installers both read this list.
 # Schema migrations are discovered automatically from scripts/schema/*.sql.
 AGENTS.md
+CLAUDE.md
 docs/ARCHITECTURE.md
 docs/CONTEXT_RULES.md
 docs/FEATURE_INTAKE.md

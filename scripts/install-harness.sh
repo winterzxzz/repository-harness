@@ -16,12 +16,10 @@ Options:
                          Refresh an existing AGENTS.md into the small Harness
                          shim after backing it up. Old Harness-generated files
                          are replaced; custom files receive a marked block.
-      --claude           Also install or refresh CLAUDE.md so Claude Code
-                         auto-loads the harness context. Claude Code never
-                         auto-loads AGENTS.md; the shim @-imports AGENTS.md
-                         and docs/FEATURE_INTAKE.md inside a marked block.
-                         Existing CLAUDE.md files get the block appended
-                         after a backup; a stale block is refreshed in place.
+      --claude           Refresh or append the marked CLAUDE.md Harness block
+                         for an existing install. Fresh installs include
+                         CLAUDE.md by default; this flag remains for backward
+                         compatibility and existing custom files.
       --override         On protected-path conflict, back up and replace
                          AGENTS.md, docs/, and scripts/.
       --force            Overwrite existing files after backing them up.

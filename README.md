@@ -171,12 +171,12 @@ Harness-generated guide, it replaces it with the shim. If the file appears
 custom, it appends or updates a marked Harness block instead of overwriting the
 project's local instructions.
 
-If the project is driven with Claude Code, add `--claude`. Claude Code never
-auto-loads `AGENTS.md`, so without this the installed harness is invisible to
-fresh sessions. The flag installs (or refreshes) a `CLAUDE.md` whose marked
-Harness block `@`-imports `AGENTS.md` and `docs/FEATURE_INTAKE.md` into every
-session's context. An existing `CLAUDE.md` gets the block appended after a
-backup; plain installs without the flag never touch `CLAUDE.md`:
+Fresh installs include `CLAUDE.md` by default. Claude Code never auto-loads
+`AGENTS.md`, so the generated file contains a marked Harness block that
+`@`-imports `AGENTS.md` and `docs/FEATURE_INTAKE.md` into every session's
+context. An existing `CLAUDE.md` is preserved during a normal or merge install.
+Use `--claude` when refreshing an existing file: its Harness block is appended
+after a backup, or refreshed in place when already present:
 
 ```bash
 curl -fsSL "https://raw.githubusercontent.com/winterzxzz/repository-harness/main/scripts/install-harness.sh?$(date +%s)" | bash -s -- --claude --yes
