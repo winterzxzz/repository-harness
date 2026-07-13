@@ -164,6 +164,25 @@ Bucket mapping:
 13. UI runs Symphony sync.
 14. The task moves to `Done`.
 
+## Active Task Lifecycle Flow
+
+The controller keeps a compact horizontal lifecycle flow above the command
+status rail and board. It follows one task through Start, Agent, Validation,
+Pull Request, Review and Merge, Sync, and Done. The flow remains visible in a
+neutral idle state when no task currently owns the lifecycle.
+
+Symphony runtime, review, pull-request, and sync state remain authoritative.
+The Web UI consumes a normalized lifecycle model and must not infer business
+state from human-readable log text, fabricate completion percentages, or
+estimate remaining time.
+
+Completed, current, future, and failed steps must remain distinguishable
+without color alone. A `Needs Attention` task stops at and marks the failed
+step, preserving the existing failure explanation and guarded recovery action
+instead of adding a separate error stage. On narrow screens the ordered flow
+may scroll horizontally, but it must not wrap into multiple ambiguous rows or
+hide lifecycle steps.
+
 ## Ready Task Removal
 
 The task detail popup may show a delete action only for tasks in `Ready` state.
