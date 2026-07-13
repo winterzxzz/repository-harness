@@ -250,26 +250,19 @@ Migration files live under `scripts/schema/` and are named `NNN-description.sql`
 where `NNN` is a zero-padded version number. Run `scripts/bin/harness-cli migrate` to
 apply pending migrations.
 
-## Future Command Contract
+## Pre-Merge Validation Contract
 
-Expected future checks:
+Repository maintainers and pull-request CI run the same release-relevant gate:
 
-```text
-validate:quick
-  format, lint, typecheck, unit tests, architecture check
-
-test:integration
-  backend contract and integration checks
-
-test:e2e
-  user-visible end-to-end flows
-
-test:platform
-  platform shell smoke checks, if the project has a native shell
-
-test:release
-  full suite, log checks, and performance smoke
+```bash
+scripts/validate-premerge.sh
 ```
+
+It checks Rust formatting, tests, and linting; revision/schema/command
+coherence; bootstrap, protocol, installer, documentation, and representative
+task-effect contracts; release workflow structure; and whitespace errors.
+Installed consumer projects keep their own stack-specific validation commands;
+the template does not impose this repository's Rust gate on them.
 
 ## Changeset Rebuild Validation
 
@@ -308,7 +301,7 @@ scripts/build-harness-cli-release.sh --target x86_64-unknown-linux-gnu
 ```
 
 GitHub releases are produced by
-`.github/workflows/harness-cli-release.yml`. Push a tag matching `v*` or
+`.github/workflows/harness-cli-release.yml`. Push a tag matching
 `harness-cli-v*` to run the verification job, build all supported targets on
 native hosted runners, and upload these release assets:
 

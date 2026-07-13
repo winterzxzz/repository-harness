@@ -64,21 +64,24 @@ Harness v0 includes:
 - Story templates.
 - Decision log template.
 - Validation report template.
-- Test matrix placeholder.
+- SQLite-backed proof matrix and a legacy import template.
 - Harness growth backlog.
 - Durable layer: SQLite database and CLI for operational records.
+- Upstream contract tests and pull-request/release validation.
 
 Harness v0 deliberately excludes:
 
-- A project-specific `SPEC.md`.
-- Pre-sliced product domains.
-- A locked application stack.
-- App source scaffolding.
-- Package scripts.
-- Test runner config.
-- CI workflows.
+- A consumer-project-specific `SPEC.md`.
+- Pre-sliced consumer product domains.
+- A locked consumer application stack.
+- Consumer app source scaffolding.
+- Consumer package scripts and test-runner configuration.
+- Consumer CI workflows.
 
-Those should arrive only when a selected story needs them.
+Those belong to the installed project and should arrive only when one of its
+selected stories needs them. The upstream Harness repository has its own Rust
+workspace, tests, and CI because the Harness CLI and templates are products
+that require executable proof.
 
 ## Durable Layer
 

@@ -1,9 +1,17 @@
 # Test Matrix
 
-This file maps product behavior to proof.
+This file preserves the proof vocabulary and brownfield import shape used by
+Harness consumers. The authoritative operational matrix is stored in SQLite
+and queried with:
 
-No product behavior has been defined or implemented yet. Do not mark a row
-implemented until tests or validation evidence exist.
+```bash
+scripts/bin/harness-cli query matrix --active --summary
+```
+
+The upstream Harness repository has implemented behavior and executable proof.
+An installed consumer starts without consumer-product rows and adds them only
+when real work is accepted. Do not mark a row implemented until tests or other
+validation evidence exist.
 
 ## Status Values
 
@@ -17,9 +25,9 @@ implemented until tests or validation evidence exist.
 
 ## Matrix
 
-| Story | Contract | Unit | Integration | E2E | Platform | Status | Evidence |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| TBD | Add rows when story packets are created | no | no | no | no | planned | none |
+No static product rows are shipped in this legacy view. Use `story add` and
+`story update` for operational records. Brownfield repositories may add rows
+here before importing their existing state.
 
 ## Evidence Rules
 

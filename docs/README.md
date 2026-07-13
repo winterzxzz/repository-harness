@@ -18,7 +18,8 @@ future user-provided spec.
 
 ## Folders
 
-- `product/`: current product truth, empty until a spec is derived.
+- `product/`: consumer-project product truth, empty until a consumer spec is
+  derived.
 - `stories/`: feature packets and backlog.
 - `decisions/`: durable decisions and tradeoffs.
 - `demo/`: concrete walkthroughs that show how the harness transforms input
@@ -28,6 +29,8 @@ future user-provided spec.
 
 ## Current State
 
-Harness v0 exists before implementation. These docs define how the project will
-grow; they do not imply that app code, tests, CI, or deployment automation exist
-yet.
+The upstream Harness v0 repository contains an implemented Rust CLI, tests,
+installers, and pull-request/release automation. These documents are also
+distributed as a generic template, so they do not imply that an installed
+consumer repository already has application code, a chosen stack, consumer
+tests, deployment automation, or consumer CI.

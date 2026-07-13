@@ -219,17 +219,21 @@ full model, the degrade ladder, and how to wire a tool into a flow step.
 
 ## Current State
 
-This repository is in Harness v0.
+This repository implements the Harness v0 product: a Rust CLI, SQLite durable
+layer, installers, operating documents, contract tests, and release automation.
+Those upstream components are executable product behavior, not placeholders.
 
-There is no application implementation and no baked-in product specification
-yet. The current work is the reusable project harness: the file structure,
-agent operating model, feature intake process, story templates, and validation
-expectations that help humans and agents turn a future user-provided spec into
-implementation work.
+Installing Harness into another repository does not create or choose that
+consumer's application, stack, or product specification. It adds the reusable
+engineering layer that helps humans and agents turn the consumer's intent into
+validated work.
 
 ## Product Sources
 
-No product contract is currently defined.
+The upstream Harness contract lives in this README, the operating documents,
+the versioned orchestration contract, story packets, and executable tests. The
+generic `docs/product/` directory is reserved for a consumer project's product
+contract; Harness intentionally does not populate it with a fake domain model.
 
 When a user provides a project specification, add or reference it as the input
 spec for the first buildout, then derive smaller living artifacts from it:

@@ -1,0 +1,53 @@
+name: Pre-Merge Contract
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: premerge-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  validate:
+    name: Validate repository contract
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install validation dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes jq ripgrep sqlite3
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run pre-merge contract
+        run: scripts/validate-premerge.sh
+
+  windows-installer:
+    name: Validate Windows installer contract
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Windows Harness CLI
+        run: cargo build -p harness-cli --locked
+
+      - name: Run PowerShell installer modes
+        shell: pwsh
+        run: tests/installer/test-install-harness-modes.ps1 -CandidateArtifact target/debug/harness-cli.exe

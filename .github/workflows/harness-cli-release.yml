@@ -47,32 +47,13 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Check formatting
-        run: cargo fmt -p harness-cli -- --check
-
-      - name: Run tests
-        run: cargo test -p harness-cli --locked
-
-      - name: Run clippy
-        run: cargo clippy -p harness-cli --all-targets --locked -- -D warnings
-
-      - name: Check shell scripts
+      - name: Install validation dependencies
         run: |
-          bash -n scripts/install-harness.sh
-          bash -n scripts/build-harness-cli-release.sh
+          sudo apt-get update
+          sudo apt-get install --yes jq ripgrep sqlite3
 
-      - name: Smoke Bash installer modes
-        run: tests/installer/test-install-harness-modes.sh
-
-      - name: Verify installer and maintenance contracts
-        run: |
-          tests/installer/assert-agent-authority-contract.sh
-          tests/installer/assert-install-manifest-links.sh
-          tests/installer/assert-consumer-changeset-trackable.sh
-          tests/maintenance/test-harness-cli-release-classification.sh
-          tests/maintenance/test-render-changelog-files.sh
-          tests/release/test-release-workflow-contract.sh
-          tests/release/test-release-identity-guard.sh
+      - name: Run repository contract
+        run: scripts/validate-premerge.sh
 
   build:
     name: Build ${{ matrix.platform }}

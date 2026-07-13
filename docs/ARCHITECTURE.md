@@ -1,10 +1,15 @@
 # Architecture
 
-No application stack is selected yet.
+The upstream Harness product is implemented as a Rust workspace with a CLI and
+SQLite durable layer. Its primary source is `crates/harness-cli/`, organized
+into domain, application, infrastructure, and interface modules. Schema
+migrations live in `scripts/schema/`, while installers and validation scripts
+form the distribution boundary.
 
-No application code exists yet. This document defines generic architecture
-questions and boundary rules that future implementation should adapt after a
-user-provided spec and stack decision exist.
+The reusable template does not select an application stack for a consumer
+project. The discovery guidance below is for that consumer application after a
+user-provided spec and stack decision exist; it does not describe the upstream
+Harness CLI as unimplemented.
 
 ## Discovery Before Shape
 
@@ -30,7 +35,7 @@ domain
               <- app surfaces
 ```
 
-## Candidate Structure
+## Consumer Candidate Structure
 
 ```text
 app/

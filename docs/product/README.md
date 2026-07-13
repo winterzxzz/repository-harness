@@ -12,7 +12,10 @@ structure is healthier than fake product truth.
 
 ## Current Product Contracts
 
-No repository-specific product contract is currently defined.
+No consumer-project-specific product contract is shipped in this generic
+directory. The upstream `repository-harness` product contract lives in the
+root README, Harness operating documents, versioned orchestration contract,
+story packets, and executable tests.
 
 ## Update Rule
 
