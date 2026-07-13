@@ -333,27 +333,30 @@ Expected: run each optional check only when its capability is present; record a 
 - [ ] **Step 2: Run Web UI and Rust validation**
 
 ```bash
-npm --prefix crates/harness-symphony/web-ui run build
-npm --prefix crates/harness-symphony/web-ui run e2e
-cargo test -p harness-symphony web -- --nocapture
-cargo test --workspace
-cargo fmt --check
-cargo clippy --workspace -- -D warnings
-git diff --check
+env -u HARNESS_RUN_ID -u HARNESS_RUN_MODE sh -c '
+  npm --prefix crates/harness-symphony/web-ui run build &&
+  npm --prefix crates/harness-symphony/web-ui run e2e &&
+  cargo test -p harness-symphony web -- --nocapture &&
+  cargo test --workspace &&
+  cargo fmt --check &&
+  cargo clippy --workspace -- -D warnings &&
+  git diff --check
+'
 ```
 
-Expected: every command exits zero.
+Expected: every command exits zero and validation fixtures cannot write
+operations into the live Symphony changeset.
 
 - [ ] **Step 3: Run equipped visual/platform checks**
 
 When present:
 
 ```bash
-node .agents/skills/impeccable/scripts/detect.mjs --json \
+env -u HARNESS_RUN_ID -u HARNESS_RUN_MODE node .agents/skills/impeccable/scripts/detect.mjs --json \
   crates/harness-symphony/web-ui/src/features/symphony/constants.ts \
   crates/harness-symphony/web-ui/src/features/symphony/board.tsx \
   crates/harness-symphony/web-ui/src/features/symphony/sidebar.tsx
-npm --prefix crates/harness-symphony/web-ui run desktop:smoke
+env -u HARNESS_RUN_ID -u HARNESS_RUN_MODE npm --prefix crates/harness-symphony/web-ui run desktop:smoke
 ```
 
 Expected: detector returns `[]`; desktop smoke exits zero. If the registry reports an absent capability, record the skip in story evidence.
@@ -364,10 +367,19 @@ Replace the current Evidence sentence in `docs/stories/US-091-symphony-board-sta
 
 ```bash
 scripts/bin/harness-cli story update --id US-091 --status implemented --unit 1 --integration 1 --e2e 1 --platform 1 --evidence "Ownership status metadata, unchanged lifecycle regression, responsive Playwright coverage, Web build, Rust workspace tests, clippy, design validation, desktop smoke, and diff check passed."
-scripts/bin/harness-cli story verify US-091
+env -u HARNESS_RUN_ID -u HARNESS_RUN_MODE scripts/bin/harness-cli story verify US-091
 ```
 
 If platform smoke was cleanly unavailable, set `--platform 0` and say why in evidence.
+
+After durable writes, inspect the changeset without rewriting it:
+
+```bash
+head -1 ".harness/changesets/${HARNESS_RUN_ID}.changeset.jsonl"
+```
+
+Expected: the first record has `"op":"changeset.header"` and the current
+`run_id`. Never filter or reconstruct a Harness-generated changeset by hand.
 
 - [ ] **Step 5: Record the implementation trace**
 

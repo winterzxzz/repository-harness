@@ -47,6 +47,10 @@ state behavior.
 When updating durable proof status, use numeric booleans:
 `scripts/bin/harness-cli story update --id US-091 --unit 1 --integration 1 --e2e 1 --platform 1`.
 
+The verify command must unset `HARNESS_RUN_ID` and `HARNESS_RUN_MODE` for its
+entire subprocess. Workspace tests exercise Harness CLI fixture writes; allowing
+them to inherit the live run id pollutes the run changeset with test operations.
+
 | Layer | Expected proof |
 | --- | --- |
 | Unit | TypeScript presentation mapping and Rust lifecycle derivation regressions pass. |
