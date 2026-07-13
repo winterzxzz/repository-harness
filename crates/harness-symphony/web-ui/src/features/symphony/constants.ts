@@ -1,4 +1,4 @@
-import { CheckCircle2, Circle, GitPullRequestArrow, Loader2 } from "lucide-react";
+import { CheckCircle2, Circle, GitPullRequestArrow, Loader2, type LucideIcon } from "lucide-react";
 import type { AgentId, BoardBucket, BoardItem } from "./types";
 
 export const agents: { id: AgentId; label: string }[] = [
@@ -12,19 +12,45 @@ export function agentLabel(agent: string): string {
 
 export const buckets: BoardBucket[] = ["Drafts", "Active", "Ready", "Done"];
 
-export const bucketIcon = {
-  Drafts: Circle,
-  Active: Loader2,
-  Ready: GitPullRequestArrow,
-  Done: CheckCircle2
+export type BucketPresentation = {
+  label: string;
+  description: string;
+  icon: LucideIcon;
 };
+
+export const bucketPresentation: Record<BoardBucket, BucketPresentation> = {
+  Drafts: {
+    label: "Planned",
+    description: "Ready to start · blocked work stays visible",
+    icon: Circle
+  },
+  Active: {
+    label: "Agent working",
+    description: "Codex owns the next action",
+    icon: Loader2
+  },
+  Ready: {
+    label: "Human review",
+    description: "Waiting for your decision",
+    icon: GitPullRequestArrow
+  },
+  Done: {
+    label: "Done",
+    description: "Accepted and synchronized",
+    icon: CheckCircle2
+  }
+};
+
+export function bucketLabel(bucket: BoardBucket): string {
+  return bucketPresentation[bucket].label;
+}
 
 export function bucketId(bucket: BoardBucket): string {
   return `bucket-${bucket.toLowerCase().replace(/\s+/g, "-")}`;
 }
 
 export function bucketForItem(item: Pick<BoardItem, "board_state">): BoardBucket {
-  if (item.board_state === "Ready") {
+  if (item.board_state === "Ready" || item.board_state === "Blocked") {
     return "Drafts";
   }
   if (item.board_state === "Review") {

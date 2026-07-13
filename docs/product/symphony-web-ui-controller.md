@@ -107,14 +107,21 @@ shown as a task breakdown problem, not as a user action problem.
 
 ## Board Buckets And States
 
-The primary board buckets are:
+The primary board buckets use ownership-oriented labels. Internal bucket keys
+remain stable implementation details and do not change backend state or API
+contracts:
 
-| Bucket | Meaning |
-| --- | --- |
-| Drafts | Unstarted work that may be runnable or still blocked by planning/dependencies. |
-| Active | Work currently running or requiring operator attention before it can move forward. |
-| Ready | Finished agent work waiting for review, PR merge, or local sync approval. |
-| Done | Accepted work whose PR/sync flow is complete. |
+| User-facing label | Internal bucket key | Meaning |
+| --- | --- | --- |
+| Planned | Drafts | Unstarted work that may be runnable or still blocked by planning/dependencies. |
+| Agent working | Active | Work currently running or requiring operator attention before it can move forward. |
+| Human review | Ready | Finished agent work waiting for review, PR merge, or local sync approval. |
+| Done | Done | Accepted work whose PR/sync flow is complete. |
+
+Each status header should expose an icon, task count, and concise ownership
+description. `Blocked` remains a visible task-card exception inside Planned.
+`Needs Attention` remains a visible task-card exception inside Agent working
+with its failure explanation and guarded recovery action.
 
 Internal Symphony task states remain the source of truth. The board groups them
 into buckets and keeps the specific state visible in cards, detail panels, and
@@ -131,12 +138,14 @@ The internal task states are:
 | Needs Attention | A run failed, was interrupted, or cannot create required review artifacts. |
 | Done | The PR was merged and Symphony sync applied the accepted changeset. |
 
-Bucket mapping:
+Bucket mapping (internal key followed by user-facing label):
 
-- `Ready` state appears in Drafts because the work has not started yet.
-- `Blocked`, `In Progress`, and `Needs Attention` appear in Active because they
-  need current operator or runner attention.
-- `Review` appears in Ready because agent work is ready for human review/sync.
+- `Ready` and `Blocked` appear in Drafts / Planned because the work has not
+  started yet.
+- `In Progress` and `Needs Attention` appear in Active / Agent working because
+  Codex owns the next action or recovery is required before it can continue.
+- `Review` appears in Ready / Human review because agent work is waiting for a
+  human review, merge, or sync decision.
 - `Done` appears in Done.
 
 ## Main Workflow

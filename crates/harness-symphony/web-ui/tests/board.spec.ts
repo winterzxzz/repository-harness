@@ -76,18 +76,37 @@ test("board renders task columns and detail controls", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Symphony Command Center" })).toBeVisible();
   await expect(page.getByText("Local operations surface")).toBeVisible();
   await expect(page.getByRole("region", { name: "Command status rail" })).toBeVisible();
+  const statusRail = page.getByRole("region", { name: "Command status rail" });
+  await expect(statusRail.getByText("Planned", { exact: true })).toBeVisible();
+  await expect(statusRail.getByText("Agent working", { exact: true })).toBeVisible();
+  await expect(statusRail.getByText("Human review", { exact: true })).toBeVisible();
+  await expect(statusRail.getByText("Done", { exact: true })).toBeVisible();
   await expect(page.locator("#board")).toHaveClass(/command-board-surface/);
   await expect(page.getByRole("complementary", { name: "Workspace navigation" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Drafts", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Active", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Ready", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Done", exact: true })).toBeVisible();
+  const statusNavigation = page.getByRole("navigation", { name: "Status" });
+  await expect(statusNavigation.getByText("Planned", { exact: true })).toBeVisible();
+  await expect(statusNavigation.getByText("Agent working", { exact: true })).toBeVisible();
+  await expect(statusNavigation.getByText("Human review", { exact: true })).toBeVisible();
+  await expect(statusNavigation.getByText("Done", { exact: true })).toBeVisible();
+  const planned = page.getByRole("region", { name: "Planned column" });
+  const agentWorking = page.getByRole("region", { name: "Agent working column" });
+  const humanReview = page.getByRole("region", { name: "Human review column" });
+  const done = page.getByRole("region", { name: "Done column" });
+  await expect(planned).toContainText("Ready to start");
+  await expect(agentWorking).toContainText("Codex owns the next action");
+  await expect(humanReview).toContainText("Waiting for your decision");
+  await expect(done).toContainText("Accepted and synchronized");
   await expect(page.getByRole("heading", { name: "Blocked", exact: true })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "In Progress", exact: true })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Needs Attention", exact: true })).toHaveCount(0);
 
   await page.getByRole("textbox", { name: "Find task" }).fill("US-052");
-  await expect(page.getByRole("region", { name: "Drafts column" }).getByRole("button", { name: /US-052/ })).toBeVisible();
+  await expect(planned.getByRole("button", { name: /US-052/ })).toBeVisible();
+  const lifecycle = page.getByRole("region", { name: "Active task lifecycle" });
+  const lifecycleLabels = await lifecycle.getByRole("listitem").evaluateAll((items) =>
+    items.map((item) => item.textContent?.replace(/(complete|current|failed|pending)$/, ""))
+  );
+  expect(lifecycleLabels).toEqual(["Start", "Agent", "Validation", "Pull request", "Review & merge", "Sync", "Done"]);
   await page.getByRole("button", { name: /US-052/ }).click();
 
   const detail = page.getByRole("dialog", { name: "Selected work detail" });
@@ -251,7 +270,7 @@ test("guided intake creates a story after explicit confirmation", async ({ page 
   const successToast = page.getByRole("region", { name: "Notifications" }).getByRole("alert").filter({ hasText: "Story created" });
   await expect(successToast).toBeVisible();
   await expect(successToast).toContainText("US-075-DRAFT");
-  await expect(page.getByRole("region", { name: "Drafts column" }).getByRole("button", { name: /US-075-DRAFT/ })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Planned column" }).getByRole("button", { name: /US-075-DRAFT/ })).toBeVisible();
   expect(startRequested).toBe(false);
 });
 
@@ -368,9 +387,24 @@ test("summary strip pulses while a Symphony run is active", async ({ page }) => 
 
   const activeMetric = page
     .getByRole("region", { name: "Command status rail" })
-    .getByText("Active", { exact: true })
+    .getByText("Agent working", { exact: true })
     .locator("xpath=ancestor::*[contains(@class, 'rounded-xl')][1]");
+  await expect(activeMetric).toHaveClass(/border-blue-500\/30/);
+  await expect(activeMetric).toHaveClass(/bg-blue-500\/5/);
   await expect(activeMetric.locator("span").first()).toHaveClass(/motion-safe:animate-pulse/);
+});
+
+test("summary strip keeps agent working neutral while Symphony is idle", async ({ page }) => {
+  await page.goto("/");
+
+  const activeMetric = page
+    .getByRole("region", { name: "Command status rail" })
+    .getByText("Agent working", { exact: true })
+    .locator("xpath=ancestor::*[contains(@class, 'rounded-xl')][1]");
+  await expect(activeMetric).toHaveClass(/border-border/);
+  await expect(activeMetric).toHaveClass(/bg-card/);
+  await expect(activeMetric).toHaveClass(/text-muted-foreground/);
+  await expect(activeMetric).not.toHaveClass(/border-blue-500\/30/);
 });
 
 test("board loading and failure states expose accessibility semantics", async ({ page }) => {
@@ -435,7 +469,7 @@ test("ready task delete action confirms, retires, and refreshes the board", asyn
   await expect.poll(async () => retired).toBe(true);
   await expect(detail).toBeHidden();
   await expect(page.getByRole("button", { name: /US-064/ })).toHaveCount(0);
-  await expect(page.getByRole("region", { name: "Drafts column" }).getByText("No tasks")).toBeVisible();
+  await expect(page.getByRole("region", { name: "Planned column" }).getByText("No planned tasks")).toBeVisible();
 });
 
 test("ready card runs codex from the board without opening detail", async ({ page }) => {
@@ -465,14 +499,14 @@ test("ready card runs codex from the board without opening detail", async ({ pag
 
   await page.goto("/");
 
-  const draftsColumn = page.getByRole("region", { name: "Drafts column" });
-  const readyCard = draftsColumn.getByTestId("task-card").filter({ hasText: "US-076" });
+  const plannedColumn = page.getByRole("region", { name: "Planned column" });
+  const readyCard = plannedColumn.getByTestId("task-card").filter({ hasText: "US-076" });
   const runButton = readyCard.getByRole("button", { name: "Run with Codex" });
   await expect(runButton).toBeVisible();
-  const draftsColumnBox = await draftsColumn.boundingBox();
+  const plannedColumnBox = await plannedColumn.boundingBox();
   const runControlBox = await runButton.locator("..").boundingBox();
   const runButtonBox = await runButton.boundingBox();
-  expect(draftsColumnBox?.width ?? 0, "Drafts column keeps readable action width").toBeGreaterThanOrEqual(220);
+  expect(plannedColumnBox?.width ?? 0, "Planned column keeps readable action width").toBeGreaterThanOrEqual(220);
   expect(runControlBox?.width ?? 0, "Run split control width").toBeGreaterThanOrEqual(184);
   expect(runButtonBox?.height ?? 0, "Run with Codex button height").toBeGreaterThanOrEqual(34);
   await expectNoHorizontalOverflow(runButton, "Run with Codex button");
@@ -480,7 +514,7 @@ test("ready card runs codex from the board without opening detail", async ({ pag
 
   await expect.poll(async () => started).toBe(true);
   await expect(page.getByRole("dialog", { name: "Selected work detail" })).toHaveCount(0);
-  await expect(page.getByRole("region", { name: "Active column" }).getByRole("button", { name: /US-076/ })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Agent working column" }).getByRole("button", { name: /US-076/ })).toBeVisible();
 });
 
 test("agent dropdown runs with opencode and remembers the choice", async ({ page }) => {
@@ -512,7 +546,7 @@ test("agent dropdown runs with opencode and remembers the choice", async ({ page
 
   await page.goto("/");
 
-  const readyCard = page.getByRole("region", { name: "Drafts column" }).getByTestId("task-card").filter({ hasText: "US-078" });
+  const readyCard = page.getByRole("region", { name: "Planned column" }).getByTestId("task-card").filter({ hasText: "US-078" });
   await expect(readyCard.getByRole("button", { name: "Run with Codex" })).toBeVisible();
   await readyCard.getByRole("button", { name: "Choose agent" }).click();
   await page.getByRole("menuitem", { name: "Run with OpenCode" }).click();
@@ -554,7 +588,7 @@ test("settings view saves the default agent and relabels the run button", async 
   await expect.poll(async () => savedAgent).toBe("opencode");
 
   await page.getByRole("tab", { name: "Work Board" }).click();
-  const readyCard = page.getByRole("region", { name: "Drafts column" }).getByTestId("task-card").filter({ hasText: "US-078" });
+  const readyCard = page.getByRole("region", { name: "Planned column" }).getByTestId("task-card").filter({ hasText: "US-078" });
   await expect(readyCard.getByRole("button", { name: "Run with OpenCode" })).toBeVisible();
 });
 
@@ -789,7 +823,7 @@ test("ready review requests changes with reason and image evidence", async ({ pa
   expect(multipartBody).toContain('name="reason"');
   expect(multipartBody).toContain("Tighten the mobile spacing");
   expect(multipartBody).toContain('name="evidence"; filename="mobile-spacing.png"');
-  await expect(page.getByRole("region", { name: "Active column" }).getByRole("button", { name: /US-082/ })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Agent working column" }).getByRole("button", { name: /US-082/ })).toBeVisible();
 });
 
 test("request changes validates image limits and supports removal", async ({ page }) => {
@@ -1052,59 +1086,61 @@ test("board columns stay bounded and scroll dense task lists internally", async 
   await page.setViewportSize({ width: 1440, height: 820 });
   await page.goto("/");
 
-  for (const bucket of ["Drafts", "Active", "Ready", "Done"]) {
-    await expect(page.getByRole("region", { name: `${bucket} column` })).toBeVisible();
+  for (const label of ["Planned", "Agent working", "Human review", "Done"]) {
+    await expect(page.getByRole("region", { name: `${label} column` })).toBeVisible();
   }
 
-  const draftsColumn = page.getByRole("region", { name: "Drafts column" });
-  const activeColumn = page.getByRole("region", { name: "Active column" });
-  const draftsTasks = page.locator('[aria-label="Drafts tasks"]');
+  const plannedColumn = page.getByRole("region", { name: "Planned column" });
+  const agentWorkingColumn = page.getByRole("region", { name: "Agent working column" });
+  const plannedTasks = page.locator('[aria-label="Planned tasks"]');
   const board = page.locator("#board");
   const longReadyCard = page.getByTestId("task-card").filter({ hasText: `US-068-${longToken}` });
   const longAttentionCard = page.getByTestId("task-card").filter({ hasText: "US-968" });
   const pageScrollHeight = await page.evaluate(() => document.documentElement.scrollHeight);
   const viewportHeight = await page.evaluate(() => window.innerHeight);
-  const draftsMetrics = await draftsTasks.evaluate((element) => ({
+  const plannedMetrics = await plannedTasks.evaluate((element) => ({
     clientHeight: element.clientHeight,
     scrollHeight: element.scrollHeight,
     scrollTop: element.scrollTop
   }));
 
-  expect(draftsMetrics.scrollHeight).toBeGreaterThan(draftsMetrics.clientHeight);
+  expect(plannedMetrics.scrollHeight).toBeGreaterThan(plannedMetrics.clientHeight);
   expect(pageScrollHeight).toBeLessThan(viewportHeight + 280);
   await expectPageNoHorizontalOverflow(page);
   await expectNoHorizontalOverflow(board, "desktop board");
-  await expectNoHorizontalOverflow(draftsColumn, "desktop drafts column");
-  await expectNoHorizontalOverflow(activeColumn, "desktop active column");
+  await expectNoHorizontalOverflow(plannedColumn, "desktop Planned column");
+  await expectNoHorizontalOverflow(agentWorkingColumn, "desktop Agent working column");
   await expectNoHorizontalOverflow(longReadyCard, "desktop long ready card");
   await expectNoHorizontalOverflow(longAttentionCard, "desktop long needs attention card");
 
-  await draftsTasks.evaluate((element) => {
+  await plannedTasks.evaluate((element) => {
     element.scrollTop = element.scrollHeight;
   });
 
-  await expect(draftsColumn.getByRole("heading", { name: "Drafts", exact: true })).toBeVisible();
+  await expect(plannedColumn.getByRole("heading", { name: "Planned", exact: true })).toBeVisible();
+  await expect(plannedColumn.getByTestId("task-card").filter({ hasText: "Blocked" })).toBeVisible();
+  await expect(agentWorkingColumn.getByTestId("task-card").filter({ hasText: "US-968" })).toContainText("Needs attention");
   await expect(page.getByRole("button", { name: /US-921/ })).toBeVisible();
   await expect
-    .poll(async () => draftsTasks.evaluate((element) => element.scrollTop))
-    .toBeGreaterThan(draftsMetrics.scrollTop);
+    .poll(async () => plannedTasks.evaluate((element) => element.scrollTop))
+    .toBeGreaterThan(plannedMetrics.scrollTop);
 
   await page.setViewportSize({ width: 390, height: 760 });
-  await expect(draftsColumn).toBeVisible();
+  await expect(plannedColumn).toBeVisible();
   const boardBox = await board.boundingBox();
   expect(boardBox?.y ?? 9999).toBeLessThan(760);
-  const mobileDraftsMetrics = await draftsTasks.evaluate((element) => ({
+  const mobilePlannedMetrics = await plannedTasks.evaluate((element) => ({
     clientHeight: element.clientHeight,
     scrollHeight: element.scrollHeight
   }));
-  expect(mobileDraftsMetrics.scrollHeight).toBeGreaterThan(mobileDraftsMetrics.clientHeight);
+  expect(mobilePlannedMetrics.scrollHeight).toBeGreaterThan(mobilePlannedMetrics.clientHeight);
   await expectPageNoHorizontalOverflow(page);
   await expectNoHorizontalOverflow(board, "mobile board");
-  await expectNoHorizontalOverflow(draftsColumn, "mobile drafts column");
-  await expectNoHorizontalOverflow(activeColumn, "mobile active column");
+  await expectNoHorizontalOverflow(plannedColumn, "mobile Planned column");
+  await expectNoHorizontalOverflow(agentWorkingColumn, "mobile Agent working column");
   await expectNoHorizontalOverflow(longReadyCard, "mobile long ready card");
   await expectNoHorizontalOverflow(longAttentionCard, "mobile long needs attention card");
-  await draftsColumn.getByRole("button", { name: /US-900/ }).click();
+  await plannedColumn.getByRole("button", { name: /US-900/ }).click();
   await expect(page.getByRole("dialog", { name: "Selected work detail" })).toBeVisible();
 });
 
@@ -1216,7 +1252,7 @@ test("active run polling refreshes terminal review and needs-attention board sta
   });
 
   await page.goto("/");
-  await expect(page.getByRole("region", { name: "Ready column" }).getByRole("button", { name: /US-069A/ })).toBeVisible({
+  await expect(page.getByRole("region", { name: "Human review column" }).getByRole("button", { name: /US-069A/ })).toBeVisible({
     timeout: 5000
   });
 
@@ -1241,7 +1277,7 @@ test("active run polling refreshes terminal review and needs-attention board sta
     await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [attentionItem] }) });
   });
   await page.getByRole("button", { name: "Refresh", exact: true }).click();
-  await expect(page.getByRole("region", { name: "Active column" }).getByRole("button", { name: /US-069B/ })).toBeVisible({
+  await expect(page.getByRole("region", { name: "Agent working column" }).getByRole("button", { name: /US-069B/ })).toBeVisible({
     timeout: 5000
   });
 });

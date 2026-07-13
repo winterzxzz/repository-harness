@@ -1,10 +1,10 @@
 import React from "react";
-import { AlertTriangle, Check, ChevronDown, Circle, Play, PlayCircle, Radio } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, Play } from "lucide-react";
 import { Badge, type BadgeTone } from "../../components/ui/badge";
 import { Card } from "../../components/ui/card";
 import { Button } from "../../components/ui/button";
 import { cn } from "../../lib/utils";
-import { agentLabel, agents, bucketForItem, bucketIcon, bucketId, buckets } from "./constants";
+import { agentLabel, agents, bucketForItem, bucketId, bucketPresentation, buckets } from "./constants";
 import { toneForState } from "./status-badge";
 import type { AgentId, BoardBucket, BoardItem, BoardState } from "./types";
 
@@ -17,36 +17,22 @@ export function SummaryStrip({
   counts: Record<BoardBucket, number>;
   className?: string;
 }) {
-  const metrics = [
-    {
-      label: "Drafts",
-      value: `${counts.Drafts} draft${counts.Drafts === 1 ? "" : "s"}`,
-      detail: "Planned work waiting to start.",
-      icon: Circle,
-      className: "border-zinc-500/25 bg-zinc-500/5 text-zinc-700 dark:text-zinc-400"
-    },
-    {
-      label: "Active",
-      value: activeRun?.id ?? `${counts.Active} active`,
-      detail: activeRun?.active_run ? `${activeRun.active_run} is the only task allowed in progress.` : "No active Symphony run.",
-      icon: Radio,
-      className: activeRun?.active_run ? "border-blue-500/30 bg-blue-500/5 text-blue-800 dark:text-blue-400" : "border-border bg-card text-muted-foreground"
-    },
-    {
-      label: "Ready",
-      value: `${counts.Ready} ready`,
-      detail: "Finished runs waiting for review or sync.",
-      icon: PlayCircle,
-      className: "border-emerald-500/30 bg-emerald-500/5 text-emerald-800 dark:text-emerald-400"
-    },
-    {
-      label: "Done",
-      value: `${counts.Done} done`,
-      detail: "Completed work kept for history.",
-      icon: Check,
-      className: "border-teal-500/30 bg-teal-500/5 text-teal-800 dark:text-teal-400"
-    }
-  ];
+  const metrics = buckets.map((bucket) => {
+    const presentation = bucketPresentation[bucket];
+    const isActive = bucket === "Active";
+    return {
+      bucket,
+      label: presentation.label,
+      value: isActive && activeRun?.id ? activeRun.id : `${counts[bucket]} ${presentation.label.toLowerCase()}`,
+      detail: isActive && activeRun?.active_run
+        ? `${activeRun.active_run} is the only task allowed in progress.`
+        : presentation.description,
+      icon: presentation.icon,
+      className: isActive && !activeRun?.active_run
+        ? "border-border bg-card text-muted-foreground"
+        : summaryClass[bucket]
+    };
+  });
 
   return (
     <section
@@ -66,7 +52,7 @@ export function SummaryStrip({
             <div className="flex items-start gap-2.5">
               <span className={cn(
                 "grid size-8 lg:size-9 shrink-0 place-items-center rounded-lg border border-current/15 bg-background/40 shadow-sm",
-                metric.label === "Active" && activeRun?.active_run && "motion-safe:animate-pulse"
+                metric.bucket === "Active" && activeRun?.active_run && "motion-safe:animate-pulse"
               )}>
                 <Icon className="size-4 lg:size-4.5" />
               </span>
@@ -105,27 +91,31 @@ export function BoardGrid({
       <div className="grid h-[calc(100dvh-450px)] min-h-[320px] min-w-[940px] grid-cols-[repeat(4,minmax(220px,1fr))] items-stretch gap-2.5 lg:gap-3 max-sm:h-auto max-sm:min-h-0 max-sm:min-w-0 max-sm:grid-cols-1">
         {buckets.map((bucket) => {
           const bucketItems = items.filter((item) => bucketForItem(item) === bucket);
-          const Icon = bucketIcon[bucket];
+          const presentation = bucketPresentation[bucket];
+          const Icon = presentation.icon;
           return (
             <section
               key={bucket}
               id={bucketId(bucket)}
-              aria-label={`${bucket} column`}
+              aria-label={`${presentation.label} column`}
               className={cn(
                 "flex h-full min-h-0 flex-col overflow-hidden rounded-xl border bg-muted/20 shadow-sm max-sm:h-[min(520px,calc(100dvh-180px))] max-sm:min-h-[320px]",
                 bucketChrome[bucket]
               )}
             >
-              <div className="flex min-h-12 items-center justify-between gap-2 border-b border-border bg-card/60 backdrop-blur-sm px-3 py-2">
-                <div className="flex items-center gap-2">
-                  <span className={cn("grid size-6 place-items-center rounded-md border", bucketIconClass[bucket])}>
+              <div className="flex min-h-14 items-start justify-between gap-2 border-b border-border bg-card/60 px-3 py-2">
+                <div className="flex min-w-0 items-start gap-2">
+                  <span className={cn("mt-0.5 grid size-6 shrink-0 place-items-center rounded-md border", bucketIconClass[bucket])}>
                     <Icon className={cn("size-3.5", bucket === "Active" && activeRunId && "motion-safe:animate-spin")} />
                   </span>
-                  <h2 className="text-sm font-bold tracking-tight text-foreground">{bucket}</h2>
+                  <div className="min-w-0">
+                    <h2 className="text-sm font-bold tracking-tight text-foreground">{presentation.label}</h2>
+                    <p className="truncate text-[10px] font-medium text-muted-foreground">{presentation.description}</p>
+                  </div>
                 </div>
                 <Badge tone={bucketTone[bucket]}>{bucketItems.length}</Badge>
               </div>
-              <div aria-label={`${bucket} tasks`} className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2 scrollbar-thin">
+              <div aria-label={`${presentation.label} tasks`} className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2 scrollbar-thin">
                 {bucketItems.map((item) => (
                   <TaskCard
                     key={item.id}
@@ -140,7 +130,7 @@ export function BoardGrid({
                 ))}
                 {bucketItems.length === 0 ? (
                   <div className="flex min-h-24 items-center justify-center rounded-lg border border-dashed border-border/80 bg-card/45 px-3 text-center text-xs text-muted-foreground font-medium">
-                    No tasks
+                    No {presentation.label.toLowerCase()} tasks
                   </div>
                 ) : null}
               </div>
@@ -304,6 +294,13 @@ const columnChrome: Record<BoardState, string> = {
   Review: "border-border border-t-2 border-t-violet-500/80 dark:border-t-violet-400/80",
   "Needs Attention": "border-border border-t-2 border-t-red-500/80 dark:border-t-red-400/80",
   Done: "border-border border-t-2 border-t-teal-500/80 dark:border-t-teal-400/80"
+};
+
+const summaryClass: Record<BoardBucket, string> = {
+  Drafts: "border-zinc-500/25 bg-zinc-500/5 text-zinc-700 dark:text-zinc-400",
+  Active: "border-blue-500/30 bg-blue-500/5 text-blue-800 dark:text-blue-400",
+  Ready: "border-violet-500/30 bg-violet-500/5 text-violet-800 dark:text-violet-400",
+  Done: "border-teal-500/30 bg-teal-500/5 text-teal-800 dark:text-teal-400"
 };
 
 const bucketChrome: Record<BoardBucket, string> = {
