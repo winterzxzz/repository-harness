@@ -1,0 +1,50 @@
+<h2>Flow trạng thái task nên được bố trí thế nào?</h2>
+<p class="subtitle">Ba phương án đều luôn hiện ở đầu Symphony và dùng cùng lifecycle đầy đủ.</p>
+
+<div class="cards">
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:18px;background:#111827;color:#e5e7eb;min-height:190px">
+      <div style="font-size:11px;color:#94a3b8;margin-bottom:10px">US-090 · ĐANG CHẠY</div>
+      <div style="display:flex;align-items:center;gap:6px;font-size:10px;overflow:hidden">
+        <span style="padding:7px 9px;border-radius:999px;background:#2563eb;color:white">Khởi chạy</span><span>—</span>
+        <span style="padding:7px 9px;border-radius:999px;background:#2563eb;color:white">Agent</span><span>—</span>
+        <span style="padding:7px 9px;border-radius:999px;border:1px solid #475569">Validation</span><span>—</span>
+        <span style="padding:7px 9px;border-radius:999px;border:1px solid #475569">PR</span><span>—</span>
+        <span style="padding:7px 9px;border-radius:999px;border:1px solid #475569">Review</span>
+      </div>
+      <div style="margin-top:18px;height:7px;border-radius:99px;background:#334155;overflow:hidden"><div style="width:30%;height:100%;background:#3b82f6"></div></div>
+      <div style="margin-top:10px;font-size:12px">Agent đang triển khai thay đổi…</div>
+    </div>
+    <div class="card-body"><h3>A — Timeline ngang gọn</h3><p>Rất tiết kiệm chiều cao, dễ quét nhanh; chi tiết từng bước bị giới hạn trên màn hình hẹp.</p></div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:18px;background:#111827;color:#e5e7eb;min-height:190px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px"><div><div style="font-size:11px;color:#94a3b8">TASK ĐANG HOẠT ĐỘNG</div><strong style="font-size:14px">US-090 · Live task flow</strong></div><span style="font-size:10px;padding:5px 8px;border-radius:99px;background:#1d4ed8">Agent xử lý</span></div>
+      <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:5px;text-align:center;font-size:9px">
+        <div><div style="height:5px;background:#22c55e;border-radius:99px"></div><p>Khởi chạy</p></div>
+        <div><div style="height:5px;background:#3b82f6;border-radius:99px;box-shadow:0 0 10px #3b82f6"></div><p>Agent</p></div>
+        <div><div style="height:5px;background:#334155;border-radius:99px"></div><p>Kiểm tra</p></div>
+        <div><div style="height:5px;background:#334155;border-radius:99px"></div><p>Tạo PR</p></div>
+        <div><div style="height:5px;background:#334155;border-radius:99px"></div><p>Review</p></div>
+        <div><div style="height:5px;background:#334155;border-radius:99px"></div><p>Đồng bộ</p></div>
+        <div><div style="height:5px;background:#334155;border-radius:99px"></div><p>Hoàn tất</p></div>
+      </div>
+      <div style="margin-top:12px;padding:9px 11px;background:#1e293b;border:1px solid #334155;border-radius:8px;font-size:11px;color:#cbd5e1">Đang chỉnh sửa giao diện · sự kiện mới nhất 4 giây trước</div>
+    </div>
+    <div class="card-body"><h3>B — Status rail + ngữ cảnh</h3><p>Cân bằng tốt giữa khả năng quét nhanh và thông tin hữu ích. Đây là phương án mình khuyến nghị.</p></div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:18px;background:#111827;color:#e5e7eb;min-height:190px">
+      <div style="font-size:11px;color:#94a3b8;margin-bottom:10px">US-090 · CHI TIẾT LUỒNG</div>
+      <div style="display:grid;grid-template-columns:26px 1fr;gap:7px 10px;font-size:10px">
+        <span style="width:18px;height:18px;border-radius:50%;background:#22c55e;text-align:center;line-height:18px">✓</span><div><strong>Khởi chạy</strong><br><span style="color:#94a3b8">Workspace đã sẵn sàng</span></div>
+        <span style="width:18px;height:18px;border-radius:50%;background:#3b82f6;text-align:center;line-height:18px">●</span><div><strong>Agent xử lý</strong><br><span style="color:#94a3b8">Đang cập nhật source</span></div>
+        <span style="width:18px;height:18px;border-radius:50%;border:1px solid #475569"></span><div><strong>Validation</strong></div>
+        <span style="width:18px;height:18px;border-radius:50%;border:1px solid #475569"></span><div><strong>PR và review</strong></div>
+      </div>
+    </div>
+    <div class="card-body"><h3>C — Stepper dọc chi tiết</h3><p>Dễ mở rộng thông tin và lỗi, nhưng chiếm nhiều chiều cao phía trên board.</p></div>
+  </div>
+</div>

@@ -1,0 +1,50 @@
+<h2>Bạn muốn “update status” sâu tới mức nào?</h2>
+<p class="subtitle">Repo hiện có 4 bucket Drafts · Active · Ready · Done và một lifecycle 7 bước. Bài OpenAI nhấn mạnh task tracker như một state machine và control plane cho agent.</p>
+
+<div class="cards">
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:24px;display:grid;grid-template-columns:repeat(4,1fr);gap:8px;align-items:center">
+      <div style="padding:14px 8px;border:1px solid #cbd5e1;border-radius:10px;text-align:center">Drafts</div>
+      <div style="padding:14px 8px;border:2px solid #3b82f6;border-radius:10px;text-align:center">Active</div>
+      <div style="padding:14px 8px;border:1px solid #8b5cf6;border-radius:10px;text-align:center">Ready</div>
+      <div style="padding:14px 8px;border:1px solid #14b8a6;border-radius:10px;text-align:center">Done</div>
+    </div>
+    <div class="card-body">
+      <h3>A — Chỉ làm status trực quan hơn</h3>
+      <p>Giữ nguyên trạng thái và hành vi; cải thiện tên gọi, màu, icon, mô tả và hierarchy.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:24px">
+      <div style="display:flex;align-items:center;gap:6px;overflow:hidden">
+        <span style="padding:10px;border-radius:999px;background:#dcfce7">Open</span><b>→</b>
+        <span style="padding:10px;border-radius:999px;background:#dbeafe">Agent running</span><b>→</b>
+        <span style="padding:10px;border-radius:999px;background:#fef3c7">Human review</span><b>→</b>
+        <span style="padding:10px;border-radius:999px;background:#ede9fe">Merging</span><b>→</b>
+        <span style="padding:10px;border-radius:999px;background:#ccfbf1">Done</span>
+      </div>
+      <p style="margin:18px 0 0;color:#64748b">Mỗi status nói rõ: ai đang giữ việc, điều gì đang chờ, hành động tiếp theo là gì.</p>
+    </div>
+    <div class="card-body">
+      <h3>B — State machine kiểu Symphony</h3>
+      <p>Thiết kế lại status/bucket để board trở thành control plane trực quan, nhưng tận dụng runner và dữ liệu hiện có.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:24px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+      <div style="border:1px solid #cbd5e1;border-radius:10px;padding:12px"><b>Tracker</b><br><small>priorities · DAG</small></div>
+      <div style="border:2px solid #f97316;border-radius:10px;padding:12px"><b>Orchestrator</b><br><small>dispatch · retry</small></div>
+      <div style="border:1px solid #cbd5e1;border-radius:10px;padding:12px"><b>Agents</b><br><small>workspace · PR</small></div>
+    </div>
+    <div class="card-body">
+      <h3>C — Áp dụng đầy đủ mô hình OpenAI</h3>
+      <p>Ngoài UI còn đổi orchestration: tự pick task, chạy đồng thời, retry/reconcile và quản lý dependency DAG.</p>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:24px;padding:16px;border:1px solid #bfdbfe;background:#eff6ff;border-radius:8px">
+  <strong>Khuyến nghị ban đầu: B.</strong> Nó đúng với điều bạn thích ở bài viết — status trực quan và task-centric — đồng thời không kéo scope sang một orchestrator mới khi repo đã có Symphony runner.
+</div>

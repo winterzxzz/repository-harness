@@ -1,0 +1,43 @@
+<h2>Bốn ô nên nói bằng “ngôn ngữ” nào?</h2>
+<p class="subtitle">Flow 7 bước phía trên được giữ nguyên. Chỉ thay cách bốn cột board giải thích trạng thái tổng quát cho người vận hành.</p>
+
+<div class="cards">
+  <div class="card" data-choice="ownership" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:22px;display:grid;grid-template-columns:repeat(4,minmax(130px,1fr));gap:10px;overflow-x:auto">
+      <div style="padding:15px;border:1px solid #cbd5e1;border-radius:12px"><small>01</small><br><b>Planned</b><br><span style="color:#64748b">Chưa bắt đầu</span></div>
+      <div style="padding:15px;border:1px solid #93c5fd;background:#eff6ff;border-radius:12px"><small>02</small><br><b>Agent working</b><br><span style="color:#475569">Codex đang xử lý</span></div>
+      <div style="padding:15px;border:1px solid #c4b5fd;background:#f5f3ff;border-radius:12px"><small>03</small><br><b>Human review</b><br><span style="color:#475569">Đang chờ bạn</span></div>
+      <div style="padding:15px;border:1px solid #99f6e4;background:#f0fdfa;border-radius:12px"><small>04</small><br><b>Done</b><br><span style="color:#475569">Đã hoàn tất</span></div>
+    </div>
+    <div class="card-body">
+      <h3>A — Theo người đang giữ việc</h3>
+      <p>Nhìn một lần biết task đang chờ ai. Đây là hướng mình khuyến nghị vì giảm mơ hồ giữa “Ready” để chạy và “Ready” để review.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="workflow" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:22px;display:grid;grid-template-columns:repeat(4,minmax(130px,1fr));gap:10px;overflow-x:auto">
+      <div style="padding:15px;border:1px solid #cbd5e1;border-radius:12px"><small>01</small><br><b>Open</b><br><span style="color:#64748b">Có thể nhận việc</span></div>
+      <div style="padding:15px;border:1px solid #93c5fd;background:#eff6ff;border-radius:12px"><small>02</small><br><b>In progress</b><br><span style="color:#475569">Đang thực thi</span></div>
+      <div style="padding:15px;border:1px solid #c4b5fd;background:#f5f3ff;border-radius:12px"><small>03</small><br><b>Review</b><br><span style="color:#475569">Kiểm tra kết quả</span></div>
+      <div style="padding:15px;border:1px solid #99f6e4;background:#f0fdfa;border-radius:12px"><small>04</small><br><b>Done</b><br><span style="color:#475569">Đã hoàn tất</span></div>
+    </div>
+    <div class="card-body">
+      <h3>B — Theo thuật ngữ workflow</h3>
+      <p>Gần với issue tracker và bài OpenAI hơn, nhưng không diễn đạt rõ “ai cần hành động tiếp theo”.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="descriptors" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:22px;display:grid;grid-template-columns:repeat(4,minmax(130px,1fr));gap:10px;overflow-x:auto">
+      <div style="padding:15px;border:1px solid #cbd5e1;border-radius:12px"><b>Drafts</b><br><span style="color:#64748b">Ready + Blocked</span></div>
+      <div style="padding:15px;border:1px solid #93c5fd;background:#eff6ff;border-radius:12px"><b>Active</b><br><span style="color:#475569">Running + Attention</span></div>
+      <div style="padding:15px;border:1px solid #c4b5fd;background:#f5f3ff;border-radius:12px"><b>Ready</b><br><span style="color:#475569">Human review</span></div>
+      <div style="padding:15px;border:1px solid #99f6e4;background:#f0fdfa;border-radius:12px"><b>Done</b><br><span style="color:#475569">Merged + synced</span></div>
+    </div>
+    <div class="card-body">
+      <h3>C — Giữ tên hiện tại, thêm giải thích</h3>
+      <p>Ít thay đổi nhất, nhưng cặp “Drafts/Ready” vẫn cần người dùng học mapping nội bộ.</p>
+    </div>
+  </div>
+</div>
