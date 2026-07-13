@@ -2683,7 +2683,6 @@ fn derive_task_flow(items: &[BoardItemResponse], runs: &[RunRecord]) -> Option<T
             };
             ("failed", step, Some(step), item.reason.clone())
         }
-        "Done" => ("done", "done", None, "Task lifecycle completed.".to_owned()),
         _ => return None,
     };
     let current_index = TASK_FLOW_STEPS.iter().position(|step| *step == current)?;
