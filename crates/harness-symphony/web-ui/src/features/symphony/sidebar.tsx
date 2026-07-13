@@ -1,7 +1,7 @@
 import { ArrowRight, GitBranch } from "lucide-react";
 import type * as React from "react";
 import { cn } from "../../lib/utils";
-import { bucketId } from "./constants";
+import { bucketId, bucketPresentation, buckets } from "./constants";
 import { StatusBadge } from "./status-badge";
 import type { BoardBucket, BoardItem } from "./types";
 
@@ -64,10 +64,14 @@ export function ControllerSidebar({
 
       <nav aria-label="Status" className="scrollbar-none mt-0.5 lg:mt-1 flex gap-1 overflow-x-auto border-t border-border/50 py-1.5 lg:py-3 lg:flex-col lg:overflow-visible">
         <SidebarLabel>Status</SidebarLabel>
-        <SidebarItem href={`#${bucketId("Drafts")}`} label="Drafts" count={String(counts.Drafts)} />
-        <SidebarItem href={`#${bucketId("Active")}`} label="Active" count={String(counts.Active)} />
-        <SidebarItem href={`#${bucketId("Ready")}`} label="Ready" count={String(counts.Ready)} />
-        <SidebarItem href={`#${bucketId("Done")}`} label="Done" count={String(counts.Done)} />
+        {buckets.map((bucket) => (
+          <SidebarItem
+            key={bucket}
+            href={`#${bucketId(bucket)}`}
+            label={bucketPresentation[bucket].label}
+            count={String(counts[bucket])}
+          />
+        ))}
       </nav>
 
       <SidebarDependencyGraph items={items} selectedId={selectedId} onSelect={onSelect} />
