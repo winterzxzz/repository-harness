@@ -1,5 +1,35 @@
 # Changelog
 
+## 2026-07-13 - PR #22
+
+- Fix Symphony runtime cleanup and installer ignores (@winterzxzz)
+- Merge commit: `65947f242355a525f1ebae7ae24b53df0d49c413`
+- Harness CLI release: not required
+- Harness kit release: `harness-kit-v0.2.1`
+- Changed files:
+  - `.gitignore`
+  - `.harness/changesets/run_1783919312272801000_71411_0.changeset.jsonl`
+  - `crates/harness-symphony/src/agent.rs`
+  - `crates/harness-symphony/src/auto.rs`
+  - `crates/harness-symphony/src/cleanup.rs`
+  - `crates/harness-symphony/src/config.rs`
+  - `crates/harness-symphony/src/doctor.rs`
+  - `crates/harness-symphony/src/interface.rs`
+  - `crates/harness-symphony/src/main.rs`
+  - `crates/harness-symphony/src/pr.rs`
+  - `crates/harness-symphony/src/retention.rs`
+  - `crates/harness-symphony/src/run.rs`
+  - `crates/harness-symphony/src/state.rs`
+  - `crates/harness-symphony/src/sync.rs`
+  - `crates/harness-symphony/src/web.rs`
+  - `docs/SYMPHONY_SCOPE.md`
+  - `docs/stories/US-092-symphony-runtime-cleanup.md`
+  - `docs/superpowers/plans/2026-07-13-symphony-runtime-cleanup.md`
+  - `docs/superpowers/specs/2026-07-13-symphony-runtime-cleanup-design.md`
+  - `scripts/install-harness.ps1`
+  - `scripts/install-harness.sh`
+  - `scripts/validate-install-payload.sh`
+
 ## 2026-07-07 - PR #37
 
 - US-070: completed (@hoangnb24)
