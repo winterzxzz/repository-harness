@@ -66,4 +66,6 @@ not alter the fresh-install Harness template contract.
 
 ## Evidence
 
-Add commands, reports, screenshots, and links after implementation validation.
+- `env -u HARNESS_RUN_ID -u HARNESS_RUN_MODE -u HARNESS_SYMPHONY_WEB_DIST_DIR sh -c 'npm --prefix crates/harness-symphony/web-ui run build && npm --prefix crates/harness-symphony/web-ui run e2e && cargo test -p harness-symphony web -- --nocapture && cargo test --workspace && cargo fmt --check && cargo clippy --workspace -- -D warnings && git diff --check'` passed: the Web UI built, all 38 Playwright tests passed, 70 focused Symphony web tests passed, the complete Rust workspace passed, and formatting, clippy, and diff checks exited zero.
+- `env -u HARNESS_RUN_ID -u HARNESS_RUN_MODE -u HARNESS_SYMPHONY_WEB_DIST_DIR node .agents/skills/impeccable/scripts/detect.mjs --json crates/harness-symphony/web-ui/src/features/symphony/constants.ts crates/harness-symphony/web-ui/src/features/symphony/board.tsx crates/harness-symphony/web-ui/src/features/symphony/sidebar.tsx` passed with `[]`.
+- `env -u HARNESS_RUN_ID -u HARNESS_RUN_MODE -u HARNESS_SYMPHONY_WEB_DIST_DIR npm --prefix crates/harness-symphony/web-ui run desktop:smoke` passed at `http://127.0.0.1:54371`.
