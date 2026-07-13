@@ -102,7 +102,7 @@ export function BoardGrid({
 }) {
   return (
     <div className="min-h-0 min-w-0 overflow-x-auto">
-      <div className="grid h-[calc(100dvh-244px)] min-h-[410px] min-w-[940px] grid-cols-[repeat(4,minmax(220px,1fr))] items-stretch gap-2.5 lg:gap-3 max-sm:h-auto max-sm:min-h-0 max-sm:min-w-0 max-sm:grid-cols-1">
+      <div className="grid h-[calc(100dvh-450px)] min-h-[320px] min-w-[940px] grid-cols-[repeat(4,minmax(220px,1fr))] items-stretch gap-2.5 lg:gap-3 max-sm:h-auto max-sm:min-h-0 max-sm:min-w-0 max-sm:grid-cols-1">
         {buckets.map((bucket) => {
           const bucketItems = items.filter((item) => bucketForItem(item) === bucket);
           const Icon = bucketIcon[bucket];

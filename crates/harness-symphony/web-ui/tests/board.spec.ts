@@ -21,6 +21,24 @@ function boardItem(id: string, title: string, board_state: string) {
   };
 }
 
+const flowStepIds = ["start", "agent", "validation", "pr", "review", "sync", "done"] as const;
+
+function taskFlow(current: (typeof flowStepIds)[number] = "agent") {
+  const currentIndex = flowStepIds.indexOf(current);
+  return {
+    story_id: "US-090",
+    title: "Symphony Active Task Lifecycle Flow",
+    state: current === "done" ? "done" : "active",
+    current_step: current,
+    message: current === "agent" ? "Agent is implementing the task." : "Task lifecycle updated.",
+    steps: flowStepIds.map((id, index) => ({
+      id,
+      state: index < currentIndex ? "complete" : index === currentIndex ? "current" : "pending"
+    })),
+    recovery_action: null
+  };
+}
+
 async function expectNoHorizontalOverflow(locator: Locator, label: string) {
   const overflow = await locator.evaluate(
     (element) => Math.ceil(element.scrollWidth) - Math.ceil(element.clientWidth)
@@ -81,6 +99,69 @@ test("board renders task columns and detail controls", async ({ page }) => {
   await expect(page.getByText("Unblocks")).toBeVisible();
   await expect(detail.getByText("Hierarchy")).toBeVisible();
   await expect(detail.getByRole("button", { name: /Start/ })).toBeVisible();
+});
+
+test("active task lifecycle is always visible above the command rail", async ({ page }) => {
+  await page.route("**/api/board", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ items: [], task_flow: null })
+    });
+  });
+
+  await page.goto("/");
+
+  const flow = page.getByRole("region", { name: "Active task lifecycle" });
+  const rail = page.getByRole("region", { name: "Command status rail" });
+  await expect(flow).toBeVisible();
+  await expect(flow).toContainText("No task is currently running");
+  await expect(flow.getByRole("listitem")).toHaveCount(7);
+  expect(await flow.evaluate((node, other) => Boolean(node.compareDocumentPosition(other) & Node.DOCUMENT_POSITION_FOLLOWING), await rail.elementHandle())).toBe(true);
+});
+
+test("active task lifecycle marks the current step", async ({ page }) => {
+  const item = boardItem("US-090", "Symphony Active Task Lifecycle Flow", "In Progress");
+  item.run_id = "run_us_090";
+  item.active_run = "run_us_090";
+  await page.route("**/api/board", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ items: [item], task_flow: taskFlow("agent") })
+    });
+  });
+
+  await page.goto("/");
+
+  const flow = page.getByRole("region", { name: "Active task lifecycle" });
+  await expect(flow).toContainText("US-090");
+  await expect(flow.getByRole("listitem").nth(1)).toHaveAttribute("aria-current", "step");
+  await expect(flow.getByText("Agent is implementing the task.")).toBeVisible();
+});
+
+test("active task lifecycle shows failure recovery without page overflow", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const item = boardItem("US-090", "Symphony Active Task Lifecycle Flow", "Needs Attention");
+  const flow = taskFlow("validation");
+  flow.state = "failed";
+  flow.message = "Validation command failed.";
+  flow.steps[2].state = "failed";
+  flow.recovery_action = {
+    kind: "execution_retry",
+    label: "Retry task",
+    endpoint: "/api/tasks/US-090/recover",
+    confirmation: "Retry US-090?"
+  };
+  await page.route("**/api/board", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [item], task_flow: flow }) });
+  });
+
+  await page.goto("/");
+
+  const lifecycle = page.getByRole("region", { name: "Active task lifecycle" });
+  await expect(lifecycle.getByText("Validation command failed.")).toBeVisible();
+  await expect(lifecycle.getByRole("button", { name: "Retry task" })).toBeVisible();
+  await expectPageNoHorizontalOverflow(page);
+  expect(await lifecycle.locator(".scrollbar-none").evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
 });
 
 test("guided intake drafts a story before required proof is present", async ({ page }) => {

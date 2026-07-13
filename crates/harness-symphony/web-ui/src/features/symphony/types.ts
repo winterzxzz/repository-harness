@@ -14,6 +14,20 @@ export type BoardState =
 
 export type BoardBucket = "Drafts" | "Active" | "Ready" | "Done";
 
+export type TaskFlowStepId = "start" | "agent" | "validation" | "pr" | "review" | "sync" | "done";
+export type TaskFlowStepState = "pending" | "current" | "complete" | "failed";
+export type TaskFlowState = "active" | "waiting" | "failed" | "done";
+
+export type TaskFlow = {
+  story_id: string;
+  title: string;
+  state: TaskFlowState;
+  current_step: TaskFlowStepId | null;
+  message: string;
+  steps: Array<{ id: TaskFlowStepId; state: TaskFlowStepState }>;
+  recovery_action: RecoveryAction | null;
+};
+
 export type FailureSummary = {
   category: string;
   reason: string;
@@ -52,6 +66,7 @@ export type BoardItem = {
 
 export type BoardResponse = {
   items: BoardItem[];
+  task_flow: TaskFlow | null;
 };
 
 export type GuidedIntakeDraft = {
