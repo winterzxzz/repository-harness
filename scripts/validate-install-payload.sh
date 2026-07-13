@@ -112,6 +112,12 @@ grep -Fq '## Template Review Boundary' "$FRESH_TARGET/AGENTS.md" || \
   fail "fresh install omitted the template review boundary"
 grep -Fq 'scripts/harness-install-files.txt' "$FRESH_TARGET/AGENTS.md" || \
   fail "template review boundary does not identify the source manifest"
+grep -Fq 'harness-symphony run <story-id>' "$FRESH_TARGET/AGENTS.md" || \
+  fail "fresh install AGENTS.md does not route approved story execution through Symphony"
+grep -Fq 'Do not pass `--no-web`' "$FRESH_TARGET/AGENTS.md" || \
+  fail "fresh install AGENTS.md does not preserve Symphony Web UI startup"
+grep -Fq 'HARNESS_RUN_ID' "$FRESH_TARGET/AGENTS.md" || \
+  fail "fresh install AGENTS.md does not prevent nested Symphony runs"
 if grep -Fq '.codex/skills/harness-intake-griller/SKILL.md' "$FRESH_TARGET/AGENTS.md"; then
   fail "fresh install AGENTS.md references an uninstalled project skill"
 fi

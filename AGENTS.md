@@ -24,6 +24,13 @@ Start with the smallest useful pack:
   `scripts/bin/harness-cli query matrix` or
   `scripts/bin/harness-cli context --lane <tiny|normal|high-risk>` as needed.
 
+For an explicitly approved, execution-ready story, hand implementation to
+Symphony with `harness-symphony run <story-id>` so the user can monitor the run
+in the local Web UI. Do not pass `--no-web`; report the controller URL printed
+by Symphony to the user. Keep intake, investigation, planning, and direct tiny
+edits in the current agent session. If `HARNESS_RUN_ID` is already set, continue
+inside the current Symphony run instead of starting a nested run.
+
 Before a step that could use an external tool, run
 `scripts/bin/harness-cli query tools --capability <name> --status present` to
 see what is equipped; an absent capability is a clean skip. Expand into
