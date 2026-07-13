@@ -59,3 +59,10 @@ Expected: both commands exit successfully.
 - [x] **Step 3: Record a standard trace**
 
 Record intake, story, actions, read/changed files, validation, and friction through `scripts/bin/harness-cli trace`.
+
+### Review follow-up: Preserve guidance during shim refresh
+
+- [x] Add a failing fresh-install regression proving `--refresh-agent-shim`
+  must retain the Symphony execution guidance.
+- [x] Update `agent_shim_block()` with the same Web UI and nested-run boundaries.
+- [x] Run `scripts/validate-install-payload.sh` and confirm the full validator passes.

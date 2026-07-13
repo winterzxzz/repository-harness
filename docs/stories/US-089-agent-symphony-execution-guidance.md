@@ -58,3 +58,7 @@ approved story execution to Symphony's observable UI-backed run path.
   `fresh install AGENTS.md does not route approved story execution through Symphony`.
 - TDD GREEN: `scripts/validate-install-payload.sh` passed after installing and
   checking the managed agent guidance in a fresh target.
+- Review-fix RED: the validator failed because `--refresh-agent-shim` replaced
+  the managed block without the Symphony guidance.
+- Review-fix GREEN: the generated shim now preserves the same Symphony handoff,
+  Web UI, and nested-run boundaries, and the full payload validator passes.
