@@ -112,9 +112,36 @@ grep -Fq '## Template Review Boundary' "$FRESH_TARGET/AGENTS.md" || \
   fail "fresh install omitted the template review boundary"
 grep -Fq 'scripts/harness-install-files.txt' "$FRESH_TARGET/AGENTS.md" || \
   fail "template review boundary does not identify the source manifest"
+grep -Fq 'harness-symphony run <story-id>' "$FRESH_TARGET/AGENTS.md" || \
+  fail "fresh install AGENTS.md does not route approved story execution through Symphony"
+grep -Fq 'Do not pass `--no-web`' "$FRESH_TARGET/AGENTS.md" || \
+  fail "fresh install AGENTS.md does not preserve Symphony Web UI startup"
+grep -Fq 'HARNESS_RUN_ID' "$FRESH_TARGET/AGENTS.md" || \
+  fail "fresh install AGENTS.md does not prevent nested Symphony runs"
 if grep -Fq '.codex/skills/harness-intake-griller/SKILL.md' "$FRESH_TARGET/AGENTS.md"; then
   fail "fresh install AGENTS.md references an uninstalled project skill"
 fi
+
+REFRESH_AGENT_TARGET="$TMP_DIR/refresh-agent-target"
+mkdir -p "$REFRESH_AGENT_TARGET"
+printf '%s\n' \
+  '# Project Agent Instructions' \
+  '' \
+  '<!-- HARNESS:BEGIN -->' \
+  'stale Harness guidance' \
+  '<!-- HARNESS:END -->' \
+  >"$REFRESH_AGENT_TARGET/AGENTS.md"
+HARNESS_CLI_BINARY_PATH="$CLI_SOURCE" \
+HARNESS_CLI_CHECKSUM_PATH="$RELEASE_DIR/harness-cli-test-platform.sha256" \
+HARNESS_CLI_PLATFORM=test-platform \
+  "$ROOT_DIR/scripts/install-harness.sh" \
+  --directory "$REFRESH_AGENT_TARGET" --merge --refresh-agent-shim --yes >/dev/null
+grep -Fq 'harness-symphony run <story-id>' "$REFRESH_AGENT_TARGET/AGENTS.md" || \
+  fail "refreshed AGENTS.md does not route approved story execution through Symphony"
+grep -Fq 'Do not pass `--no-web`' "$REFRESH_AGENT_TARGET/AGENTS.md" || \
+  fail "refreshed AGENTS.md does not preserve Symphony Web UI startup"
+grep -Fq 'HARNESS_RUN_ID' "$REFRESH_AGENT_TARGET/AGENTS.md" || \
+  fail "refreshed AGENTS.md does not prevent nested Symphony runs"
 test ! -e "$FRESH_TARGET/README.md" || fail "fresh install copied source repository README"
 for decision_file in "$FRESH_TARGET/docs/decisions"/[0-9][0-9][0-9][0-9]*.md; do
   test ! -f "$decision_file" || fail "fresh install copied numbered decision history"
