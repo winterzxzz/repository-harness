@@ -41,6 +41,7 @@ pub struct ResolvedConfig {
     pub compact_keep_last: u32,
     pub keep_failed_worktrees: bool,
     pub cleanup_after_sync: bool,
+    pub failed_worktree_retention_days: u32,
     pub auto_source: String,
     pub auto_poll_interval_seconds: u64,
     pub auto_max_attempts: u32,
@@ -132,8 +133,10 @@ pub struct RunsConfig {
 pub struct CleanupConfig {
     #[serde(default = "default_true")]
     pub keep_failed_worktrees: bool,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub cleanup_after_sync: bool,
+    #[serde(default = "default_failed_worktree_retention_days")]
+    pub failed_worktree_retention_days: u32,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -226,7 +229,8 @@ impl Default for CleanupConfig {
     fn default() -> Self {
         Self {
             keep_failed_worktrees: true,
-            cleanup_after_sync: false,
+            cleanup_after_sync: true,
+            failed_worktree_retention_days: default_failed_worktree_retention_days(),
         }
     }
 }
@@ -280,6 +284,7 @@ impl SymphonyConfig {
             compact_keep_last: self.runs.compact_keep_last,
             keep_failed_worktrees: self.cleanup.keep_failed_worktrees,
             cleanup_after_sync: self.cleanup.cleanup_after_sync,
+            failed_worktree_retention_days: self.cleanup.failed_worktree_retention_days,
             auto_source: self.auto.source.clone(),
             auto_poll_interval_seconds: self.auto.poll_interval_seconds,
             auto_max_attempts: self.auto.max_attempts,
@@ -381,6 +386,10 @@ fn default_compact_keep_last() -> u32 {
     50
 }
 
+fn default_failed_worktree_retention_days() -> u32 {
+    7
+}
+
 fn default_true() -> bool {
     true
 }
@@ -433,7 +442,8 @@ mod tests {
         assert!(resolved.allow_here_for_tiny);
         assert_eq!(resolved.compact_keep_last, 50);
         assert!(resolved.keep_failed_worktrees);
-        assert!(!resolved.cleanup_after_sync);
+        assert!(resolved.cleanup_after_sync);
+        assert_eq!(resolved.failed_worktree_retention_days, 7);
         assert_eq!(resolved.auto_source, "harness-db");
         assert_eq!(resolved.auto_poll_interval_seconds, 30);
         assert_eq!(resolved.auto_max_attempts, 3);
@@ -458,7 +468,9 @@ agent:
 runs:
   compact_keep_last: 10
 cleanup:
-  cleanup_after_sync: true
+  keep_failed_worktrees: false
+  cleanup_after_sync: false
+  failed_worktree_retention_days: 3
 auto:
   poll_interval_seconds: 5
   max_attempts: 2
@@ -475,7 +487,9 @@ auto:
         );
         assert_eq!(resolved.agent_command, vec!["codex", "app-server"]);
         assert_eq!(resolved.compact_keep_last, 10);
-        assert!(resolved.cleanup_after_sync);
+        assert!(!resolved.keep_failed_worktrees);
+        assert!(!resolved.cleanup_after_sync);
+        assert_eq!(resolved.failed_worktree_retention_days, 3);
         assert_eq!(resolved.auto_source, "harness-db");
         assert_eq!(resolved.auto_poll_interval_seconds, 5);
         assert_eq!(resolved.auto_max_attempts, 2);

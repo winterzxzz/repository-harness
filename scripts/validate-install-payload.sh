@@ -66,6 +66,12 @@ grep -Fq 'function Assert-ManagedPathSafe' \
   "$ROOT_DIR/scripts/install-harness.ps1" || fail "PowerShell installer lacks managed-path safety checks"
 grep -Fq "Assert-ManagedPathSafe \$file" \
   "$ROOT_DIR/scripts/install-harness.ps1" || fail "PowerShell installer does not preflight managed paths"
+for runtime_rule in '.symphony/' '.worktrees/' '!.harness/' '.harness/*' \
+  '!.harness/changesets/' '!.harness/changesets/*.changeset.jsonl'
+do
+  grep -Fq "\"$runtime_rule\"" "$ROOT_DIR/scripts/install-harness.ps1" || \
+    fail "PowerShell installer omits runtime ignore rule $runtime_rule"
+done
 
 bash -n "$ROOT_DIR/scripts/install-harness.sh"
 "$ROOT_DIR/scripts/validate-harness-cli-release.sh"
@@ -101,6 +107,39 @@ FRESH_TARGET="$TMP_DIR/fresh-target"
 HARNESS_CLI_PLATFORM=test-platform \
 HARNESS_CLI_BASE_URL="file://$RELEASE_DIR" \
   "$ROOT_DIR/scripts/install-harness.sh" --directory "$FRESH_TARGET" --yes >/dev/null
+
+IGNORE_TARGET="$TMP_DIR/ignore-target"
+mkdir -p "$IGNORE_TARGET"
+printf '%s\n' 'vendor/' '.harness/' >"$IGNORE_TARGET/.gitignore"
+for _ in 1 2; do
+  HARNESS_CLI_PLATFORM=test-platform \
+  HARNESS_CLI_BASE_URL="file://$RELEASE_DIR" \
+    "$ROOT_DIR/scripts/install-harness.sh" --directory "$IGNORE_TARGET" --merge --yes >/dev/null
+done
+HARNESS_CLI_PLATFORM=test-platform \
+HARNESS_CLI_BASE_URL="file://$RELEASE_DIR" \
+  "$ROOT_DIR/scripts/install-harness.sh" --directory "$IGNORE_TARGET" --override --force --yes >/dev/null
+for rule in '.symphony/' '.worktrees/' '!.harness/' '.harness/*' \
+  '!.harness/changesets/' '!.harness/changesets/*.changeset.jsonl'
+do
+  test "$(grep -Fxc "$rule" "$IGNORE_TARGET/.gitignore")" -eq 1 || \
+    fail "existing target .gitignore must contain exactly one $rule rule"
+done
+grep -Fqx 'vendor/' "$IGNORE_TARGET/.gitignore" || \
+  fail "installer replaced target-owned .gitignore content"
+git -C "$IGNORE_TARGET" init -q
+mkdir -p "$IGNORE_TARGET/.symphony" "$IGNORE_TARGET/.harness/runs/run_1" \
+  "$IGNORE_TARGET/.harness/changesets"
+: >"$IGNORE_TARGET/.symphony/state.db"
+: >"$IGNORE_TARGET/.harness/runs/run_1/RESULT.json"
+: >"$IGNORE_TARGET/.harness/changesets/run_1.changeset.jsonl"
+git -C "$IGNORE_TARGET" check-ignore -q .symphony/state.db || \
+  fail "Symphony state is not ignored"
+git -C "$IGNORE_TARGET" check-ignore -q .harness/runs/run_1/RESULT.json || \
+  fail "run evidence is not ignored"
+if git -C "$IGNORE_TARGET" check-ignore -q .harness/changesets/run_1.changeset.jsonl; then
+  fail "changesets must remain visible to Git"
+fi
 
 test -f "$FRESH_TARGET/docs/HARNESS.md" || fail "fresh install omitted core policy"
 test -f "$FRESH_TARGET/docs/decisions/README.md" || fail "fresh install omitted decision scaffold"
