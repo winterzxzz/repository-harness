@@ -389,7 +389,22 @@ test("summary strip pulses while a Symphony run is active", async ({ page }) => 
     .getByRole("region", { name: "Command status rail" })
     .getByText("Agent working", { exact: true })
     .locator("xpath=ancestor::*[contains(@class, 'rounded-xl')][1]");
+  await expect(activeMetric).toHaveClass(/border-blue-500\/30/);
+  await expect(activeMetric).toHaveClass(/bg-blue-500\/5/);
   await expect(activeMetric.locator("span").first()).toHaveClass(/motion-safe:animate-pulse/);
+});
+
+test("summary strip keeps agent working neutral while Symphony is idle", async ({ page }) => {
+  await page.goto("/");
+
+  const activeMetric = page
+    .getByRole("region", { name: "Command status rail" })
+    .getByText("Agent working", { exact: true })
+    .locator("xpath=ancestor::*[contains(@class, 'rounded-xl')][1]");
+  await expect(activeMetric).toHaveClass(/border-border/);
+  await expect(activeMetric).toHaveClass(/bg-card/);
+  await expect(activeMetric).toHaveClass(/text-muted-foreground/);
+  await expect(activeMetric).not.toHaveClass(/border-blue-500\/30/);
 });
 
 test("board loading and failure states expose accessibility semantics", async ({ page }) => {

@@ -28,7 +28,9 @@ export function SummaryStrip({
         ? `${activeRun.active_run} is the only task allowed in progress.`
         : presentation.description,
       icon: presentation.icon,
-      className: summaryClass[bucket]
+      className: isActive && !activeRun?.active_run
+        ? "border-border bg-card text-muted-foreground"
+        : summaryClass[bucket]
     };
   });
 
