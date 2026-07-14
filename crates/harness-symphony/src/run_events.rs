@@ -38,6 +38,9 @@ struct WriterState {
 
 impl RunEventWriter {
     pub fn new(path: PathBuf, agent: impl Into<String>) -> std::io::Result<Self> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
         let page = read_events_after(&path, None)?;
         Ok(Self {
             inner: Arc::new(Mutex::new(WriterState {
@@ -63,12 +66,9 @@ impl RunEventWriter {
         message: impl Into<String>,
     ) -> std::io::Result<RunEvent> {
         let mut state = self.inner.lock().expect("run event writer poisoned");
-        if let Some(parent) = state.path.parent() {
-            fs::create_dir_all(parent)?;
-        }
         let event = RunEvent {
             sequence: state.next_sequence,
-            timestamp: unix_timestamp().to_string(),
+            timestamp: rfc3339_timestamp()?,
             agent: state.agent.clone(),
             kind: kind.to_owned(),
             stage: stage.to_owned(),
@@ -144,16 +144,39 @@ fn compact(path: &Path, max_events: usize) -> std::io::Result<()> {
     fs::write(path, replacement)
 }
 
-fn unix_timestamp() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+fn rfc3339_timestamp() -> std::io::Result<String> {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .map_err(std::io::Error::other)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn writer_initialization_creates_event_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("nested/run/RUN_EVENTS.jsonl");
+
+        RunEventWriter::new(path, "codex").unwrap();
+
+        assert!(temp.path().join("nested/run").is_dir());
+    }
+
+    #[test]
+    fn event_timestamp_is_rfc3339() {
+        use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("RUN_EVENTS.jsonl");
+        let event = RunEventWriter::new(path, "codex")
+            .unwrap()
+            .append("message", "agent", "hello")
+            .unwrap();
+
+        OffsetDateTime::parse(&event.timestamp, &Rfc3339).unwrap();
+    }
 
     #[test]
     fn writes_ordered_events_and_reads_after_cursor() {
