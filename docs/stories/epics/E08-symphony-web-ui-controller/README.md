@@ -87,3 +87,6 @@ Symphony records.
   changing Harness or Symphony state ownership.
 - Technical maintainers can optionally inspect local app-server logs from a
   terminal TUI without replacing the browser or Electron review surfaces.
+- Run detail offers a read-only live console transcript of the executing
+  agent (commands, streamed output, milestones, failures) without granting
+  interactive access to the run worktree.
