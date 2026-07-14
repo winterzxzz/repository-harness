@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-07-14 - Manual release harness-kit-v0.2.2
+
+- Publish Symphony runtime observability, external executor lifecycle, and live
+  run console changes merged after `harness-kit-v0.2.1`.
+- Keep the bundled Harness CLI at `harness-cli-v0.1.11`; no CLI source or schema
+  changes require a new CLI release.
+- Treat `crates/harness-symphony/**` and `scripts/harness-symphony` changes as
+  Harness kit release inputs in post-merge maintenance.
+
 ## 2026-07-13 - PR #22
 
 - Fix Symphony runtime cleanup and installer ignores (@winterzxzz)
