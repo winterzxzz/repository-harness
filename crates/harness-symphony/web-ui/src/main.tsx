@@ -150,12 +150,9 @@ function App() {
   }, []);
 
   React.useEffect(() => {
-    if (!activeRun?.active_run) {
-      return;
-    }
     const timer = window.setInterval(() => {
       void loadBoard({ silent: true });
-    }, 1500);
+    }, activeRun?.active_run ? 1500 : 10000);
     return () => window.clearInterval(timer);
   }, [activeRun?.active_run, loadBoard]);
 
