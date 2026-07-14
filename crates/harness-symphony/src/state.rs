@@ -349,7 +349,7 @@ impl RunStateStore {
         connection.execute(
             "UPDATE run_state SET status='running', owner_pid=?2, agent_pid=?3,
              agent_start_identity=?4, heartbeat_at=?5, current_stage='agent',
-             cancel_requested=0, terminal_reason=NULL, updated_at=datetime('now')
+             terminal_reason=NULL, updated_at=datetime('now')
              WHERE run_id=?1 AND status IN ('prepared','running')",
             params![
                 run_id,
@@ -1227,6 +1227,20 @@ mod tests {
             cancelled.terminal_reason.as_deref(),
             Some("operator cancelled run")
         );
+    }
+
+    #[test]
+    fn cancellation_requested_before_agent_start_is_not_lost() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = RunStateStore::new(temp_dir.path().join("state.db"));
+        store.add_run(new_record("run_1", "prepared")).unwrap();
+        store.request_cancel("run_1").unwrap();
+
+        store
+            .begin_execution("run_1", 4100, 4200, "agent-start", 1_721_000_000)
+            .unwrap();
+
+        assert!(store.cancellation_requested("run_1").unwrap());
     }
 
     #[test]

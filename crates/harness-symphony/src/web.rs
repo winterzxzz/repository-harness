@@ -47,6 +47,8 @@ pub enum WebError {
     Json(#[from] serde_json::Error),
     #[error("requested web asset is outside the web UI dist directory")]
     InvalidAssetPath,
+    #[error("could not stop recorded agent process {pid}; active run lock was preserved")]
+    ProcessTermination { pid: u32 },
 }
 
 pub const DEFAULT_WEB_HOST: &str = "127.0.0.1";
@@ -629,6 +631,13 @@ pub fn run_web_server(config: &ResolvedConfig, options: WebServerOptions) -> Res
 }
 
 fn reconcile_web_runs(config: &ResolvedConfig) -> Result<(), WebError> {
+    reconcile_web_runs_with(config, terminate_recorded_process)
+}
+
+fn reconcile_web_runs_with<F>(config: &ResolvedConfig, mut terminate: F) -> Result<(), WebError>
+where
+    F: FnMut(u32, &str) -> Result<(), WebError>,
+{
     let store = RunStateStore::new(config.state_db.clone());
     let current_owner = std::process::id();
     for run in store
@@ -643,7 +652,7 @@ fn reconcile_web_runs(config: &ResolvedConfig) -> Result<(), WebError> {
             if recorded != "unverified"
                 && crate::state::process_start_identity(pid).as_deref() == Some(recorded)
             {
-                terminate_recorded_process(pid);
+                terminate(pid, recorded)?;
             }
         }
         store.finish_execution(
@@ -656,17 +665,70 @@ fn reconcile_web_runs(config: &ResolvedConfig) -> Result<(), WebError> {
 }
 
 #[cfg(unix)]
-fn terminate_recorded_process(pid: u32) {
+fn terminate_recorded_process(pid: u32, recorded_identity: &str) -> Result<(), WebError> {
     unsafe extern "C" {
         fn kill(pid: i32, signal: i32) -> i32;
     }
+    const SIGTERM: i32 = 15;
+    const SIGKILL: i32 = 9;
+    let process_group = -(pid as i32);
     unsafe {
-        kill(-(pid as i32), 15);
+        kill(process_group, SIGTERM);
+    }
+    if wait_for_recorded_process_exit(pid, recorded_identity, 25) {
+        return Ok(());
+    }
+    unsafe {
+        kill(process_group, SIGKILL);
+    }
+    if wait_for_recorded_process_exit(pid, recorded_identity, 50) {
+        Ok(())
+    } else {
+        Err(WebError::ProcessTermination { pid })
     }
 }
 
-#[cfg(not(unix))]
-fn terminate_recorded_process(_pid: u32) {}
+#[cfg(windows)]
+fn terminate_recorded_process(pid: u32, recorded_identity: &str) -> Result<(), WebError> {
+    let _ = Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .status();
+    if wait_for_recorded_process_exit(pid, recorded_identity, 50) {
+        Ok(())
+    } else {
+        Err(WebError::ProcessTermination { pid })
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn terminate_recorded_process(pid: u32, _recorded_identity: &str) -> Result<(), WebError> {
+    Err(WebError::ProcessTermination { pid })
+}
+
+fn wait_for_recorded_process_exit(pid: u32, recorded_identity: &str, attempts: usize) -> bool {
+    for _ in 0..attempts {
+        if crate::state::process_start_identity(pid).as_deref() != Some(recorded_identity) {
+            return true;
+        }
+        #[cfg(unix)]
+        if recorded_process_is_zombie(pid) {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    false
+}
+
+#[cfg(unix)]
+fn recorded_process_is_zombie(pid: u32) -> bool {
+    Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .is_some_and(|status| status.trim_start().starts_with('Z'))
+}
 
 const CONNECTION_IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const MAX_CONCURRENT_CONNECTIONS: usize = 64;
@@ -4058,6 +4120,84 @@ exit 1
         let run = store.show_run("run_stale").unwrap();
         assert_eq!(run.status, "interrupted");
         assert!(store.active_run().unwrap().is_none());
+    }
+
+    #[test]
+    fn startup_reconciliation_keeps_lock_when_recorded_process_cannot_be_stopped() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = test_config(&temp_dir);
+        let store = RunStateStore::new(config.state_db.clone());
+        store
+            .add_run(crate::state::NewRunRecord {
+                run_id: "run_live".to_owned(),
+                story_id: "US-LIVE".to_owned(),
+                branch: None,
+                worktree: temp_dir.path().join("worktree"),
+                lightweight: false,
+                status: "prepared".to_owned(),
+                result_path: None,
+                sync_status: "not_applied".to_owned(),
+                next_action: "running".to_owned(),
+            })
+            .unwrap();
+        let pid = std::process::id();
+        let identity = crate::state::process_start_identity(pid).unwrap();
+        store
+            .begin_execution(
+                "run_live",
+                pid.saturating_add(1),
+                pid,
+                &identity,
+                1_721_000_000,
+            )
+            .unwrap();
+
+        let error = reconcile_web_runs_with(&config, |_, _| {
+            Err(WebError::Io(std::io::Error::other(
+                "injected termination failure",
+            )))
+        })
+        .unwrap_err();
+
+        assert!(error.to_string().contains("injected termination failure"));
+        assert_eq!(store.show_run("run_live").unwrap().status, "running");
+        assert_eq!(store.active_run().unwrap().unwrap().run_id, "run_live");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn startup_termination_escalates_when_recorded_process_ignores_term() {
+        use std::os::unix::process::CommandExt;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let ready = temp_dir.path().join("ready");
+        let mut command = Command::new("sh");
+        command
+            .args([
+                "-c",
+                "trap '' TERM; touch \"$1\"; while :; do sleep 1; done",
+                "sh",
+            ])
+            .arg(&ready);
+        command.process_group(0);
+        let mut child = command.spawn().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !ready.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(ready.exists(), "fixture process did not become ready");
+        let pid = child.id();
+        let identity = crate::state::process_start_identity(pid).unwrap();
+
+        let result = terminate_recorded_process(pid, &identity);
+        let status = child.try_wait().unwrap();
+        if status.is_none() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+
+        assert!(result.is_ok());
+        assert!(status.is_some(), "recorded process was still executing");
     }
 
     #[test]

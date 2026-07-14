@@ -342,15 +342,15 @@ fn run_codex_agent_with_timeout(
     let mut next_request_id: i64 = 3;
     let mut pending_state_query: Option<i64> = None;
     loop {
+        if let Some(runtime) = runtime.as_mut() {
+            if let Err(error) = runtime.tick() {
+                terminate_child(&mut child);
+                return Err(error);
+            }
+        }
         let line = match line_rx.recv_timeout(Duration::from_millis(250)) {
             Ok(line) => line,
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                if let Some(runtime) = runtime.as_mut() {
-                    if let Err(error) = runtime.tick() {
-                        terminate_child(&mut child);
-                        return Err(error);
-                    }
-                }
                 if let Some(status) = child.try_wait()? {
                     let stderr = captured_stderr(&stderr_text);
                     return Err(AgentError::CommandFailed {
@@ -1575,6 +1575,100 @@ printf '%s\n' '{"method":"turn/completed","params":{"turn":{"status":"completed"
         prepared.contract_path = worktree.join(".harness/runs/run_1/RUN_CONTRACT.json");
 
         run_codex_agent_with_timeout(&config, &prepared, Duration::from_secs(5)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_adapter_observes_cancellation_while_events_are_continuous() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let worktree = temp_dir.path().join("worktree");
+        fs::create_dir_all(&worktree).unwrap();
+        let gate = temp_dir.path().join("cancel-requested");
+        let ready = temp_dir.path().join("event-stream-ready");
+        let fake_server = temp_dir.path().join("busy-codex-app-server");
+        fs::write(
+            &fake_server,
+            r#"#!/usr/bin/env sh
+read initialize
+printf '%s\n' '{"id":0,"result":{}}'
+read initialized
+read thread_start
+printf '%s\n' '{"id":1,"result":{"thread":{"id":"thr_1"}}}'
+read turn_start
+printf '%s\n' '{"id":2,"result":{"turn":{"id":"turn_1"}}}'
+printf '%s\n' '{"method":"turn/started","params":{"turn":{"id":"turn_1"}}}'
+touch "$2"
+while [ ! -f "$1" ]; do
+  printf '%s\n' '{"method":"item/agentMessage/delta","params":{"delta":"busy"}}'
+done
+i=0
+while [ "$i" -lt 1000 ]; do
+  printf '%s\n' '{"method":"item/agentMessage/delta","params":{"delta":"busy"}}'
+  i=$((i + 1))
+done
+printf '%s\n' '{"method":"turn/completed","params":{"turn":{"status":"completed"}}}'
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&fake_server).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&fake_server, permissions).unwrap();
+
+        let mut config = config(
+            "codex",
+            vec![
+                fake_server.to_str().unwrap(),
+                gate.to_str().unwrap(),
+                ready.to_str().unwrap(),
+            ],
+        );
+        config.repo_root = temp_dir.path().to_path_buf();
+        config.state_db = temp_dir.path().join(".symphony/state.db");
+        config.runs_dir = temp_dir.path().join(".harness/runs");
+        let mut prepared = prepared();
+        prepared.worktree = worktree.clone();
+        prepared.harness_db_path = worktree.join("harness.db");
+        prepared.contract_path = config.runs_dir.join("run_1/RUN_CONTRACT.json");
+
+        RunStateStore::new(config.state_db.clone())
+            .add_run(crate::state::NewRunRecord {
+                run_id: "run_1".to_owned(),
+                story_id: "US-046".to_owned(),
+                branch: None,
+                worktree,
+                lightweight: false,
+                status: "prepared".to_owned(),
+                result_path: None,
+                sync_status: "not_applied".to_owned(),
+                next_action: "run agent".to_owned(),
+            })
+            .unwrap();
+
+        let state_db = config.state_db.clone();
+        let cancel_gate = gate.clone();
+        let stream_ready = ready.clone();
+        let canceller = std::thread::spawn(move || {
+            let store = RunStateStore::new(state_db);
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while Instant::now() < deadline {
+                if stream_ready.exists()
+                    && store
+                        .show_run("run_1")
+                        .is_ok_and(|run| run.status == "running")
+                {
+                    store.request_cancel("run_1").unwrap();
+                    fs::write(cancel_gate, "requested").unwrap();
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            panic!("Codex adapter never entered running state");
+        });
+
+        let error =
+            run_codex_agent_with_timeout(&config, &prepared, Duration::from_secs(5)).unwrap_err();
+        canceller.join().unwrap();
+        assert!(matches!(error, AgentError::Cancelled));
     }
 
     #[cfg(unix)]
