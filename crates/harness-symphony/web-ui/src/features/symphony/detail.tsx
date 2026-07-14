@@ -32,6 +32,8 @@ import type {
 import { cn } from "../../lib/utils";
 import { formatRunLog } from "../../run-log";
 import { agentLabel } from "./constants";
+import { RunConsole } from "./run-console";
+import { retainRunEvents } from "./run-console-model";
 
 type ConfettiBurst = {
   id: number;
@@ -259,8 +261,8 @@ export function TaskDetail({
         if (!cancelled) {
           setEvents((current) =>
             data.reset_required || eventCursorRef.current === undefined
-              ? data.events
-              : [...current, ...data.events]
+              ? retainRunEvents([], data.events)
+              : retainRunEvents(current, data.events)
           );
           eventCursorRef.current = data.last_sequence;
         }
@@ -304,7 +306,10 @@ export function TaskDetail({
       try {
         const data = await fetchReview(reviewRunId, { signal: controller.signal });
         if (!cancelled) {
-          setReviewState({ status: "ready", data });
+          setReviewState({
+            status: "ready",
+            data: { ...data, events: retainRunEvents([], data.events) }
+          });
           if (data.failure_summary) {
             setPreservedFailedReview(data);
           }
@@ -496,9 +501,15 @@ export function TaskDetail({
       {item.active_run && preservedFailedReview ? <PriorFailureEvidence review={preservedFailedReview} /> : null}
 
       {item.active_run ? (
-        <EventLog events={events} live agent={review?.agent} />
+        <>
+          <EventLog events={events} live agent={review?.agent} />
+          <RunConsole events={events} live agent={review?.agent} />
+        </>
       ) : review ? (
-        <EventLog events={review.events} agent={review.agent} />
+        <>
+          <EventLog events={review.events} agent={review.agent} />
+          <RunConsole events={review.events} agent={review.agent} />
+        </>
       ) : null}
     </aside>
   );
