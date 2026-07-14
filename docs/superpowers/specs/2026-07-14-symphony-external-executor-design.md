@@ -2,162 +2,304 @@
 
 ## Intent
 
-Let a main agent session act as the orchestrator for Symphony runs while a
-spawned subagent performs the implementation, without losing Symphony's
-isolation, validation, or status flow. A run executed by a subagent must appear
-in `harness-symphony status`, `runs list`, and the Web UI exactly like a run
-executed by a built-in adapter.
+Let a main agent session orchestrate a Symphony run while a spawned subagent
+implements the story inside Symphony's prepared worktree. The external path
+must preserve the same isolation, artifact validation, canonical outcomes,
+status surfaces, and single-active-run invariant as a built-in adapter run.
 
-The concrete gap today: Claude Code spawns its subagents from inside the main
-session via its Agent tool, so Symphony cannot launch them the way it launches
-`codex exec` or `opencode run`. Runs executed this way are invisible to
-Symphony unless the run lifecycle can be driven from outside.
+Claude Code is the first consumer because it spawns subagents from inside its
+main session. Symphony cannot launch that subagent directly, so the main agent
+needs a supported way to drive the prepared run lifecycle.
 
 ## Current Behavior
 
-- `harness-symphony run <story-id>` prepares an isolated worktree, a copied
-  `harness.db`, and `RUN_CONTRACT.json`, then launches a configured adapter
-  (Codex or OpenCode) and tracks the run itself.
-- `harness-symphony run <story-id> --prepare-only` creates the same workspace
-  and contract but launches nothing. The run stays `prepared` and there is no
-  supported way for an external process to move it to `running` or to have its
-  result validated and recorded.
-- A single active-run lock in `.symphony/state.db` allows one running run at a
-  time. The Web UI renders that one flow.
+- `harness-symphony run <story-id>` prepares a worktree, copied `harness.db`,
+  and `RUN_CONTRACT.json`, launches a configured adapter, and owns the run
+  lifecycle.
+- `harness-symphony run <story-id> --prepare-only` creates the same isolated
+  resources without launching an adapter. The resulting `prepared` row already
+  holds the single-active-run lock.
+- `run_state.agent` records the selected adapter, while managed execution also
+  records controller and child-process ownership, heartbeat, lifecycle stage,
+  cancellation, and terminal reason.
+- Web startup reconciles managed `prepared` and `running` rows through verified
+  process identity. That PID policy cannot safely represent an external
+  subagent which Symphony did not launch.
 
 ## Approved Scope
 
 ### In scope
 
-- Three new run lifecycle subcommands so an external executor can drive a
-  prepared run through the normal status flow:
+- Three lifecycle subcommands owned by the main agent:
   - `harness-symphony runs start <run_id> --executor <name>`
-  - `harness-symphony runs heartbeat <run_id> --step <text>`
+  - `harness-symphony runs heartbeat <run_id> [--step <text>]`
   - `harness-symphony runs complete <run_id>`
-- A recorded `executor` field on the run (for example `claude-subagent`,
-  `codex`, `opencode`) shown as a badge in the Web UI run card and run detail.
-- Heartbeat steps rendered in the existing run detail progress surface.
-- A heartbeat TTL: an externally executed run whose heartbeat goes silent past
-  the TTL transitions to `stale` instead of holding `running` and the
-  active-run lock forever.
-- `runs complete` performs the same artifact validation as the adapter path:
-  `SUMMARY.md`, `RESULT.json`, and, when durable records were written, the
-  `.harness/changesets/<run_id>.changeset.jsonl` changeset.
-- Documentation: the orchestrator flow in `docs/SYMPHONY_QUICKSTART.md` and the
-  agent-facing instructions in `AGENTS.md` (main agent orchestrates; subagent
-  executes inside the prepared worktree).
+- An `execution_mode` run-state field with `managed` and `external` values.
+  The existing `agent` field records the executor name and supplies the Web UI
+  executor badge; no duplicate `executor` column is added.
+- A logical external lease represented by `execution_mode=external`,
+  `status=running`, and `heartbeat_at`.
+- Normalized heartbeat events rendered in the existing run-detail progress
+  surface.
+- Stale-lease reconciliation which releases the lock without requiring a new
+  supervisor daemon.
+- The same result contract and canonical terminal outcomes used by the adapter
+  path: `completed`, `blocked`, `needs_intake`, `partial`, `failed`, and
+  `cancelled`.
+- Decidable changeset validation based on a canonical logical digest of the
+  copied Harness database.
+- Agent and operator documentation in `AGENTS.md` and
+  `docs/SYMPHONY_QUICKSTART.md`, including fresh-install delivery of the
+  Quickstart.
 
 ### Out of scope
 
-- Multiple simultaneous runs. The single active-run lock stays; the
-  orchestrator runs stories sequentially.
-- Any change to the Codex and OpenCode adapter paths. Those already implement
-  the orchestrate-then-execute pattern with Symphony as the launcher.
-- Spawning or supervising the subagent process from Symphony. The main agent
-  owns the subagent's lifecycle.
-- A new Web UI flow or board layout. Externally executed runs reuse the
-  existing single-run surfaces.
-- Remote execution, queues, or scheduling.
+- Multiple simultaneous active runs.
+- Changing Codex, OpenCode, or custom adapter launch behavior.
+- Symphony spawning, signalling, or supervising the external subagent.
+- Remote execution, queues, scheduling, authentication, or a new Web UI flow.
+- Letting the subagent write the root checkout, root `harness.db`, or root
+  `.symphony/state.db` directly.
 
 ## Roles
 
 | Party | Responsibilities | Explicitly not responsible for |
 | --- | --- | --- |
-| Main agent | Intake, story selection, `run --prepare-only`, `runs start`, spawning the subagent, `runs complete`, reporting back to the human | Editing story code itself |
-| Subagent | All implementation inside the worktree, heartbeats at major milestones, producing `SUMMARY.md`, `RESULT.json`, and the changeset | Touching the root repo or root `harness.db` |
-| Symphony | Workspace isolation, run state, validation, Web UI | Launching the subagent |
+| Main agent | Intake, selection, prepare, start, spawn, periodic heartbeat, milestone forwarding, complete, and human report | Editing story code |
+| Subagent | Implementation and verification inside the worktree, milestone reports, result artifacts, and changeset-producing Harness CLI writes | Invoking root lifecycle commands or touching root state |
+| Symphony | Isolation, state transitions, lease reconciliation, validation, normalized events, Web UI | Launching or killing the subagent |
+
+The main agent invokes every lifecycle command from the source repository, or
+with an explicit `--repo-root` pointing to it. The subagent receives only the
+worktree path, the worktree-local contract, and the run environment. This keeps
+control-plane state outside the implementation boundary.
 
 ## Run Flow
 
 ```text
-[1] main agent: harness-symphony run <story-id> --prepare-only
-      -> worktree, copied harness.db, RUN_CONTRACT.json
-      -> run visible in UI as PREPARED
+[1] main: harness-symphony run <story-id> --prepare-only
+      -> creates worktree, copied harness.db, RUN_CONTRACT.json
+      -> records PREPARED and already holds the active-run lock
 
-[2] main agent: harness-symphony runs start <run_id> --executor claude-subagent
-      -> run becomes RUNNING, takes the active-run lock
-      -> UI shows the run with an executor badge
+[2] main: harness-symphony runs start <run_id> --executor claude-subagent
+      -> atomically verifies PREPARED + existing lock ownership
+      -> records execution_mode=external, agent=claude-subagent
+      -> transitions to RUNNING and starts the heartbeat lease
 
-[3] main agent spawns the subagent with the worktree path and contract path
+[3] main spawns the subagent in the prepared worktree
 
-[4] subagent works inside the worktree
-      -> harness-symphony runs heartbeat <run_id> --step "<milestone>"
-      -> produces SUMMARY.md, RESULT.json, changeset when applicable
+[4] subagent reports milestones; main maintains the lease
+      -> runs heartbeat <run_id>
+      -> runs heartbeat <run_id> --step "<bounded milestone>"
 
-[5] subagent returns its final report to the main agent
+[5] subagent writes SUMMARY.md, RESULT.json, and a changeset when Harness
+    durable state changed, then returns its final report
 
-[6] main agent: harness-symphony runs complete <run_id>
-      -> Symphony validates artifacts exactly like the adapter path
-      -> run becomes DONE or FAILED, lock released
+[6] main: harness-symphony runs complete <run_id>
+      -> Symphony enters validation stage and validates worktree artifacts
+      -> the validated RESULT.json outcome becomes the terminal run status
+      -> validation failure records FAILED
 
-[7] main agent summarizes the outcome and next steps (review, PR, sync)
+[7] main reports review, PR, sync, retry, or intake next steps
 ```
 
-The executor is matched to the main agent family. A Claude Code main agent
-spawns a Claude subagent through this external path. Codex and OpenCode main
-agents keep using the existing full `run` command, where Symphony launches the
-headless instance; their runs already flow through the same status surface.
+The main agent sends at least one heartbeat during every 30-second interval
+while waiting for the subagent. `--step` is used only when the milestone text
+changes; ordinary lease refreshes do not create duplicate progress events.
 
-## State Transitions
+## State and Ownership Model
+
+### Active lock
+
+`prepared` and `running` remain active statuses. Preparing the run acquires the
+lock under the existing invariant. `runs start` does not acquire a second lock;
+it atomically verifies that the target prepared run is the active row before
+transitioning it to `running`.
+
+### Execution modes
+
+- `managed`: existing adapter path. PID identity, cancellation, and managed
+  runtime reconciliation remain unchanged.
+- `external`: no Symphony-owned agent PID exists. Liveness comes only from the
+  heartbeat lease. PID reconciliation must skip these rows.
+
+Existing rows migrate to `execution_mode=managed`. The existing `agent` field
+continues to contain `codex`, `opencode`, `custom`, or an external name such as
+`claude-subagent`.
+
+### External lease
+
+The default external heartbeat TTL is 120 seconds. The
+`runs.external_heartbeat_ttl_seconds` setting may override it with a positive
+value, but the orchestrator contract requires a heartbeat interval no greater
+than one quarter of the configured TTL.
+
+Expired external leases are reconciled in two places:
+
+1. Before state reads or writes whose answer depends on the active run,
+   including `status`, `runs list/show`, prepare, start, heartbeat, complete,
+   board derivation, cleanup, and Web API reads.
+2. Every five seconds in the Web server so an open UI reflects expiry without
+   another user action.
+
+Reconciliation uses one immediate transaction: re-read a `running external`
+row, compare `heartbeat_at + ttl` with the supplied clock, update it to
+`stale`, record the terminal reason, and release active ownership. A concurrent
+heartbeat either wins before the expiry check or is rejected after `stale`;
+it can never resurrect the row.
+
+### State transitions
 
 ```text
-prepared --runs start--> running
-running  --heartbeat----> running (updates current step + heartbeat timestamp)
-running  --runs complete + validation pass--> done
-running  --runs complete + validation fail--> failed
-running  --heartbeat TTL exceeded--> stale (lock released)
-stale    --runs complete--> done or failed (late results still validated)
+prepared --runs start--------------------------> running
+running  --heartbeat---------------------------> running
+running  --complete + valid completed result---> completed
+running  --complete + valid blocked result-----> blocked
+running  --complete + other valid outcome------> matching canonical outcome
+running  --complete + validation error----------> failed
+running  --heartbeat TTL exceeded---------------> stale
+stale    --complete + valid result--------------> matching canonical outcome
+stale    --complete + validation error----------> failed
 ```
 
-`runs start` is rejected when another run holds the active-run lock, when the
-run is not in `prepared`, or when the run's worktree is missing. `runs
-heartbeat` and `runs complete` are rejected for run ids that were never
-started. `runs complete` on a run with missing required artifacts records the
-run as `failed` with a validation error, mirroring adapter behavior.
+`runs start` accepts only the active `prepared` row with an existing worktree.
+Heartbeat accepts only `running external`. Complete accepts `running external`
+or `stale external`. Managed runs and never-started prepared runs are rejected.
+Completing a stale run does not inspect or mutate the active lock held by a
+newer run.
 
-The TTL default follows the heartbeat conventions introduced by the agent
-runtime observability and recovery design (2026-07-14); external runs reuse the
-same durable heartbeat storage rather than adding a second mechanism.
+The board treats `stale` as Needs Attention. Retention and cleanup treat it as
+a failed-worktree class, preserving it under the configured failed-worktree
+policy.
 
-## Approaches Considered
+## Lifecycle Command Contract
 
-### Lifecycle subcommands for external executors
+All three commands resolve Symphony state from the source repository. The
+main agent must run them from that repository or pass the global
+`--repo-root <source-repo>` option.
 
-Selected. The external executor becomes a first-class Symphony concept. State
-lives in Symphony's own store, so the Web UI, `status`, and `runs list` need no
-new data source, and any future executor (another agent CLI, a human) reuses
-the same commands.
+### Start
 
-### Wait-for-artifact adapter shim
+`runs start` atomically checks run existence, `prepared` status, active-row
+identity, worktree presence, and external executor name. It then records
+`execution_mode=external`, stores the name in `agent`, sets stage `agent`, and
+sets the initial heartbeat timestamp.
 
-Rejected. Registering a fake adapter whose command polls for `RESULT.json`
-keeps Symphony unchanged but couples two processes through an implicit
-convention, hangs when the subagent dies silently, and misrepresents who
-executed the run.
+Repeated start is rejected rather than silently changing executor identity.
 
-### External status file read by the Web UI
+### Heartbeat
 
-Rejected. Having the subagent write its own status file that the UI learns to
-render creates a second source of truth for run state and bypasses validation.
+Heartbeat updates only `heartbeat_at` for a `running external` row. When
+`--step` is present, Symphony validates a bounded non-empty string and appends
+a normalized event to the existing `RUN_EVENTS.jsonl` stream. Arbitrary step
+text does not overwrite the canonical `current_stage` field.
+
+### Complete
+
+Complete sets stage `validation`, reconstructs `PreparedRun` from durable run
+state, and calls the shared adapter-path artifact validator. It promotes the
+same artifacts and persists the validated result outcome. Missing or invalid
+artifacts record `failed` with the validation error while preserving the
+worktree.
+
+## Harness Database and Changeset Validation
+
+At prepare time Symphony calculates and stores a canonical logical digest of
+the copied `harness.db`. The digest covers schema and ordered durable table
+content while excluding SQLite implementation metadata. It is stable across
+read-only opens, checkpoints, and equivalent row ordering.
+
+At complete time Symphony calculates the digest again:
+
+- Unchanged digest: a changeset is optional.
+- Changed digest: `.harness/changesets/<run_id>.changeset.jsonl` is required,
+  must have the matching header/run ID, must contain semantic operations, and
+  must pass the existing changeset parser.
+
+This catches a copied-database mutation made without the required run
+environment. Direct raw SQLite mutation remains unsupported; the agent
+contract requires Harness CLI writes so changeset operations are produced
+transactionally.
+
+## Web UI and Events
+
+The run card and detail use the existing `agent` value as an Executor badge.
+External progress reuses normalized events and the current lifecycle stage.
+No second status file, endpoint family, board bucket, or event format is
+introduced.
+
+Web startup first expires external leases, then applies verified PID recovery
+only to managed runs. It must never interrupt an external run solely because
+the Web controller PID changed.
 
 ## Error Handling
 
-- Subagent dies without completing: heartbeats stop, the run goes `stale`
-  after the TTL, and the lock is released. The main agent sees the missing
-  final report, inspects the run directory, and either re-runs or reports.
-- Main agent session ends between `start` and `complete`: same TTL path; a new
-  session finds the `stale` run via `runs list` and can complete or discard it.
-- Subagent finishes but artifacts are invalid: `runs complete` marks the run
-  `failed` with the validation error; the worktree is preserved for
-  inspection, matching adapter behavior.
-- `runs start` raced by a Web-started run: the active-run lock decides; the
-  loser gets a clear error and the run stays `prepared`.
+- Subagent dies: the main agent stops observing progress and stops heartbeat;
+  the lease becomes stale and releases the lock.
+- Main agent ends: heartbeat stops even if the subagent remains alive, because
+  Symphony has lost its orchestrator. The next state access or Web timer marks
+  the run stale.
+- Web server restarts: managed rows use PID recovery; live external rows remain
+  running until their lease actually expires.
+- Artifacts are invalid: complete records failed and preserves evidence.
+- Late result arrives after stale: complete validates it without disturbing a
+  newer active run.
+- Copied Harness DB changed without a valid changeset: complete records failed.
+- Main agent cannot maintain the required heartbeat cadence: it must not start
+  the external run.
+
+## Alternatives Considered
+
+### Main-agent-owned external lease
+
+Selected. It preserves the worktree boundary, avoids giving the subagent
+control-plane write access, and requires no new daemon.
+
+### Subagent invokes root lifecycle commands
+
+Rejected. It requires exposing root state paths and granting implementation
+workers control-plane mutation rights, contradicting the isolation role.
+
+### Wait-for-artifact adapter shim
+
+Rejected. It models the wrong executor, relies on implicit polling, and still
+needs separate failure and liveness conventions.
+
+### External status file rendered by the Web UI
+
+Rejected. It creates a second source of truth and bypasses shared validation.
+
+## Documentation and Fresh Install
+
+- `AGENTS.md` describes the main-agent lifecycle and prohibits the subagent
+  from invoking root lifecycle commands.
+- `docs/SYMPHONY_QUICKSTART.md` documents exact external-run commands,
+  heartbeat cadence, recovery, and late completion.
+- `docs/SYMPHONY_QUICKSTART.md` is added to
+  `scripts/harness-install-files.txt`.
+- `scripts/validate-install-payload.sh` proves a fresh install and refreshed
+  agent shim contain the external-executor guidance without source-only run
+  history.
 
 ## Validation
 
-- Unit: state-transition table above, including rejection cases and TTL
-  expiry.
-- Integration: full external run against a fixture story — prepare, start,
-  heartbeats, artifact creation, complete, validation pass and fail variants.
-- Manual: one real story run with a Claude subagent, confirming the run and
-  its heartbeat steps render in the Web UI with the executor badge.
+- Unit: every transition and rejection above, external TTL boundaries,
+  heartbeat/expiry race, managed-versus-external reconciliation, canonical
+  outcomes, stable logical DB digest, and changeset requirement.
+- Integration: prepare, start, periodic heartbeat, normalized step event,
+  valid completion for every outcome class, validation failure, stale release,
+  late completion while a newer run is active, and copied-DB mutation without
+  changeset.
+- Web: executor badge, external heartbeat event, stale Needs Attention state,
+  and Web restart preserving a live external run.
+- Fresh install: Quickstart and agent guidance are present in the installer
+  payload on Bash and PowerShell paths.
+- Manual: one real Claude subagent run, observed through CLI and Web UI from
+  prepare through review-ready completion.
+
+## Implementation Boundary
+
+This design changes public CLI behavior, durable run state, recovery semantics,
+validation, Web presentation, and installer payload. It is a high-risk story.
+Implementation must stop if it would weaken result validation, worktree
+isolation, changeset durability, or the single-active-run invariant.

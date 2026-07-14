@@ -46,6 +46,8 @@ Symphony records.
     completed Ready work.
 27. `US-093` - Observable, cancellable, and recoverable Codex and OpenCode
     runtime with durable lifecycle stages.
+28. `US-094` - Main-agent-orchestrated external executor runs with isolated
+    subagent implementation, heartbeat leases, and shared completion validation.
 
 ## Exit Criteria
 
