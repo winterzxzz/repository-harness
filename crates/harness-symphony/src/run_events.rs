@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 
 const DEFAULT_MAX_EVENTS: usize = 2_000;
+const COMPACTION_INTERVAL: usize = 100;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RunEvent {
@@ -82,9 +83,17 @@ impl RunEventWriter {
         serde_json::to_writer(&mut file, &event).map_err(std::io::Error::other)?;
         file.write_all(b"\n")?;
         file.flush()?;
-        compact(&state.path, state.max_events)?;
+        drop(file);
+        if should_compact(state.next_sequence, state.max_events) {
+            compact(&state.path, state.max_events)?;
+        }
         Ok(event)
     }
+}
+
+fn should_compact(next_sequence: u64, max_events: usize) -> bool {
+    let interval = max_events.clamp(1, COMPACTION_INTERVAL) as u64;
+    next_sequence > max_events as u64 && next_sequence % interval == 0
 }
 
 pub fn read_events_after(path: &Path, after: Option<u64>) -> std::io::Result<EventPage> {
@@ -141,7 +150,12 @@ fn compact(path: &Path, max_events: usize) -> std::io::Result<()> {
         serde_json::to_writer(&mut replacement, event).map_err(std::io::Error::other)?;
         replacement.push(b'\n');
     }
-    fs::write(path, replacement)
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    temporary.write_all(&replacement)?;
+    temporary.as_file_mut().sync_all()?;
+    temporary.persist(path).map_err(|error| error.error)?;
+    Ok(())
 }
 
 fn rfc3339_timestamp() -> std::io::Result<String> {
@@ -176,6 +190,30 @@ mod tests {
             .unwrap();
 
         OffsetDateTime::parse(&event.timestamp, &Rfc3339).unwrap();
+    }
+
+    #[test]
+    fn compaction_is_batched_after_limit() {
+        assert!(!should_compact(2_001, 2_000));
+        assert!(should_compact(2_100, 2_000));
+        assert!(should_compact(4, 2));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn compaction_atomically_replaces_event_file() {
+        use std::os::unix::fs::MetadataExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("RUN_EVENTS.jsonl");
+        let writer = RunEventWriter::with_limit(path.clone(), "codex", 2).unwrap();
+        writer.append("message", "agent", "one").unwrap();
+        writer.append("message", "agent", "two").unwrap();
+        let original_inode = fs::metadata(&path).unwrap().ino();
+
+        writer.append("message", "agent", "three").unwrap();
+
+        assert_ne!(fs::metadata(path).unwrap().ino(), original_inode);
     }
 
     #[test]
