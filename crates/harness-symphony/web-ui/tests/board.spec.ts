@@ -1730,9 +1730,88 @@ test("review logs render readable chat and progress entries while preserving raw
   await expect(detail.getByText("Unsupported event payload with keys: unsupported, note.")).toBeVisible();
   await expect(detail.getByText("Executor")).toBeVisible();
   await expect(detail.getByText("Claude Subagent", { exact: true }).first()).toBeVisible();
-  await expect(detail.getByText("Tests passing")).toBeVisible();
+  await expect(detail.getByRole("region", { name: "Run monitor" }).getByText("Tests passing")).toBeVisible();
   await expect(detail.getByText("Raw artifact: RUN_EVENTS.jsonl")).toBeVisible();
   await expect(detail.getByText(".harness/runs/run_chat/APP_SERVER_EVENTS.jsonl")).toBeVisible();
+});
+
+test("live run console renders bounded actionable transcript and lets users resume follow-tail", async ({ page }) => {
+  const item = boardItem("US-095", "Live Run Console", "In Progress");
+  item.run_id = "run_console";
+  item.active_run = "run_console";
+  await page.route("**/api/board", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [item] }) });
+  });
+  await page.route("**/api/tasks/US-095/context", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ story_id: "US-095", content: "# Context" }) });
+  });
+  await page.route("**/api/runs/run_console/events**", async (route) => {
+    const appEvents = [
+      {
+        method: "item/started",
+        params: { item: { id: "cmd-live", type: "commandExecution", command: "npm test" } }
+      },
+      ...Array.from({ length: 80 }, (_, index) => ({
+        method: "item/commandExecution/outputDelta",
+        params: { itemId: "cmd-live", delta: `line ${index}\n` }
+      })),
+      {
+        method: "item/commandExecution/outputDelta",
+        params: { itemId: "cmd-live", delta: "\u001b[31mfailed output\u001b[0m\n" }
+      },
+      {
+        method: "item/completed",
+        params: { item: { id: "cmd-live", type: "commandExecution", command: "npm test", exitCode: 1 } }
+      },
+      {
+        method: "item/reasoning/summaryTextDelta",
+        params: { itemId: "reason-live", delta: "hidden reasoning" }
+      },
+      {
+        method: "item/completed",
+        params: { item: { id: "message-live", type: "agentMessage", text: "Milestone reached." } }
+      }
+    ];
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        run_id: "run_console",
+        events: appEvents.map((event, index) => ({
+          sequence: index + 1,
+          timestamp: `2026-07-14T10:00:${String(index % 60).padStart(2, "0")}Z`,
+          agent: "codex",
+          kind: "message",
+          stage: "agent",
+          message: JSON.stringify(event)
+        })),
+        last_sequence: appEvents.length,
+        reset_required: false
+      })
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /US-095/ }).click();
+  const detail = page.getByRole("dialog", { name: "Selected work detail" });
+  const consoleRegion = detail.getByRole("region", { name: "Run console" });
+  const scrollback = consoleRegion.getByTestId("run-console-scrollback");
+
+  await expect(consoleRegion.getByRole("heading", { name: "Run console" })).toBeVisible();
+  await expect(consoleRegion.getByText("npm test", { exact: true })).toBeVisible();
+  await expect(consoleRegion.getByText("failed output", { exact: false })).toBeVisible();
+  await expect(consoleRegion.getByText("Exit 1")).toBeVisible();
+  await expect(consoleRegion.getByText("Milestone reached.")).toBeVisible();
+  await expect(consoleRegion).not.toContainText("hidden reasoning");
+  await expect(consoleRegion.locator("input, textarea")).toHaveCount(0);
+
+  await scrollback.evaluate((element) => {
+    element.scrollTop = 0;
+    element.dispatchEvent(new Event("scroll"));
+  });
+  await expect(consoleRegion.getByRole("button", { name: "Jump to latest output" })).toBeVisible();
+  await consoleRegion.getByRole("button", { name: "Jump to latest output" }).click();
+  await expect(consoleRegion.getByRole("button", { name: "Jump to latest output" })).toHaveCount(0);
+  await expect.poll(() => scrollback.evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThanOrEqual(2);
 });
 
 test("main layout is split-pane on desktop", async ({ page }) => {
@@ -1843,8 +1922,8 @@ test("runtime events poll with a sequence cursor and cancel run", async ({ page 
   await page.goto("/");
   await page.getByRole("button", { name: /US-093/ }).click();
   const detail = page.getByRole("dialog", { name: "Selected work detail" });
-  await expect(detail.getByText("Running cargo test -p harness-symphony")).toBeVisible();
-  await expect(detail.getByText("Tests are still running")).toBeVisible({ timeout: 5000 });
+  await expect(detail.getByRole("region", { name: "Run monitor" }).getByText("Running cargo test -p harness-symphony")).toBeVisible();
+  await expect(detail.getByRole("region", { name: "Run monitor" }).getByText("Tests are still running")).toBeVisible({ timeout: 5000 });
 
   await detail.getByRole("button", { name: "Cancel run" }).click();
   await expect.poll(async () => cancelRequested).toBe(true);
