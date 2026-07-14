@@ -693,8 +693,7 @@ fn terminate_recorded_process(pid: u32, recorded_identity: &str) -> Result<(), W
 
 #[cfg(unix)]
 fn validated_process_group(pid: u32) -> Result<i32, WebError> {
-    let platform_pid =
-        i32::try_from(pid).map_err(|_| WebError::ProcessTermination { pid })?;
+    let platform_pid = i32::try_from(pid).map_err(|_| WebError::ProcessTermination { pid })?;
     if platform_pid == 0 {
         return Err(WebError::ProcessTermination { pid });
     }
