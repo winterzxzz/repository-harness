@@ -226,6 +226,7 @@ function parseTaskFlow(value: unknown): TaskFlow {
     state,
     current_step: currentStep,
     message: expectString(record.message, "task_flow.message"),
+    pr_status: expectString(record.pr_status, "task_flow.pr_status"),
     steps,
     recovery_action: parseNullable(record.recovery_action, parseRecoveryAction)
   };

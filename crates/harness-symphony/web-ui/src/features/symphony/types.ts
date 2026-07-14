@@ -24,6 +24,7 @@ export type TaskFlow = {
   state: TaskFlowState;
   current_step: TaskFlowStepId | null;
   message: string;
+  pr_status: string;
   steps: Array<{ id: TaskFlowStepId; state: TaskFlowStepState }>;
   recovery_action: RecoveryAction | null;
 };
