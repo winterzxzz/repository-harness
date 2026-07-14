@@ -54,12 +54,12 @@ export function ActiveTaskFlow({ flow, stale = false, onRecover }: { flow: TaskF
         </header>
         <div className="scrollbar-none mt-3 overflow-x-auto pb-1">
           <div className="task-flow-fork min-w-[880px]" aria-label="Task lifecycle steps">
-            <FlowSegment name="Shared start" steps={fork.head} />
+            <FlowSegment name="Shared start" steps={fork.head} connectTrailingEdge />
             <div className="task-flow-lanes">
               <FlowLane name="Pull request" lane={fork.prLane} />
               <FlowLane name="Local review" lane={fork.localLane} />
             </div>
-            <FlowSegment name="Shared finish" steps={fork.tail} />
+            <FlowSegment name="Shared finish" steps={fork.tail} connectLeadingEdge />
           </div>
         </div>
         {stale ? <p role="status" className="mt-1 text-xs font-medium text-amber-700">Unable to refresh; showing the last known task state.</p> : null}
@@ -68,11 +68,27 @@ export function ActiveTaskFlow({ flow, stale = false, onRecover }: { flow: TaskF
   );
 }
 
-function FlowSegment({ name, steps }: { name: string; steps: ForkStep[] }) {
+function FlowSegment({
+  name,
+  steps,
+  connectLeadingEdge = false,
+  connectTrailingEdge = false
+}: {
+  name: string;
+  steps: ForkStep[];
+  connectLeadingEdge?: boolean;
+  connectTrailingEdge?: boolean;
+}) {
   return (
     <ol className="task-flow-segment" aria-label={name}>
       {steps.map((step, index) => (
-        <FlowStep key={step.id} step={step} label={labels[step.id]} last={index === steps.length - 1} />
+        <FlowStep
+          key={step.id}
+          step={step}
+          label={labels[step.id]}
+          connectLeft={index > 0 || connectLeadingEdge}
+          connectRight={index < steps.length - 1 || connectTrailingEdge}
+        />
       ))}
     </ol>
   );
@@ -87,12 +103,13 @@ function FlowLane({ name, lane }: { name: "Pull request" | "Local review"; lane:
         <span>{statusLabel}</span>
       </div>
       <ol aria-label={`${name} lane, ${statusLabel}`} data-lane-status={lane.status}>
-        {lane.steps.map((step, index) => (
+        {lane.steps.map((step) => (
           <FlowStep
             key={step.id}
             step={step}
             label={name === "Pull request" && step.id === "review" ? "Review & merge" : labels[step.id]}
-            last={index === lane.steps.length - 1}
+            connectLeft
+            connectRight
           />
         ))}
       </ol>
@@ -100,15 +117,27 @@ function FlowLane({ name, lane }: { name: "Pull request" | "Local review"; lane:
   );
 }
 
-function FlowStep({ step, label, last }: { step: ForkStep; label: string; last: boolean }) {
+function FlowStep({
+  step,
+  label,
+  connectLeft,
+  connectRight
+}: {
+  step: ForkStep;
+  label: string;
+  connectLeft: boolean;
+  connectRight: boolean;
+}) {
   const state = step.state;
   const Icon = state === "complete" ? Check : state === "failed" ? AlertTriangle : state === "current" ? Loader2 : Circle;
+  const connectorTone = state === "complete" ? "bg-emerald-500" : "bg-border";
   return (
     <li
       aria-current={state === "current" ? "step" : undefined}
       className="relative flex min-w-0 flex-1 flex-col items-center px-1 text-center"
     >
-      {!last ? <span aria-hidden="true" className={cn("absolute left-[calc(50%+14px)] right-[calc(-50%+14px)] top-3 h-0.5", state === "complete" ? "bg-emerald-500" : "bg-border")} /> : null}
+      {connectLeft ? <span aria-hidden="true" className={cn("absolute left-0 right-[calc(50%+14px)] top-3 h-0.5", connectorTone)} /> : null}
+      {connectRight ? <span aria-hidden="true" className={cn("absolute left-[calc(50%+14px)] right-0 top-3 h-0.5", connectorTone)} /> : null}
       {state === null ? (
         <span aria-hidden="true" className="relative z-10 mt-[9px] size-1.5 rounded-full bg-muted-foreground/50" />
       ) : (
