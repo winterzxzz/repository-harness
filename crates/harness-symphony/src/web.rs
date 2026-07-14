@@ -2937,6 +2937,14 @@ fn derive_task_flow(items: &[BoardItemResponse], runs: &[RunRecord]) -> Option<T
     };
 
     let durable_stage = run.current_stage.as_str();
+    let pr_status = if run.pr_status == "missing"
+        && run.pr_url.is_none()
+        && matches!(item.board_state.as_str(), "Review" | "Done")
+    {
+        "not_applicable"
+    } else {
+        run.pr_status.as_str()
+    };
     let (flow_state, current, failed, message) = match item.board_state.as_str() {
         "In Progress" => (
             "active",
@@ -2944,13 +2952,13 @@ fn derive_task_flow(items: &[BoardItemResponse], runs: &[RunRecord]) -> Option<T
             None,
             "Agent is implementing the task.".to_owned(),
         ),
-        "Review" if run.pr_status == "merged" => (
+        "Review" if pr_status == "merged" => (
             "waiting",
             durable_stage,
             None,
             "Pull request merged. Waiting for local sync.".to_owned(),
         ),
-        "Review" if run.pr_status == "not_applicable" => (
+        "Review" if pr_status == "not_applicable" => (
             "waiting",
             durable_stage,
             None,
@@ -2971,7 +2979,7 @@ fn derive_task_flow(items: &[BoardItemResponse], runs: &[RunRecord]) -> Option<T
         "Done" => ("done", "done", None, "Run synced successfully.".to_owned()),
         _ => return None,
     };
-    let step_ids: &[&str] = if run.pr_status == "not_applicable" {
+    let step_ids: &[&str] = if pr_status == "not_applicable" {
         &LOCAL_REVIEW_TASK_FLOW_STEPS
     } else {
         &PR_TASK_FLOW_STEPS
@@ -2999,7 +3007,7 @@ fn derive_task_flow(items: &[BoardItemResponse], runs: &[RunRecord]) -> Option<T
         state: flow_state.to_owned(),
         current_step: (flow_state != "done").then(|| current.to_owned()),
         message,
-        pr_status: run.pr_status.clone(),
+        pr_status: pr_status.to_owned(),
         steps,
         recovery_action: item.recovery_action.clone(),
     })
@@ -4962,6 +4970,41 @@ exit 1
 
         assert!(response.starts_with("HTTP/1.1 200 OK"));
         assert!(response.contains(r#""id":"run_local_sync""#));
+    }
+
+    #[test]
+    fn derive_task_flow_backfills_pathless_reviewed_run_as_local_review() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut config = test_config(&temp_dir);
+        config.pull_request_create = "disabled".to_owned();
+        seed_story_with_status(
+            &config.harness_db,
+            "US-PATHLESS",
+            "Pathless salvaged run",
+            "planned",
+        );
+        let store = RunStateStore::new(config.state_db.clone());
+        store
+            .add_run(crate::state::NewRunRecord {
+                run_id: "run_pathless".to_owned(),
+                story_id: "US-PATHLESS".to_owned(),
+                branch: Some("symphony/run_pathless".to_owned()),
+                worktree: temp_dir.path().join("worktree"),
+                lightweight: false,
+                status: "completed".to_owned(),
+                result_path: Some(PathBuf::from(".harness/runs/run_pathless/RESULT.json")),
+                sync_status: "not_applied".to_owned(),
+                next_action: "review local run artifacts".to_owned(),
+            })
+            .unwrap();
+        create_review_pr(&config, "run_pathless").unwrap();
+        store.update_pr_status("run_pathless", "missing").unwrap();
+
+        let response = handle_request(&config, "GET /api/board HTTP/1.1\r\n\r\n").unwrap();
+
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
+        assert!(response.contains(r#""pr_status":"not_applicable""#));
+        assert!(!response.contains(r#""id":"pr""#));
     }
 
     #[test]
