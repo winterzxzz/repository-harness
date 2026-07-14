@@ -158,11 +158,13 @@ Bucket mapping (internal key followed by user-facing label):
    Codex` action on a Ready board card.
 5. The task moves to `In Progress`.
 6. Entering `In Progress` starts execution like `harness-symphony run`.
-7. UI shows live Codex App Server events for the active run.
+7. UI shows normalized live Codex or OpenCode events for the active run and
+   polls with the last observed sequence so only newer retained events move.
 8. Codex App Server task execution is not capped by a fixed wall-clock timeout;
    it continues until Codex reports a terminal turn, the app-server process
-   exits, an explicit cancellation path is added, a protocol stall guard fires,
-   or required result validation fails.
+   exits, the operator cancels the run, a protocol stall guard fires, or
+   required runtime evidence or result validation fails. OpenCode and custom
+   commands retain the configured timeout.
 9. When Codex emits `turn/completed` with completed status and required
    artifacts validate, Symphony creates a PR when PR creation is enabled.
 10. The task moves to `Review` and appears in the Ready bucket.
@@ -210,13 +212,13 @@ Delete must be explicit and guarded:
 
 ## Failure Workflow
 
-If Codex fails, the run is interrupted, required artifacts are missing, PR
+If an agent fails, the run is interrupted, required artifacts are missing, PR
 creation fails, or validation fails, the task moves to `Needs Attention`.
 
 `Needs Attention` must show:
 
 - What failed.
-- The last observed Codex event or error.
+- The last observed normalized agent event or error.
 - Links to run artifacts when present.
 - Suggested next action.
 - Retry controls when retry is safe.
@@ -225,7 +227,7 @@ The primary board/detail surface must not stop at a generic `Needs Attention`
 label. It should show a concise failure reason and a path to the evidence that
 explains the transition, such as `APP_SERVER_EVENTS.jsonl`, `SUMMARY.md`,
 `RESULT.json`, PR creation output, or validation output. A technical maintainer
-should be able to tell whether the issue is a Codex protocol/runtime problem,
+  should be able to tell whether the issue is an agent protocol/runtime problem,
 missing artifact, PR/review problem, validation failure, or manual follow-up
 without leaving the controller first.
 
@@ -299,8 +301,8 @@ It should include:
 - Human-readable changeset preview.
 - PR link and merge status, or local artifact-review status when PR creation is
   disabled.
-- Codex event log.
-- Human-readable chat and progress log derived from Codex events.
+- Normalized agent event log.
+- Human-readable chat and progress log derived from agent events.
 - Run summary.
 - Approve/sync action after the PR is merged, or after local artifact review
   when PR creation is disabled.
@@ -327,15 +329,33 @@ screenshots prove the layout fits; Impeccable or equivalent tooling can provide
 design vocabulary, anti-pattern detection, audit, and polish feedback when the
 tool is installed.
 
-## Codex Event Source
+## Agent Event Sources
 
-The existing Symphony Codex adapter writes Codex App Server JSON-RPC events to:
+Codex and OpenCode append sequenced monitoring events to:
+
+```text
+.harness/runs/<run_id>/RUN_EVENTS.jsonl
+```
+
+Each event records `sequence`, `timestamp`, `agent`, `kind`, `stage`, and
+`message`. `GET /api/runs/<run-id>/events?after=<sequence>` returns only newer
+retained events and reports when a compacted cursor requires a snapshot reset.
+The task detail polls this cursor endpoint while the run is active.
+
+Adapter-specific raw evidence remains available. Codex writes JSON-RPC to:
 
 ```text
 .harness/runs/<run_id>/APP_SERVER_EVENTS.jsonl
 ```
 
-The Web UI should stream or tail this file for the active run.
+OpenCode writes combined command output to:
+
+```text
+.harness/runs/<run_id>/AGENT_OUTPUT.log
+```
+
+Existing completed runs without `RUN_EVENTS.jsonl` continue to use the legacy
+Codex event response.
 
 Useful event types include:
 
@@ -348,6 +368,18 @@ Useful event types include:
 - `turn/completed`
 
 `turn/completed` with completed status is required before moving to `Review`.
+
+## Runtime Control And Recovery
+
+Web-started runs persist controller PID, child PID and start identity,
+heartbeat, cancellation request, terminal reason, and the current lifecycle
+stage. `POST /api/runs/<run-id>/cancel` accepts only the current active run;
+the adapter terminates its process group and retains partial artifacts.
+
+Controller startup reconciles prior `prepared` or `running` rows. It signals a
+recorded child only when the process-start identity still matches, marks the
+run `interrupted`, and releases the single-active-run lock. It does not resume
+or delete the prior worktree.
 
 ## Local Web Boundary
 
@@ -407,10 +439,12 @@ build output and the current `harness-symphony` backend binary.
 - Dependency edges are stored in Harness `story_dependency` records.
 - Task hierarchy is stored in Harness `story_hierarchy` records.
 - PR merge status is entered manually for the MVP through the local Web UI.
-- Codex events are exposed as a polling tail snapshot from
-  `APP_SERVER_EVENTS.jsonl` through the local Web API.
-- The primary UI should summarize Codex events into readable chat/progress
-  entries; raw `APP_SERVER_EVENTS.jsonl` remains available for debugging.
+- Codex and OpenCode events are exposed through cursor polling of normalized
+  `RUN_EVENTS.jsonl`; legacy completed Codex runs fall back to
+  `APP_SERVER_EVENTS.jsonl`.
+- The primary UI summarizes normalized events into readable chat/progress
+  entries; raw `APP_SERVER_EVENTS.jsonl` and `AGENT_OUTPUT.log` remain
+  available for debugging.
 - Ready task deletion is a lifecycle transition to Harness story status
   `retired`, not a physical delete.
 
@@ -423,7 +457,10 @@ Implementation stories should include proof for:
 - Single-active-task enforcement.
 - `Ready` to `In Progress` transition.
 - Codex App Server execution without a fixed wall-clock timeout.
-- Codex event streaming from `APP_SERVER_EVENTS.jsonl`.
+- Normalized Codex/OpenCode event streaming with sequence cursors and legacy
+  raw-artifact compatibility.
+- Confirmed active-run cancellation and startup interruption recovery.
+- Durable lifecycle stages from Start through Done.
 - `turn/completed` plus valid `RESULT.json` transition to `Review`.
 - Failed run transition to `Needs Attention`.
 - Needs Attention explanation, artifact links, and suggested next action.

@@ -2,22 +2,20 @@
 
 ## Status
 
-planned
+implemented
 
 ## Lane
 
 high-risk
 
-## Current Behavior
+## Implemented Behavior
 
-Web-started Codex execution still uses `agent_timeout_minutes` as an absolute
-deadline even though the controller reports an uncapped runtime. Codex writes
-live JSON-RPC events, while OpenCode writes only a raw output artifact that the
-Web event endpoint does not expose. Web controller termination can also leave
-an unowned active run that blocks all later starts.
-
-The active task lifecycle is derived from broad board states, so successful
-runs do not visibly pass through validation and pull-request creation.
+Codex execution is lifecycle-based and uncapped by `agent_timeout_minutes`;
+OpenCode/custom commands keep the configured deadline. Both adapters write
+sequenced normalized events, while their raw artifacts remain intact. Web runs
+persist ownership, heartbeat, cancellation, terminal reason, and durable stage.
+Startup reconciliation interrupts orphaned runs after process-identity checks,
+and task detail exposes a confirmed cancel action plus cursor-based live output.
 
 ## Target Behavior
 
@@ -66,4 +64,3 @@ the seven-step lifecycle follows durable stages through Done.
   Review, Sync, and Done using authoritative run state.
 - Existing raw Codex/OpenCode artifacts and legacy event responses remain
   readable.
-

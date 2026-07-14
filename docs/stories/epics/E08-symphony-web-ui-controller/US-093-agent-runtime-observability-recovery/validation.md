@@ -41,6 +41,14 @@ git diff --check
 
 ## Acceptance Evidence
 
-Record exact passing counts, platform smoke results, and any unavailable proof
-before changing the durable story status to implemented.
-
+- `cargo fmt --check` — passed.
+- `cargo test -p harness-symphony` — 213 passed, 0 failed.
+- `cargo test --workspace` — Harness Bench 20, Harness CLI 43, and Symphony
+  213 tests passed; doc tests passed.
+- `cargo clippy --workspace -- -D warnings` — passed.
+- `npm --prefix crates/harness-symphony/web-ui run build` — passed.
+- `env -u HARNESS_SYMPHONY_WEB_DIST_DIR npm --prefix
+  crates/harness-symphony/web-ui run e2e` — 41 passed, 0 failed.
+- `env -u HARNESS_SYMPHONY_WEB_DIST_DIR npm --prefix
+  crates/harness-symphony/web-ui run desktop:smoke` — passed.
+- `git diff --check` — passed.

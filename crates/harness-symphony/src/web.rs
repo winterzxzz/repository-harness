@@ -3803,9 +3803,37 @@ exit 1
         let response = handle_request(&config, "GET /api/board HTTP/1.1\r\n\r\n").unwrap();
 
         assert!(response.contains(r#""story_id":"US-FLOW""#));
-        assert!(response.contains(r#""current_step":"agent""#));
-        assert!(response.contains(r#""id":"start","state":"complete""#));
-        assert!(response.contains(r#""id":"agent","state":"current""#));
+        assert!(response.contains(r#""current_step":"start""#));
+        assert!(response.contains(r#""id":"start","state":"current""#));
+        assert!(response.contains(r#""id":"agent","state":"pending""#));
+    }
+
+    #[test]
+    fn task_flow_uses_durable_runtime_stage() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = test_config(&temp_dir);
+        seed_story_with_status(&config.harness_db, "US-FLOW", "Active lifecycle", "planned");
+        add_story_run(&config, "run_flow", "US-FLOW", "prepared");
+        let store = RunStateStore::new(config.state_db.clone());
+        store
+            .begin_execution(
+                "run_flow",
+                std::process::id(),
+                std::process::id(),
+                "test",
+                1,
+            )
+            .unwrap();
+
+        let agent = handle_request(&config, "GET /api/board HTTP/1.1\r\n\r\n").unwrap();
+        assert!(agent.contains(r#""current_step":"agent""#));
+        assert!(agent.contains(r#""id":"agent","state":"current""#));
+
+        store.set_stage("run_flow", "validation").unwrap();
+        let validation = handle_request(&config, "GET /api/board HTTP/1.1\r\n\r\n").unwrap();
+        assert!(validation.contains(r#""current_step":"validation""#));
+        assert!(validation.contains(r#""id":"agent","state":"complete""#));
+        assert!(validation.contains(r#""id":"validation","state":"current""#));
     }
 
     #[test]

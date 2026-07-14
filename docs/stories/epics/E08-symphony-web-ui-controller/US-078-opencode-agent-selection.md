@@ -32,6 +32,8 @@ survives server restarts.
   falling back to config `agent.adapter`); `PUT /api/settings` updates it.
 - Run records store the agent used; the web UI run log names that agent
   instead of hardcoding "Codex".
+- OpenCode retains `AGENT_OUTPUT.log` and also emits sequenced normalized
+  `RUN_EVENTS.jsonl` output for live cursor polling in task detail.
 - Board split button and Settings radio reflect and update the default.
 
 ## Design Notes
@@ -41,7 +43,8 @@ survives server restarts.
 - API: `POST` start-run gains optional `agent`; new `GET/PUT /api/settings`.
 - Tables: `settings(key TEXT PRIMARY KEY, value TEXT)` in `.symphony/state.db`.
 - Domain rules: choosing an agent at run time is remembering it.
-- UI surfaces: board split button, sidebar Settings panel, run log labels.
+- UI surfaces: board split button, sidebar Settings panel, run log labels, and
+  normalized live output in active task detail.
 
 ## Validation
 

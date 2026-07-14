@@ -157,6 +157,26 @@ test("active task lifecycle marks the current step", async ({ page }) => {
   await expect(flow.getByText("Agent is implementing the task.")).toBeVisible();
 });
 
+test("status rail bounds a long active run identifier", async ({ page }) => {
+  const item = boardItem("US-093", "Agent Runtime Observability And Recovery", "In Progress");
+  item.run_id = "run_1783999475145922000_45510_0";
+  item.active_run = item.run_id;
+  await page.route("**/api/board", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ items: [item], task_flow: taskFlow("agent") })
+    });
+  });
+
+  await page.goto("/");
+
+  const detail = page
+    .getByRole("region", { name: "Command status rail" })
+    .getByText("is the only task allowed in progress.");
+  await expect(detail).toBeVisible();
+  await expectNoHorizontalOverflow(detail, "active-run status detail");
+});
+
 test("active task lifecycle shows failure recovery without page overflow", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   const item = boardItem("US-090", "Symphony Active Task Lifecycle Flow", "Needs Attention");
@@ -724,7 +744,9 @@ test("run monitor summarizes active event progress", async ({ page }) => {
         events: [
           { method: "turn/started", params: { timestamp: "2026-07-09T10:00:00Z" } },
           { method: "turn/diff/updated", params: { timestamp: "2026-07-09T10:01:00Z" } }
-        ]
+        ],
+        last_sequence: 2,
+        reset_required: false
       })
     });
   });
@@ -802,7 +824,15 @@ test("ready review requests changes with reason and image evidence", async ({ pa
     });
   });
   await page.route("**/api/runs/run_replacement_082/events", async (route) => {
-    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ run_id: "run_replacement_082", events: [] }) });
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        run_id: "run_replacement_082",
+        events: [],
+        last_sequence: 0,
+        reset_required: false
+      })
+    });
   });
 
   await page.goto("/");
@@ -1466,7 +1496,9 @@ test("execution recovery retries needs attention work and preserves failed evide
         events: [
           { method: "turn/started", params: { turn: { status: "inProgress" } } },
           { method: "item/agentMessage/delta", params: { itemId: "retry_msg", delta: "Retry run is now live." } }
-        ]
+        ],
+        last_sequence: 2,
+        reset_required: false
       })
     });
   });
@@ -1726,4 +1758,92 @@ test("detail drawer contains slide transition styles", async ({ page }) => {
   await page.getByRole("button", { name: /US-/ }).first().click();
   const popup = page.getByTestId("task-detail-popup");
   await expect(popup).toHaveClass(/translate-x-0/);
+});
+
+test("runtime events poll with a sequence cursor and cancel run", async ({ page }) => {
+  const item = boardItem("US-093", "Agent Runtime Observability And Recovery", "In Progress");
+  item.run_id = "run_runtime";
+  item.active_run = "run_runtime";
+  let eventReads = 0;
+  let cancelRequested = false;
+
+  page.on("dialog", async (dialog) => {
+    expect(dialog.message()).toContain("Cancel active run run_runtime");
+    await dialog.accept();
+  });
+  await page.route("**/api/board", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ items: [item], task_flow: taskFlow("agent") })
+    });
+  });
+  await page.route("**/api/runs/run_runtime/events*", async (route) => {
+    eventReads += 1;
+    if (eventReads === 1) {
+      expect(new URL(route.request().url()).searchParams.has("after")).toBe(false);
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({
+          run_id: "run_runtime",
+          events: [
+            {
+              sequence: 12,
+              timestamp: "2026-07-14T10:30:00Z",
+              agent: "opencode",
+              kind: "output",
+              stage: "agent",
+              message: "Running cargo test -p harness-symphony"
+            }
+          ],
+          last_sequence: 12,
+          reset_required: false
+        })
+      });
+      return;
+    }
+    expect(new URL(route.request().url()).searchParams.get("after")).toBe("12");
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        run_id: "run_runtime",
+        events: [
+          {
+            sequence: 13,
+            timestamp: "2026-07-14T10:30:02Z",
+            agent: "opencode",
+            kind: "message",
+            stage: "agent",
+            message: "Tests are still running"
+          }
+        ],
+        last_sequence: 13,
+        reset_required: false
+      })
+    });
+  });
+  await page.route("**/api/runs/run_runtime/cancel", async (route) => {
+    expect(route.request().method()).toBe("POST");
+    cancelRequested = true;
+    await route.fulfill({
+      status: 202,
+      contentType: "application/json",
+      body: JSON.stringify({
+        run_id: "run_runtime",
+        status: "cancelling",
+        cancel_requested: true
+      })
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /US-093/ }).click();
+  const detail = page.getByRole("dialog", { name: "Selected work detail" });
+  await expect(detail.getByText("Running cargo test -p harness-symphony")).toBeVisible();
+  await expect(detail.getByText("Tests are still running")).toBeVisible({ timeout: 5000 });
+
+  await detail.getByRole("button", { name: "Cancel run" }).click();
+  await expect.poll(async () => cancelRequested).toBe(true);
+  await expect(
+    page.getByRole("region", { name: "Notifications" }).getByText("Cancellation requested")
+  ).toBeVisible();
 });

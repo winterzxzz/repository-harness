@@ -59,7 +59,7 @@ export function SummaryStrip({
               <div className="min-w-0 flex-1">
                 <span className="text-[10px] font-bold uppercase tracking-wider text-current/60">{metric.label}</span>
                 <strong className="mt-0.5 lg:mt-1 block truncate text-lg font-bold leading-none tracking-tight text-foreground">{metric.value}</strong>
-                <p className="mt-1 lg:mt-1.5 text-xs leading-tight lg:leading-normal text-current/75 font-medium">{metric.detail}</p>
+                <p className="bounded-text mt-1 min-w-0 max-w-full text-xs font-medium leading-tight text-current/75 lg:mt-1.5 lg:leading-normal">{metric.detail}</p>
               </div>
             </div>
           </Card>

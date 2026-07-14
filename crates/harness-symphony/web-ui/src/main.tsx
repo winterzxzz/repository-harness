@@ -305,16 +305,29 @@ function App() {
     [loadBoard, toast]
   );
 
-  const cancelRun = React.useCallback(async (runId: string) => {
-    setCancellingRunId(runId);
-    try {
-      await postCancelRun(runId);
-      toast.add({ kind: "success", title: "Cancellation requested", description: `Run ${runId} is stopping.` });
-      await loadBoard();
-    } catch (cause) {
-      toast.add({ kind: "error", title: "Cancel failed", description: cause instanceof Error ? cause.message : "Cancel failed" });
-    } finally { setCancellingRunId(null); }
-  }, [loadBoard, toast]);
+  const cancelRun = React.useCallback(
+    async (runId: string) => {
+      setCancellingRunId(runId);
+      try {
+        await postCancelRun(runId);
+        toast.add({
+          kind: "success",
+          title: "Cancellation requested",
+          description: `Run ${runId} is stopping.`
+        });
+        await loadBoard();
+      } catch (cause) {
+        toast.add({
+          kind: "error",
+          title: "Cancel failed",
+          description: cause instanceof Error ? cause.message : "Cancel failed"
+        });
+      } finally {
+        setCancellingRunId(null);
+      }
+    },
+    [loadBoard, toast]
+  );
 
   const markPrMerged = React.useCallback(
     async (runId: string): Promise<PrMergedResponse> => {

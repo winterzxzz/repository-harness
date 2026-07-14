@@ -196,8 +196,8 @@ export function TaskDetail({
   onSync,
   onMarkPrMerged,
   onRetryPr,
-  onRequestChanges
-  ,onCancel
+  onRequestChanges,
+  onCancel
 }: {
   item: BoardItem;
   startingId: string | null;
@@ -257,7 +257,11 @@ export function TaskDetail({
       try {
         const data = await fetchEvents(runId, eventCursorRef.current, { signal: controller.signal });
         if (!cancelled) {
-          setEvents((current) => data.reset_required || eventCursorRef.current === undefined ? data.events : [...current, ...data.events]);
+          setEvents((current) =>
+            data.reset_required || eventCursorRef.current === undefined
+              ? data.events
+              : [...current, ...data.events]
+          );
           eventCursorRef.current = data.last_sequence;
         }
       } catch (cause) {
@@ -398,10 +402,24 @@ export function TaskDetail({
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
           {item.active_run ? (
-            <Button variant="destructive" disabled={cancellingRunId === item.active_run} onClick={() => {
-              if (window.confirm(`Cancel active run ${item.active_run}? Partial artifacts will be retained.`)) void onCancel(item.active_run!);
-            }}>
-              {cancellingRunId === item.active_run ? <Loader2 data-icon="inline-start" className="motion-safe:animate-spin" /> : <X data-icon="inline-start" />}
+            <Button
+              variant="destructive"
+              disabled={cancellingRunId === item.active_run}
+              onClick={() => {
+                if (
+                  window.confirm(
+                    `Cancel active run ${item.active_run}? Partial artifacts will be retained.`
+                  )
+                ) {
+                  void onCancel(item.active_run!);
+                }
+              }}
+            >
+              {cancellingRunId === item.active_run ? (
+                <Loader2 data-icon="inline-start" className="motion-safe:animate-spin" />
+              ) : (
+                <X data-icon="inline-start" />
+              )}
               Cancel run
             </Button>
           ) : null}

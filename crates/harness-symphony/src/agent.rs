@@ -575,23 +575,6 @@ fn agent_output_path(prepared: &PreparedRun) -> std::path::PathBuf {
         .join("AGENT_OUTPUT.log")
 }
 
-fn run_streaming_command(
-    command: Command,
-    output_path: &Path,
-    timeout: Duration,
-    output_limit: usize,
-    timeout_minutes: u32,
-) -> Result<(ExitStatus, String), AgentError> {
-    run_streaming_command_with_writer(
-        command,
-        output_path,
-        timeout,
-        output_limit,
-        timeout_minutes,
-        CappedWriter::new,
-    )
-}
-
 fn run_streaming_command_controlled(
     mut command: Command,
     output_path: &Path,
@@ -617,41 +600,57 @@ fn run_streaming_command_controlled(
     let writer = Arc::new(Mutex::new(CappedWriter::new(output_path, output_limit)?));
     let stderr_text = Arc::new(Mutex::new(Vec::new()));
     let event_writer = runtime.as_ref().map(|runtime| runtime.events.clone());
-    let stdout_thread =
-        spawn_output_drain_with_events(stdout, Arc::clone(&writer), None, event_writer.clone());
-    let stderr_thread = spawn_output_drain_with_events(
+    let mut stdout_thread = Some(spawn_output_drain_with_events(
+        stdout,
+        Arc::clone(&writer),
+        None,
+        event_writer.clone(),
+    ));
+    let mut stderr_thread = Some(spawn_output_drain_with_events(
         stderr,
         Arc::clone(&writer),
         Some(Arc::clone(&stderr_text)),
         event_writer,
-    );
+    ));
     let deadline = Instant::now() + timeout;
     let status = loop {
         if let Some(status) = child.try_wait()? {
             break status;
         }
+        if let Some(error) = finished_output_error(&mut stdout_thread)
+            .or_else(|| finished_output_error(&mut stderr_thread))
+        {
+            child.terminate();
+            join_output_drain(stdout_thread.take());
+            join_output_drain(stderr_thread.take());
+            return Err(error);
+        }
         if let Some(runtime) = runtime.as_mut() {
             if let Err(error) = runtime.tick() {
                 child.terminate();
-                let _ = stdout_thread.join();
-                let _ = stderr_thread.join();
+                join_output_drain(stdout_thread.take());
+                join_output_drain(stderr_thread.take());
                 return Err(error);
             }
         }
         if Instant::now() >= deadline {
             child.terminate();
-            let _ = stdout_thread.join();
-            let _ = stderr_thread.join();
+            join_output_drain(stdout_thread.take());
+            join_output_drain(stderr_thread.take());
             return Err(AgentError::Timeout { timeout_minutes });
         }
         std::thread::sleep(Duration::from_millis(10));
     };
-    let _ = stdout_thread.join();
-    let _ = stderr_thread.join();
+    let stdout_error = join_output_drain(stdout_thread.take());
+    let stderr_error = join_output_drain(stderr_thread.take());
+    if let Some(error) = stdout_error.or(stderr_error) {
+        return Err(error);
+    }
     writer.lock().expect("output writer poisoned").finish()?;
     Ok((status, captured_stderr(&stderr_text)))
 }
 
+#[cfg(test)]
 fn run_streaming_command_with_writer<F>(
     mut command: Command,
     output_path: &Path,
@@ -702,6 +701,7 @@ where
     Ok((status, stderr))
 }
 
+#[cfg(test)]
 fn spawn_output_drain<R: Read + Send + 'static>(
     mut reader: R,
     writer: Arc<Mutex<CappedWriter>>,
@@ -735,31 +735,55 @@ fn spawn_output_drain_with_events<R: Read + Send + 'static>(
     writer: Arc<Mutex<CappedWriter>>,
     capture: Option<Arc<Mutex<Vec<u8>>>>,
     events: Option<RunEventWriter>,
-) -> std::thread::JoinHandle<()> {
+) -> std::thread::JoinHandle<Result<(), AgentError>> {
     std::thread::spawn(move || {
         let mut buffer = [0_u8; 8192];
-        while let Ok(count) = reader.read(&mut buffer) {
+        let mut captured_len = 0;
+        loop {
+            let count = reader.read(&mut buffer)?;
             if count == 0 {
                 break;
             }
             if let Some(capture) = &capture {
-                capture
-                    .lock()
-                    .expect("stderr capture poisoned")
-                    .extend_from_slice(&buffer[..count]);
+                if captured_len < AGENT_OUTPUT_MAX_BYTES {
+                    let mut captured = capture.lock().expect("stderr capture poisoned");
+                    let remaining = AGENT_OUTPUT_MAX_BYTES.saturating_sub(captured.len());
+                    captured.extend_from_slice(&buffer[..count.min(remaining)]);
+                    captured_len = captured.len();
+                }
             }
-            let _ = writer
+            writer
                 .lock()
                 .expect("output writer poisoned")
-                .write_chunk(&buffer[..count]);
+                .write_chunk(&buffer[..count])?;
             if let Some(events) = &events {
                 let message = String::from_utf8_lossy(&buffer[..count]).trim().to_owned();
                 if !message.is_empty() {
-                    let _ = events.append("output", "agent", message);
+                    events.append("output", "agent", message)?;
                 }
             }
         }
+        Ok(())
     })
+}
+
+fn finished_output_error(
+    thread: &mut Option<std::thread::JoinHandle<Result<(), AgentError>>>,
+) -> Option<AgentError> {
+    if !thread.as_ref().is_some_and(|thread| thread.is_finished()) {
+        return None;
+    }
+    join_output_drain(thread.take())
+}
+
+fn join_output_drain(
+    thread: Option<std::thread::JoinHandle<Result<(), AgentError>>>,
+) -> Option<AgentError> {
+    match thread?.join() {
+        Ok(Ok(())) => None,
+        Ok(Err(error)) => Some(error),
+        Err(_) => Some(AgentError::State("agent output drain panicked".to_owned())),
+    }
 }
 
 struct CappedWriter {
@@ -1272,6 +1296,120 @@ exit 3
             fs::read_to_string(worktree.join(".harness/runs/run_1/AGENT_OUTPUT.log")).unwrap();
         assert!(log.len() <= 1024);
         assert!(log.ends_with(OUTPUT_TRUNCATION_MARKER));
+    }
+
+    #[test]
+    fn normalized_event_write_failure_is_reported_by_output_drain() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let blocked_parent = temp_dir.path().join("not-a-directory");
+        fs::write(&blocked_parent, "file").unwrap();
+        let event_writer =
+            RunEventWriter::new(blocked_parent.join("RUN_EVENTS.jsonl"), "opencode").unwrap();
+        let output_path = temp_dir.path().join("AGENT_OUTPUT.log");
+        let writer = Arc::new(Mutex::new(
+            CappedWriter::new(&output_path, AGENT_OUTPUT_MAX_BYTES).unwrap(),
+        ));
+
+        let result = spawn_output_drain_with_events(
+            std::io::Cursor::new(b"visible output\n".to_vec()),
+            writer,
+            None,
+            Some(event_writer),
+        )
+        .join()
+        .unwrap();
+
+        assert!(result.is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancellation_kills_controlled_adapter_descendants() {
+        unsafe extern "C" {
+            fn kill(pid: i32, signal: i32) -> i32;
+        }
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let worktree = temp_dir.path().join("worktree");
+        fs::create_dir_all(&worktree).unwrap();
+        let pid_path = temp_dir.path().join("grandchild.pid");
+        let fixture = temp_dir.path().join("cancellable-tree");
+        fs::write(
+            &fixture,
+            r#"#!/usr/bin/env sh
+trap 'exit 0' TERM
+sh -c 'trap "" TERM; sleep 30' &
+echo $! > "$1"
+wait
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&fixture).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&fixture, permissions).unwrap();
+
+        let mut config = config(
+            "custom",
+            vec![fixture.to_str().unwrap(), pid_path.to_str().unwrap()],
+        );
+        config.repo_root = temp_dir.path().to_path_buf();
+        config.state_db = temp_dir.path().join(".symphony/state.db");
+        config.runs_dir = temp_dir.path().join(".harness/runs");
+        let mut prepared = prepared();
+        prepared.worktree = worktree.clone();
+        prepared.harness_db_path = worktree.join("harness.db");
+        prepared.contract_path = config.runs_dir.join("run_1/RUN_CONTRACT.json");
+
+        RunStateStore::new(config.state_db.clone())
+            .add_run(crate::state::NewRunRecord {
+                run_id: "run_1".to_owned(),
+                story_id: "US-046".to_owned(),
+                branch: None,
+                worktree: worktree.clone(),
+                lightweight: false,
+                status: "prepared".to_owned(),
+                result_path: None,
+                sync_status: "not_applied".to_owned(),
+                next_action: "run agent".to_owned(),
+            })
+            .unwrap();
+
+        let state_db = config.state_db.clone();
+        let cancel_pid_path = pid_path.clone();
+        let canceller = std::thread::spawn(move || {
+            let store = RunStateStore::new(state_db);
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while Instant::now() < deadline {
+                if cancel_pid_path.exists()
+                    && store
+                        .show_run("run_1")
+                        .is_ok_and(|run| run.status == "running")
+                {
+                    store.request_cancel("run_1").unwrap();
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            panic!("adapter never entered running state");
+        });
+
+        let error =
+            run_custom_agent_with_timeout(&config, &prepared, Duration::from_secs(10)).unwrap_err();
+        canceller.join().unwrap();
+        assert!(matches!(error, AgentError::Cancelled));
+        let pid: i32 = fs::read_to_string(pid_path)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        let exists = unsafe { kill(pid, 0) == 0 };
+        if exists {
+            unsafe {
+                kill(pid, 9);
+            }
+        }
+        assert!(!exists, "grandchild {pid} survived cancellation");
     }
 
     #[cfg(unix)]
