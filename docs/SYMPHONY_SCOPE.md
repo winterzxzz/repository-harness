@@ -337,10 +337,22 @@ agent:
   adapter: codex
 ```
 
-The Codex adapter speaks the `codex app-server` JSON-RPC protocol. The
-`custom` adapter remains available for one-shot command adapters, but Codex
-should be a named adapter rather than a command-string convention. Harness is
-meant to support multiple coding agents.
+The Codex adapter speaks the `codex app-server` JSON-RPC protocol. OpenCode
+runs headlessly through `opencode run --auto`. Both adapters write normalized,
+sequenced `RUN_EVENTS.jsonl` monitoring evidence while retaining raw
+`APP_SERVER_EVENTS.jsonl` or `AGENT_OUTPUT.log` artifacts. The `custom` adapter
+remains available for one-shot command adapters. Harness is meant to support
+multiple coding agents.
+
+Codex has no absolute wall-clock deadline: terminal protocol state, process
+exit, explicit cancellation, protocol stall, or required-evidence failure ends
+the run. OpenCode and custom commands retain `agent.timeout_minutes`.
+
+Web-started runs persist controller/child ownership, child process-start
+identity, heartbeat, cancellation state, terminal reason, and the authoritative
+Start/Agent/Validation/PR/Review/Sync/Done stage. Controller startup interrupts
+orphaned runs and signals a recorded process group only after identity
+verification. Cancellation preserves the worktree and partial artifacts.
 
 #### 4.6 Finish Protocol
 
@@ -722,7 +734,7 @@ symphony:
 
 agent:
   adapter: codex
-  # Applies to custom one-shot adapters; Codex app-server runs are lifecycle-based.
+  # Applies to OpenCode and custom commands; Codex app-server is lifecycle-based.
   timeout_minutes: 10
 
 pull_request:
@@ -754,7 +766,8 @@ cleanup:
   failed_worktree_retention_days: 7
 ```
 
-The default agent deadline is 10 minutes, and controller identity probes use
+The default OpenCode/custom command deadline is 10 minutes. Codex has no fixed
+deadline and retains its protocol-stall guard. Controller identity probes use
 bounded 300 ms connect, read, and write timeouts. A listener is reusable only
 when `/health` reports the expected service, crate version, and deterministic
 repository-root identity. Foreign listeners and controllers for other checkouts

@@ -44,6 +44,8 @@ Symphony records.
     server binds, with a headless opt-out.
 26. `US-084` - Request changes with a reason and local image evidence from
     completed Ready work.
+27. `US-093` - Observable, cancellable, and recoverable Codex and OpenCode
+    runtime with durable lifecycle stages.
 
 ## Exit Criteria
 
@@ -55,6 +57,10 @@ Symphony records.
 - A user can start exactly one ready task, watch live Codex App Server events,
   review completed artifacts and PR state, approve sync after merge, and see
   the task move to Done.
+- Codex and OpenCode expose normalized incremental run events, and an operator
+  can cancel active work without deleting its partial evidence.
+- Web controller startup safely interrupts stale owned runs so an orphaned lock
+  cannot permanently block later work.
 - A user can delete unwanted Ready work from the active board without hard
   deleting durable Harness history.
 - Codex App Server tasks are not failed by a fixed wall-clock timeout while

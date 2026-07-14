@@ -49,6 +49,8 @@ pub enum WebError {
     Json(#[from] serde_json::Error),
     #[error("requested web asset is outside the web UI dist directory")]
     InvalidAssetPath,
+    #[error("could not stop recorded agent process {pid}; active run lock was preserved")]
+    ProcessTermination { pid: u32 },
 }
 
 pub const DEFAULT_WEB_HOST: &str = "127.0.0.1";
@@ -450,6 +452,15 @@ struct CreateStoryResponse {
 struct EventsResponse {
     run_id: String,
     events: Vec<Value>,
+    last_sequence: u64,
+    reset_required: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct CancelRunResponse {
+    run_id: String,
+    status: String,
+    cancel_requested: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -616,9 +627,123 @@ binding to {} exposes it beyond this machine. Use a loopback host unless you tru
 }
 
 pub fn run_web_server(config: &ResolvedConfig, options: WebServerOptions) -> Result<(), WebError> {
+    reconcile_web_runs(config)?;
     cleanup_best_effort(config);
     let listener = prepare_web_server(options, webbrowser::open)?;
     serve(config, listener)
+}
+
+fn reconcile_web_runs(config: &ResolvedConfig) -> Result<(), WebError> {
+    reconcile_web_runs_with(config, terminate_recorded_process)
+}
+
+fn reconcile_web_runs_with<F>(config: &ResolvedConfig, mut terminate: F) -> Result<(), WebError>
+where
+    F: FnMut(u32, &str) -> Result<(), WebError>,
+{
+    let store = RunStateStore::new(config.state_db.clone());
+    let current_owner = std::process::id();
+    for run in store
+        .list_runs()?
+        .into_iter()
+        .filter(|run| matches!(run.status.as_str(), "prepared" | "running"))
+    {
+        if run.owner_pid == Some(current_owner) {
+            continue;
+        }
+        if let (Some(pid), Some(recorded)) = (run.agent_pid, run.agent_start_identity.as_deref()) {
+            if recorded != "unverified"
+                && crate::state::process_start_identity(pid).as_deref() == Some(recorded)
+            {
+                terminate(pid, recorded)?;
+            }
+        }
+        store.finish_execution(
+            &run.run_id,
+            "interrupted",
+            "controller restarted; previous run interrupted",
+        )?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn terminate_recorded_process(pid: u32, recorded_identity: &str) -> Result<(), WebError> {
+    unsafe extern "C" {
+        fn kill(pid: i32, signal: i32) -> i32;
+    }
+    const SIGTERM: i32 = 15;
+    const SIGKILL: i32 = 9;
+    let process_group = validated_process_group(pid)?;
+    unsafe {
+        kill(process_group, SIGTERM);
+    }
+    if wait_for_recorded_process_exit(pid, recorded_identity, 5) {
+        return Ok(());
+    }
+    unsafe {
+        kill(process_group, SIGKILL);
+    }
+    if wait_for_recorded_process_exit(pid, recorded_identity, 10) {
+        Ok(())
+    } else {
+        Err(WebError::ProcessTermination { pid })
+    }
+}
+
+#[cfg(unix)]
+fn validated_process_group(pid: u32) -> Result<i32, WebError> {
+    let platform_pid = i32::try_from(pid).map_err(|_| WebError::ProcessTermination { pid })?;
+    if platform_pid == 0 {
+        return Err(WebError::ProcessTermination { pid });
+    }
+    Ok(-platform_pid)
+}
+
+#[cfg(windows)]
+fn terminate_recorded_process(pid: u32, recorded_identity: &str) -> Result<(), WebError> {
+    let _ = Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .status();
+    if wait_for_recorded_process_exit(pid, recorded_identity, 50) {
+        Ok(())
+    } else {
+        Err(WebError::ProcessTermination { pid })
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn terminate_recorded_process(pid: u32, _recorded_identity: &str) -> Result<(), WebError> {
+    Err(WebError::ProcessTermination { pid })
+}
+
+fn wait_for_recorded_process_exit(pid: u32, recorded_identity: &str, attempts: usize) -> bool {
+    for attempt in 0..attempts {
+        if crate::state::process_start_identity(pid).as_deref() != Some(recorded_identity) {
+            return true;
+        }
+        #[cfg(unix)]
+        if should_probe_zombie(attempt, attempts) && recorded_process_is_zombie(pid) {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    false
+}
+
+fn should_probe_zombie(attempt: usize, attempts: usize) -> bool {
+    attempt.saturating_add(1) == attempts
+}
+
+#[cfg(unix)]
+fn recorded_process_is_zombie(pid: u32) -> bool {
+    Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .is_some_and(|status| status.trim_start().starts_with('Z'))
 }
 
 const CONNECTION_IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
@@ -774,9 +899,12 @@ fn handle_http_request(
             let story_id = retire_path_story_id(path).unwrap_or_default();
             retire_task_response(config, &story_id)
         }
-        ("GET", path) if events_path_run_id(path).is_some() => {
-            let run_id = events_path_run_id(path).unwrap_or_default();
-            events_response(config, &run_id)
+        ("GET", path) if events_path_parts(path).is_some() => {
+            let (run_id, after) = events_path_parts(path).unwrap();
+            events_response(config, &run_id, after)
+        }
+        ("POST", path) if cancel_path_run_id(path).is_some() => {
+            cancel_run_response(config, &cancel_path_run_id(path).unwrap())
         }
         ("GET", path) if review_path_run_id(path).is_some() => {
             let run_id = review_path_run_id(path).unwrap_or_default();
@@ -816,6 +944,7 @@ fn handle_http_request(
                 || context_path_story_id(path).is_some()
                 || traces_path_query(path).is_some()
                 || events_path_run_id(path).is_some()
+                || cancel_path_run_id(path).is_some()
                 || review_path_run_id(path).is_some()
                 || sync_path_run_id(path).is_some()
                 || pr_merged_path_run_id(path).is_some()
@@ -1019,6 +1148,7 @@ fn sync_run_response(config: &ResolvedConfig, run_id: &str) -> Result<HttpRespon
         );
     }
     let result = sync_changeset(config, run_id)?;
+    RunStateStore::new(config.state_db.clone()).set_stage(run_id, "done")?;
     cleanup_best_effort(config);
     let changes = result
         .changes
@@ -1069,6 +1199,7 @@ fn pr_merged_response(config: &ResolvedConfig, run_id: &str) -> Result<HttpRespo
     match store.show_run(run_id) {
         Ok(run) if run.pr_url.is_some() => {
             store.update_pr_status(run_id, "merged")?;
+            store.set_stage(run_id, "sync")?;
             json_response(
                 200,
                 &PrMergedResponse {
@@ -1302,8 +1433,11 @@ fn spawn_run(config: ResolvedConfig, prepared: PreparedRun) {
 }
 
 fn create_review_pr(config: &ResolvedConfig, run_id: &str) -> Result<(), WebError> {
+    let store = RunStateStore::new(config.state_db.clone());
+    store.set_stage(run_id, "pr")?;
     if pr_creation_disabled(config) {
-        RunStateStore::new(config.state_db.clone()).update_pr_status(run_id, "not_applicable")?;
+        store.update_pr_status(run_id, "not_applicable")?;
+        store.set_stage(run_id, "review")?;
         return Ok(());
     }
     if let Err(error) = create_pr(config, run_id, false) {
@@ -1311,10 +1445,15 @@ fn create_review_pr(config: &ResolvedConfig, run_id: &str) -> Result<(), WebErro
             .record_pr_failure(run_id, &error.to_string())?;
         return Err(error.into());
     }
+    store.set_stage(run_id, "review")?;
     Ok(())
 }
 
-fn events_response(config: &ResolvedConfig, run_id: &str) -> Result<HttpResponse, WebError> {
+fn events_response(
+    config: &ResolvedConfig,
+    run_id: &str,
+    after: Option<u64>,
+) -> Result<HttpResponse, WebError> {
     if !safe_identifier(run_id) {
         return json_response(
             400,
@@ -1323,15 +1462,67 @@ fn events_response(config: &ResolvedConfig, run_id: &str) -> Result<HttpResponse
             },
         );
     }
-    let event_path = config.runs_dir.join(run_id).join("APP_SERVER_EVENTS.jsonl");
-    let events = read_events(&event_path)?;
+    let run_dir = config.runs_dir.join(run_id);
+    let normalized = run_dir.join("RUN_EVENTS.jsonl");
+    let (events, last_sequence, reset_required) = if normalized.exists() {
+        let page = crate::run_events::read_events_after(&normalized, after)?;
+        (
+            page.events
+                .into_iter()
+                .map(|event| serde_json::to_value(event).expect("event serializes"))
+                .collect(),
+            page.last_sequence,
+            page.reset_required,
+        )
+    } else {
+        let events = read_events(&run_dir.join("APP_SERVER_EVENTS.jsonl"))?;
+        let last = events.len() as u64;
+        let events = if let Some(after) = after {
+            events.into_iter().skip(after as usize).collect()
+        } else {
+            events
+        };
+        (events, last, false)
+    };
     json_response(
         200,
         &EventsResponse {
             run_id: run_id.to_owned(),
             events,
+            last_sequence,
+            reset_required,
         },
     )
+}
+
+fn cancel_run_response(config: &ResolvedConfig, run_id: &str) -> Result<HttpResponse, WebError> {
+    let store = RunStateStore::new(config.state_db.clone());
+    match store.show_run(run_id) {
+        Err(StateError::RunNotFound(_)) => json_response(
+            404,
+            &ErrorResponse {
+                error: "run not found".to_owned(),
+            },
+        ),
+        Err(error) => Err(error.into()),
+        Ok(run) if !matches!(run.status.as_str(), "prepared" | "running") => json_response(
+            409,
+            &ErrorResponse {
+                error: format!("run is already {}", run.status),
+            },
+        ),
+        Ok(_) => {
+            store.request_cancel(run_id)?;
+            json_response(
+                202,
+                &CancelRunResponse {
+                    run_id: run_id.to_owned(),
+                    status: "cancelling".to_owned(),
+                    cancel_requested: true,
+                },
+            )
+        }
+    }
 }
 
 fn request_changes_response(
@@ -2232,8 +2423,29 @@ fn traces_path_query(path: &str) -> Option<String> {
 }
 
 fn events_path_run_id(path: &str) -> Option<String> {
-    let path = path.trim_end_matches('/');
+    let path = path.split('?').next()?.trim_end_matches('/');
     let run_id = path.strip_prefix("/api/runs/")?.strip_suffix("/events")?;
+    safe_identifier(run_id).then(|| run_id.to_owned())
+}
+
+fn events_path_parts(path: &str) -> Option<(String, Option<u64>)> {
+    let run_id = events_path_run_id(path)?;
+    let after = path
+        .split_once('?')
+        .and_then(|(_, query)| {
+            query
+                .split('&')
+                .find_map(|pair| pair.strip_prefix("after="))
+        })
+        .map(str::parse)
+        .transpose()
+        .ok()?;
+    Some((run_id, after))
+}
+
+fn cancel_path_run_id(path: &str) -> Option<String> {
+    let path = path.trim_end_matches('/');
+    let run_id = path.strip_prefix("/api/runs/")?.strip_suffix("/cancel")?;
     safe_identifier(run_id).then(|| run_id.to_owned())
 }
 
@@ -2663,48 +2875,42 @@ fn derive_task_flow(items: &[BoardItemResponse], runs: &[RunRecord]) -> Option<T
                 .iter()
                 .find(|item| {
                     item.run_id.as_deref() == Some(run.run_id.as_str())
-                        && matches!(item.board_state.as_str(), "Review" | "Needs Attention")
+                        && matches!(
+                            item.board_state.as_str(),
+                            "Review" | "Needs Attention" | "Done"
+                        )
                 })
                 .map(|item| (item, run))
         })?
     };
 
+    let durable_stage = run.current_stage.as_str();
     let (flow_state, current, failed, message) = match item.board_state.as_str() {
         "In Progress" => (
             "active",
-            "agent",
+            durable_stage,
             None,
             "Agent is implementing the task.".to_owned(),
         ),
         "Review" if run.pr_status == "merged" => (
             "waiting",
-            "sync",
+            durable_stage,
             None,
             "Pull request merged. Waiting for local sync.".to_owned(),
         ),
         "Review" => (
             "waiting",
-            "review",
+            durable_stage,
             None,
             "Agent work is ready for review and merge.".to_owned(),
         ),
-        "Needs Attention" if run.pr_status == "failed" => {
-            ("failed", "pr", Some("pr"), item.reason.clone())
-        }
-        "Needs Attention" => {
-            let validation_failed = item.failure_summary.as_ref().is_some_and(|summary| {
-                let value = format!("{} {}", summary.category, summary.reason).to_lowercase();
-                value.contains("validation")
-                    || value.contains("result")
-                    || value.contains("artifact")
-            });
-            let step = if validation_failed {
-                "validation"
-            } else {
-                "agent"
-            };
-            ("failed", step, Some(step), item.reason.clone())
-        }
+        "Needs Attention" => (
+            "failed",
+            durable_stage,
+            Some(durable_stage),
+            item.reason.clone(),
+        ),
+        "Done" => ("done", "done", None, "Run synced successfully.".to_owned()),
         _ => return None,
     };
     let current_index = TASK_FLOW_STEPS.iter().position(|step| *step == current)?;
@@ -3271,6 +3477,13 @@ mod tests {
             sync_status: "not_applied".to_owned(),
             next_action: "inspect run".to_owned(),
             agent: "codex".to_owned(),
+            owner_pid: None,
+            agent_pid: None,
+            agent_start_identity: None,
+            heartbeat_at: None,
+            current_stage: "start".to_owned(),
+            cancel_requested: false,
+            terminal_reason: None,
         }
     }
 
@@ -3687,9 +3900,37 @@ exit 1
         let response = handle_request(&config, "GET /api/board HTTP/1.1\r\n\r\n").unwrap();
 
         assert!(response.contains(r#""story_id":"US-FLOW""#));
-        assert!(response.contains(r#""current_step":"agent""#));
-        assert!(response.contains(r#""id":"start","state":"complete""#));
-        assert!(response.contains(r#""id":"agent","state":"current""#));
+        assert!(response.contains(r#""current_step":"start""#));
+        assert!(response.contains(r#""id":"start","state":"current""#));
+        assert!(response.contains(r#""id":"agent","state":"pending""#));
+    }
+
+    #[test]
+    fn task_flow_uses_durable_runtime_stage() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = test_config(&temp_dir);
+        seed_story_with_status(&config.harness_db, "US-FLOW", "Active lifecycle", "planned");
+        add_story_run(&config, "run_flow", "US-FLOW", "prepared");
+        let store = RunStateStore::new(config.state_db.clone());
+        store
+            .begin_execution(
+                "run_flow",
+                std::process::id(),
+                std::process::id(),
+                "test",
+                1,
+            )
+            .unwrap();
+
+        let agent = handle_request(&config, "GET /api/board HTTP/1.1\r\n\r\n").unwrap();
+        assert!(agent.contains(r#""current_step":"agent""#));
+        assert!(agent.contains(r#""id":"agent","state":"current""#));
+
+        store.set_stage("run_flow", "validation").unwrap();
+        let validation = handle_request(&config, "GET /api/board HTTP/1.1\r\n\r\n").unwrap();
+        assert!(validation.contains(r#""current_step":"validation""#));
+        assert!(validation.contains(r#""id":"agent","state":"complete""#));
+        assert!(validation.contains(r#""id":"validation","state":"current""#));
     }
 
     #[test]
@@ -3844,6 +4085,168 @@ exit 1
         assert!(response.contains(r#""method":"turn/started""#));
         assert!(response.contains(r#""method":"turn/completed""#));
         assert!(!response.contains("not json"));
+    }
+
+    #[test]
+    fn events_request_supports_sequence_cursor() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = test_config(&temp_dir);
+        let run_dir = config.runs_dir.join("run_1");
+        fs::create_dir_all(&run_dir).unwrap();
+        let writer =
+            crate::run_events::RunEventWriter::new(run_dir.join("RUN_EVENTS.jsonl"), "opencode")
+                .unwrap();
+        writer.append("output", "agent", "first").unwrap();
+        writer.append("output", "agent", "second").unwrap();
+
+        let response = handle_request(
+            &config,
+            "GET /api/runs/run_1/events?after=1 HTTP/1.1\r\n\r\n",
+        )
+        .unwrap();
+        assert!(response.contains(r#""last_sequence":2"#));
+        assert!(!response.contains(r#""message":"first""#));
+        assert!(response.contains(r#""message":"second""#));
+    }
+
+    #[test]
+    fn cancel_request_marks_active_run() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = test_config(&temp_dir);
+        let store = RunStateStore::new(config.state_db.clone());
+        store
+            .add_run(crate::state::NewRunRecord {
+                run_id: "run_cancel".to_owned(),
+                story_id: "US-CANCEL".to_owned(),
+                branch: None,
+                worktree: temp_dir.path().join("worktree"),
+                lightweight: false,
+                status: "running".to_owned(),
+                result_path: None,
+                sync_status: "not_applied".to_owned(),
+                next_action: "running".to_owned(),
+            })
+            .unwrap();
+        let response =
+            handle_request(&config, "POST /api/runs/run_cancel/cancel HTTP/1.1\r\n\r\n").unwrap();
+        assert!(response.starts_with("HTTP/1.1 202 Accepted"));
+        assert!(store.show_run("run_cancel").unwrap().cancel_requested);
+    }
+
+    #[test]
+    fn startup_reconciles_stale_web_run() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = test_config(&temp_dir);
+        let store = RunStateStore::new(config.state_db.clone());
+        store
+            .add_run(crate::state::NewRunRecord {
+                run_id: "run_stale".to_owned(),
+                story_id: "US-STALE".to_owned(),
+                branch: None,
+                worktree: temp_dir.path().join("worktree"),
+                lightweight: false,
+                status: "running".to_owned(),
+                result_path: None,
+                sync_status: "not_applied".to_owned(),
+                next_action: "running".to_owned(),
+            })
+            .unwrap();
+        reconcile_web_runs(&config).unwrap();
+        let run = store.show_run("run_stale").unwrap();
+        assert_eq!(run.status, "interrupted");
+        assert!(store.active_run().unwrap().is_none());
+    }
+
+    #[test]
+    fn startup_reconciliation_keeps_lock_when_recorded_process_cannot_be_stopped() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = test_config(&temp_dir);
+        let store = RunStateStore::new(config.state_db.clone());
+        store
+            .add_run(crate::state::NewRunRecord {
+                run_id: "run_live".to_owned(),
+                story_id: "US-LIVE".to_owned(),
+                branch: None,
+                worktree: temp_dir.path().join("worktree"),
+                lightweight: false,
+                status: "prepared".to_owned(),
+                result_path: None,
+                sync_status: "not_applied".to_owned(),
+                next_action: "running".to_owned(),
+            })
+            .unwrap();
+        let pid = std::process::id();
+        let identity = crate::state::process_start_identity(pid).unwrap();
+        store
+            .begin_execution(
+                "run_live",
+                pid.saturating_add(1),
+                pid,
+                &identity,
+                1_721_000_000,
+            )
+            .unwrap();
+
+        let error = reconcile_web_runs_with(&config, |_, _| {
+            Err(WebError::Io(std::io::Error::other(
+                "injected termination failure",
+            )))
+        })
+        .unwrap_err();
+
+        assert!(error.to_string().contains("injected termination failure"));
+        assert_eq!(store.show_run("run_live").unwrap().status, "running");
+        assert_eq!(store.active_run().unwrap().unwrap().run_id, "run_live");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_group_rejects_zero_and_unrepresentable_pid() {
+        assert!(validated_process_group(0).is_err());
+        assert!(validated_process_group(u32::MAX).is_err());
+    }
+
+    #[test]
+    fn zombie_probe_runs_only_on_last_wait_attempt() {
+        assert!(!should_probe_zombie(0, 5));
+        assert!(!should_probe_zombie(3, 5));
+        assert!(should_probe_zombie(4, 5));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn startup_termination_escalates_when_recorded_process_ignores_term() {
+        use std::os::unix::process::CommandExt;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let ready = temp_dir.path().join("ready");
+        let mut command = Command::new("sh");
+        command
+            .args([
+                "-c",
+                "trap '' TERM; touch \"$1\"; while :; do sleep 1; done",
+                "sh",
+            ])
+            .arg(&ready);
+        command.process_group(0);
+        let mut child = command.spawn().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !ready.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(ready.exists(), "fixture process did not become ready");
+        let pid = child.id();
+        let identity = crate::state::process_start_identity(pid).unwrap();
+
+        let result = terminate_recorded_process(pid, &identity);
+        let status = child.try_wait().unwrap();
+        if status.is_none() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+
+        assert!(result.is_ok());
+        assert!(status.is_some(), "recorded process was still executing");
     }
 
     #[test]

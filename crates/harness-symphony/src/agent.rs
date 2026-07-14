@@ -10,6 +10,8 @@ use thiserror::Error;
 
 use crate::config::ResolvedConfig;
 use crate::run::PreparedRun;
+use crate::run_events::RunEventWriter;
+use crate::state::{process_start_identity, RunStateStore};
 
 #[cfg(not(test))]
 const CODEX_IDLE_RECONCILE_SECONDS: u64 = 30;
@@ -34,6 +36,82 @@ pub enum AgentError {
     Io(#[from] std::io::Error),
     #[error("agent json error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("run cancelled by operator")]
+    Cancelled,
+    #[error("runtime state error: {0}")]
+    State(String),
+}
+
+struct AgentRuntime {
+    store: RunStateStore,
+    run_id: String,
+    events: RunEventWriter,
+    last_heartbeat: Instant,
+}
+
+impl AgentRuntime {
+    fn start(
+        config: &ResolvedConfig,
+        prepared: &PreparedRun,
+        child_pid: u32,
+    ) -> Result<Option<Self>, AgentError> {
+        let store = RunStateStore::new(config.state_db.clone());
+        if store.show_run(&prepared.run_id).is_err() {
+            return Ok(None);
+        }
+        let identity = process_start_identity(child_pid).unwrap_or_else(|| "unverified".to_owned());
+        store
+            .begin_execution(
+                &prepared.run_id,
+                std::process::id(),
+                child_pid,
+                &identity,
+                unix_timestamp(),
+            )
+            .map_err(|error| AgentError::State(error.to_string()))?;
+        let events = RunEventWriter::new(run_events_path(prepared), &config.agent_adapter)?;
+        events.append("lifecycle", "agent", "agent process started")?;
+        Ok(Some(Self {
+            store,
+            run_id: prepared.run_id.clone(),
+            events,
+            last_heartbeat: Instant::now(),
+        }))
+    }
+
+    fn tick(&mut self) -> Result<(), AgentError> {
+        if self
+            .store
+            .cancellation_requested(&self.run_id)
+            .map_err(|error| AgentError::State(error.to_string()))?
+        {
+            self.events
+                .append("warning", "agent", "cancellation requested")?;
+            return Err(AgentError::Cancelled);
+        }
+        if self.last_heartbeat.elapsed() >= Duration::from_secs(1) {
+            self.store
+                .refresh_heartbeat(&self.run_id, unix_timestamp())
+                .map_err(|error| AgentError::State(error.to_string()))?;
+            self.last_heartbeat = Instant::now();
+        }
+        Ok(())
+    }
+}
+
+fn unix_timestamp() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
+fn run_events_path(prepared: &PreparedRun) -> std::path::PathBuf {
+    prepared
+        .contract_path
+        .parent()
+        .unwrap_or(&prepared.worktree)
+        .join("RUN_EVENTS.jsonl")
 }
 
 pub fn run_agent(config: &ResolvedConfig, prepared: &PreparedRun) -> Result<(), AgentError> {
@@ -69,9 +147,8 @@ pub fn agent_adapter_status(config: &ResolvedConfig) -> Result<String, AgentErro
             }
         }
         "codex" => Ok(format!(
-            "codex app-server command: {}; runtime: {} minute(s)",
-            resolved_agent_command(config).join(" "),
-            config.agent_timeout_minutes
+            "codex app-server command: {}; runtime: uncapped (protocol stall guarded)",
+            resolved_agent_command(config).join(" ")
         )),
         "opencode" => Ok(format!(
             "opencode headless command: {}; runtime: {} minute(s)",
@@ -105,12 +182,14 @@ fn run_custom_agent_with_limits(
         return Err(AgentError::MissingCommand);
     }
     let output_log_path = agent_output_path(prepared);
-    let (status, stderr) = run_streaming_command(
+    let (status, stderr) = run_streaming_command_controlled(
         base_command(&command, prepared),
         &output_log_path,
         timeout,
         output_limit,
         config.agent_timeout_minutes,
+        config,
+        prepared,
     )?;
     if status.success() {
         return Ok(());
@@ -128,12 +207,14 @@ fn run_opencode_agent(config: &ResolvedConfig, prepared: &PreparedRun) -> Result
     }
     command.push(agent_prompt(config, prepared));
     let output_log_path = agent_output_path(prepared);
-    let (status, stderr) = run_streaming_command(
+    let (status, stderr) = run_streaming_command_controlled(
         base_command(&command, prepared),
         &output_log_path,
         agent_timeout(config),
         AGENT_OUTPUT_MAX_BYTES,
         config.agent_timeout_minutes,
+        config,
+        prepared,
     )?;
     if status.success() {
         return Ok(());
@@ -151,7 +232,7 @@ fn run_codex_agent(config: &ResolvedConfig, prepared: &PreparedRun) -> Result<()
 fn run_codex_agent_with_timeout(
     config: &ResolvedConfig,
     prepared: &PreparedRun,
-    timeout: Duration,
+    _timeout: Duration,
 ) -> Result<(), AgentError> {
     let command = resolved_agent_command(config);
     if command.is_empty() {
@@ -167,6 +248,7 @@ fn run_codex_agent_with_timeout(
             .stderr(Stdio::piped())
             .spawn()?,
     );
+    let mut runtime = AgentRuntime::start(config, prepared, child.id())?;
 
     let mut stdin = child
         .stdin
@@ -259,13 +341,12 @@ fn run_codex_agent_with_timeout(
     let mut event_count: u64 = 0;
     let mut next_request_id: i64 = 3;
     let mut pending_state_query: Option<i64> = None;
-    let deadline = Instant::now() + timeout;
     loop {
-        if Instant::now() >= deadline {
-            terminate_child(&mut child);
-            return Err(AgentError::Timeout {
-                timeout_minutes: config.agent_timeout_minutes,
-            });
+        if let Some(runtime) = runtime.as_mut() {
+            if let Err(error) = runtime.tick() {
+                terminate_child(&mut child);
+                return Err(error);
+            }
         }
         let line = match line_rx.recv_timeout(Duration::from_millis(250)) {
             Ok(line) => line,
@@ -316,6 +397,21 @@ fn run_codex_agent_with_timeout(
         };
 
         terminate_on_error(append_event_log(&event_log_path, &line), &mut child)?;
+        if let Some(runtime) = runtime.as_ref() {
+            let kind = if line.contains("error") {
+                "error"
+            } else {
+                "message"
+            };
+            terminate_on_error(
+                runtime
+                    .events
+                    .append(kind, "agent", line.clone())
+                    .map(|_| ())
+                    .map_err(AgentError::from),
+                &mut child,
+            )?;
+        }
         let message: Value = terminate_on_error(
             serde_json::from_str(&line).map_err(AgentError::from),
             &mut child,
@@ -479,23 +575,82 @@ fn agent_output_path(prepared: &PreparedRun) -> std::path::PathBuf {
         .join("AGENT_OUTPUT.log")
 }
 
-fn run_streaming_command(
-    command: Command,
+fn run_streaming_command_controlled(
+    mut command: Command,
     output_path: &Path,
     timeout: Duration,
     output_limit: usize,
     timeout_minutes: u32,
+    config: &ResolvedConfig,
+    prepared: &PreparedRun,
 ) -> Result<(ExitStatus, String), AgentError> {
-    run_streaming_command_with_writer(
-        command,
-        output_path,
-        timeout,
-        output_limit,
-        timeout_minutes,
-        CappedWriter::new,
-    )
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    configure_process_group(&mut command);
+    let mut child = ProcessTreeGuard::new(
+        command
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?,
+    );
+    let mut runtime = AgentRuntime::start(config, prepared, child.id())?;
+    let stdout = child.stdout.take().expect("piped stdout missing");
+    let stderr = child.stderr.take().expect("piped stderr missing");
+    let writer = Arc::new(Mutex::new(CappedWriter::new(output_path, output_limit)?));
+    let stderr_text = Arc::new(Mutex::new(Vec::new()));
+    let event_writer = runtime.as_ref().map(|runtime| runtime.events.clone());
+    let mut stdout_thread = Some(spawn_output_drain_with_events(
+        stdout,
+        Arc::clone(&writer),
+        None,
+        event_writer.clone(),
+    ));
+    let mut stderr_thread = Some(spawn_output_drain_with_events(
+        stderr,
+        Arc::clone(&writer),
+        Some(Arc::clone(&stderr_text)),
+        event_writer,
+    ));
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if let Some(error) = finished_output_error(&mut stdout_thread)
+            .or_else(|| finished_output_error(&mut stderr_thread))
+        {
+            child.terminate();
+            join_output_drain(stdout_thread.take());
+            join_output_drain(stderr_thread.take());
+            return Err(error);
+        }
+        if let Some(runtime) = runtime.as_mut() {
+            if let Err(error) = runtime.tick() {
+                child.terminate();
+                join_output_drain(stdout_thread.take());
+                join_output_drain(stderr_thread.take());
+                return Err(error);
+            }
+        }
+        if Instant::now() >= deadline {
+            child.terminate();
+            join_output_drain(stdout_thread.take());
+            join_output_drain(stderr_thread.take());
+            return Err(AgentError::Timeout { timeout_minutes });
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let stdout_error = join_output_drain(stdout_thread.take());
+    let stderr_error = join_output_drain(stderr_thread.take());
+    if let Some(error) = stdout_error.or(stderr_error) {
+        return Err(error);
+    }
+    writer.lock().expect("output writer poisoned").finish()?;
+    Ok((status, captured_stderr(&stderr_text)))
 }
 
+#[cfg(test)]
 fn run_streaming_command_with_writer<F>(
     mut command: Command,
     output_path: &Path,
@@ -546,6 +701,7 @@ where
     Ok((status, stderr))
 }
 
+#[cfg(test)]
 fn spawn_output_drain<R: Read + Send + 'static>(
     mut reader: R,
     writer: Arc<Mutex<CappedWriter>>,
@@ -572,6 +728,62 @@ fn spawn_output_drain<R: Read + Send + 'static>(
                 .write_chunk(&buffer[..count]);
         }
     })
+}
+
+fn spawn_output_drain_with_events<R: Read + Send + 'static>(
+    mut reader: R,
+    writer: Arc<Mutex<CappedWriter>>,
+    capture: Option<Arc<Mutex<Vec<u8>>>>,
+    events: Option<RunEventWriter>,
+) -> std::thread::JoinHandle<Result<(), AgentError>> {
+    std::thread::spawn(move || {
+        let mut buffer = [0_u8; 8192];
+        let mut captured_len = 0;
+        loop {
+            let count = reader.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            if let Some(capture) = &capture {
+                if captured_len < AGENT_OUTPUT_MAX_BYTES {
+                    let mut captured = capture.lock().expect("stderr capture poisoned");
+                    let remaining = AGENT_OUTPUT_MAX_BYTES.saturating_sub(captured.len());
+                    captured.extend_from_slice(&buffer[..count.min(remaining)]);
+                    captured_len = captured.len();
+                }
+            }
+            writer
+                .lock()
+                .expect("output writer poisoned")
+                .write_chunk(&buffer[..count])?;
+            if let Some(events) = &events {
+                let message = String::from_utf8_lossy(&buffer[..count]).trim().to_owned();
+                if !message.is_empty() {
+                    events.append("output", "agent", message)?;
+                }
+            }
+        }
+        Ok(())
+    })
+}
+
+fn finished_output_error(
+    thread: &mut Option<std::thread::JoinHandle<Result<(), AgentError>>>,
+) -> Option<AgentError> {
+    if !thread.as_ref().is_some_and(|thread| thread.is_finished()) {
+        return None;
+    }
+    join_output_drain(thread.take())
+}
+
+fn join_output_drain(
+    thread: Option<std::thread::JoinHandle<Result<(), AgentError>>>,
+) -> Option<AgentError> {
+    match thread?.join() {
+        Ok(Ok(())) => None,
+        Ok(Err(error)) => Some(error),
+        Err(_) => Some(AgentError::State("agent output drain panicked".to_owned())),
+    }
 }
 
 struct CappedWriter {
@@ -1087,6 +1299,121 @@ exit 3
         assert!(log.ends_with(OUTPUT_TRUNCATION_MARKER));
     }
 
+    #[test]
+    fn normalized_event_write_failure_is_reported_by_output_drain() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let blocked_parent = temp_dir.path().join("not-a-directory");
+        let event_writer =
+            RunEventWriter::new(blocked_parent.join("RUN_EVENTS.jsonl"), "opencode").unwrap();
+        fs::remove_dir(&blocked_parent).unwrap();
+        fs::write(&blocked_parent, "file").unwrap();
+        let output_path = temp_dir.path().join("AGENT_OUTPUT.log");
+        let writer = Arc::new(Mutex::new(
+            CappedWriter::new(&output_path, AGENT_OUTPUT_MAX_BYTES).unwrap(),
+        ));
+
+        let result = spawn_output_drain_with_events(
+            std::io::Cursor::new(b"visible output\n".to_vec()),
+            writer,
+            None,
+            Some(event_writer),
+        )
+        .join()
+        .unwrap();
+
+        assert!(result.is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancellation_kills_controlled_adapter_descendants() {
+        unsafe extern "C" {
+            fn kill(pid: i32, signal: i32) -> i32;
+        }
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let worktree = temp_dir.path().join("worktree");
+        fs::create_dir_all(&worktree).unwrap();
+        let pid_path = temp_dir.path().join("grandchild.pid");
+        let fixture = temp_dir.path().join("cancellable-tree");
+        fs::write(
+            &fixture,
+            r#"#!/usr/bin/env sh
+trap 'exit 0' TERM
+sh -c 'trap "" TERM; sleep 30' &
+echo $! > "$1"
+wait
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&fixture).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&fixture, permissions).unwrap();
+
+        let mut config = config(
+            "custom",
+            vec![fixture.to_str().unwrap(), pid_path.to_str().unwrap()],
+        );
+        config.repo_root = temp_dir.path().to_path_buf();
+        config.state_db = temp_dir.path().join(".symphony/state.db");
+        config.runs_dir = temp_dir.path().join(".harness/runs");
+        let mut prepared = prepared();
+        prepared.worktree = worktree.clone();
+        prepared.harness_db_path = worktree.join("harness.db");
+        prepared.contract_path = config.runs_dir.join("run_1/RUN_CONTRACT.json");
+
+        RunStateStore::new(config.state_db.clone())
+            .add_run(crate::state::NewRunRecord {
+                run_id: "run_1".to_owned(),
+                story_id: "US-046".to_owned(),
+                branch: None,
+                worktree: worktree.clone(),
+                lightweight: false,
+                status: "prepared".to_owned(),
+                result_path: None,
+                sync_status: "not_applied".to_owned(),
+                next_action: "run agent".to_owned(),
+            })
+            .unwrap();
+
+        let state_db = config.state_db.clone();
+        let cancel_pid_path = pid_path.clone();
+        let canceller = std::thread::spawn(move || {
+            let store = RunStateStore::new(state_db);
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while Instant::now() < deadline {
+                if cancel_pid_path.exists()
+                    && store
+                        .show_run("run_1")
+                        .is_ok_and(|run| run.status == "running")
+                {
+                    store.request_cancel("run_1").unwrap();
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            panic!("adapter never entered running state");
+        });
+
+        let error =
+            run_custom_agent_with_timeout(&config, &prepared, Duration::from_secs(10)).unwrap_err();
+        canceller.join().unwrap();
+        assert!(matches!(error, AgentError::Cancelled));
+        let pid: i32 = fs::read_to_string(pid_path)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        let exists = unsafe { kill(pid, 0) == 0 };
+        if exists {
+            unsafe {
+                kill(pid, 9);
+            }
+        }
+        assert!(!exists, "grandchild {pid} survived cancellation");
+    }
+
     #[cfg(unix)]
     #[test]
     fn streaming_setup_failure_kills_spawned_process_tree() {
@@ -1250,6 +1577,100 @@ printf '%s\n' '{"method":"turn/completed","params":{"turn":{"status":"completed"
         prepared.contract_path = worktree.join(".harness/runs/run_1/RUN_CONTRACT.json");
 
         run_codex_agent_with_timeout(&config, &prepared, Duration::from_secs(5)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_adapter_observes_cancellation_while_events_are_continuous() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let worktree = temp_dir.path().join("worktree");
+        fs::create_dir_all(&worktree).unwrap();
+        let gate = temp_dir.path().join("cancel-requested");
+        let ready = temp_dir.path().join("event-stream-ready");
+        let fake_server = temp_dir.path().join("busy-codex-app-server");
+        fs::write(
+            &fake_server,
+            r#"#!/usr/bin/env sh
+read initialize
+printf '%s\n' '{"id":0,"result":{}}'
+read initialized
+read thread_start
+printf '%s\n' '{"id":1,"result":{"thread":{"id":"thr_1"}}}'
+read turn_start
+printf '%s\n' '{"id":2,"result":{"turn":{"id":"turn_1"}}}'
+printf '%s\n' '{"method":"turn/started","params":{"turn":{"id":"turn_1"}}}'
+touch "$2"
+while [ ! -f "$1" ]; do
+  printf '%s\n' '{"method":"item/agentMessage/delta","params":{"delta":"busy"}}'
+done
+i=0
+while [ "$i" -lt 1000 ]; do
+  printf '%s\n' '{"method":"item/agentMessage/delta","params":{"delta":"busy"}}'
+  i=$((i + 1))
+done
+printf '%s\n' '{"method":"turn/completed","params":{"turn":{"status":"completed"}}}'
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&fake_server).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&fake_server, permissions).unwrap();
+
+        let mut config = config(
+            "codex",
+            vec![
+                fake_server.to_str().unwrap(),
+                gate.to_str().unwrap(),
+                ready.to_str().unwrap(),
+            ],
+        );
+        config.repo_root = temp_dir.path().to_path_buf();
+        config.state_db = temp_dir.path().join(".symphony/state.db");
+        config.runs_dir = temp_dir.path().join(".harness/runs");
+        let mut prepared = prepared();
+        prepared.worktree = worktree.clone();
+        prepared.harness_db_path = worktree.join("harness.db");
+        prepared.contract_path = config.runs_dir.join("run_1/RUN_CONTRACT.json");
+
+        RunStateStore::new(config.state_db.clone())
+            .add_run(crate::state::NewRunRecord {
+                run_id: "run_1".to_owned(),
+                story_id: "US-046".to_owned(),
+                branch: None,
+                worktree,
+                lightweight: false,
+                status: "prepared".to_owned(),
+                result_path: None,
+                sync_status: "not_applied".to_owned(),
+                next_action: "run agent".to_owned(),
+            })
+            .unwrap();
+
+        let state_db = config.state_db.clone();
+        let cancel_gate = gate.clone();
+        let stream_ready = ready.clone();
+        let canceller = std::thread::spawn(move || {
+            let store = RunStateStore::new(state_db);
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while Instant::now() < deadline {
+                if stream_ready.exists()
+                    && store
+                        .show_run("run_1")
+                        .is_ok_and(|run| run.status == "running")
+                {
+                    store.request_cancel("run_1").unwrap();
+                    fs::write(cancel_gate, "requested").unwrap();
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            panic!("Codex adapter never entered running state");
+        });
+
+        let error =
+            run_codex_agent_with_timeout(&config, &prepared, Duration::from_secs(5)).unwrap_err();
+        canceller.join().unwrap();
+        assert!(matches!(error, AgentError::Cancelled));
     }
 
     #[cfg(unix)]

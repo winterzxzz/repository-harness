@@ -44,9 +44,15 @@ export async function fetchBoard(options?: { signal?: AbortSignal }): Promise<Bo
   return readJson(response, parseBoardResponse, "Board request failed");
 }
 
-export async function fetchEvents(runId: string, options?: { signal?: AbortSignal }): Promise<EventsResponse> {
-  const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/events`, { signal: options?.signal });
+export async function fetchEvents(runId: string, after?: number, options?: { signal?: AbortSignal }): Promise<EventsResponse> {
+  const cursor = after === undefined ? "" : `?after=${after}`;
+  const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/events${cursor}`, { signal: options?.signal });
   return readJson(response, parseEventsResponse, "Events request failed");
+}
+
+export async function postCancelRun(runId: string): Promise<void> {
+  const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" });
+  await readEmptyOrJson(response, "Cancel failed");
 }
 
 export async function fetchReview(runId: string, options?: { signal?: AbortSignal }): Promise<ReviewResponse> {
@@ -274,7 +280,9 @@ function parseEventsResponse(value: unknown): EventsResponse {
   const record = expectRecord(value, "events response");
   return {
     run_id: expectString(record.run_id, "run_id"),
-    events: expectArray(record.events, "events")
+    events: expectArray(record.events, "events"),
+    last_sequence: expectNumber(record.last_sequence, "last_sequence"),
+    reset_required: record.reset_required === true
   };
 }
 

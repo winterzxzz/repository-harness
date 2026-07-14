@@ -83,11 +83,14 @@ export type CreatedStoryResponse = {
   status: string;
 };
 
-export type RunEvent = unknown;
+export type NormalizedRunEvent = { sequence: number; timestamp: string; agent: string; kind: string; stage: string; message: string };
+export type RunEvent = NormalizedRunEvent | unknown;
 
 export type EventsResponse = {
   run_id: string;
   events: RunEvent[];
+  last_sequence: number;
+  reset_required: boolean;
 };
 
 export type ReviewResponse = {

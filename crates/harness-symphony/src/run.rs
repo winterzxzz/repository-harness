@@ -568,32 +568,52 @@ pub fn execute_here_run(config: &ResolvedConfig, story_id: &str) -> Result<Compl
     execute_prepared_run(config, prepare_here_run(config, story_id)?)
 }
 
+fn preserve_primary_error(
+    primary: RunError,
+    finish_result: Result<(), StateError>,
+    context: &str,
+) -> RunError {
+    if let Err(error) = finish_result {
+        eprintln!("warning: failed to persist {context} terminal state: {error}");
+    }
+    primary
+}
+
 pub fn execute_prepared_run(
     config: &ResolvedConfig,
     prepared: PreparedRun,
 ) -> Result<CompletedRun, RunError> {
+    let store = RunStateStore::new(config.state_db.clone());
     if let Err(error) = run_agent(config, &prepared) {
-        RunStateStore::new(config.state_db.clone()).update_status(
-            &prepared.run_id,
-            "failed",
-            "inspect agent command failure",
-        )?;
-        return Err(error.into());
+        let (status, reason) = if matches!(error, AgentError::Cancelled) {
+            ("cancelled", "operator cancelled run")
+        } else {
+            ("failed", "inspect agent command failure")
+        };
+        let primary = error.into();
+        let finish_result = store.finish_execution(&prepared.run_id, status, reason);
+        return Err(preserve_primary_error(
+            primary,
+            finish_result,
+            "agent failure",
+        ));
     }
 
     let run_id = prepared.run_id.clone();
+    store.set_stage(&run_id, "validation")?;
     let completed = match validate_finished_run(config, prepared) {
         Ok(completed) => completed,
         Err(error) => {
-            RunStateStore::new(config.state_db.clone()).update_status(
-                &run_id,
-                "failed",
-                "inspect invalid run result",
-            )?;
-            return Err(error);
+            let finish_result =
+                store.finish_execution(&run_id, "failed", "inspect invalid run result");
+            return Err(preserve_primary_error(
+                error,
+                finish_result,
+                "validation failure",
+            ));
         }
     };
-    RunStateStore::new(config.state_db.clone()).update_status(
+    store.finish_execution(
         &completed.prepared.run_id,
         &completed.outcome,
         "review run result",
@@ -1041,6 +1061,18 @@ struct Story {
 mod tests {
     use super::*;
     use crate::config::ResolvedConfig;
+
+    #[test]
+    fn state_finish_failure_does_not_replace_primary_error() {
+        let primary = RunError::InvalidResult("primary validation failure".to_owned());
+        let returned = preserve_primary_error(
+            primary,
+            Err(StateError::RunNotFound("run_1".to_owned())),
+            "validation",
+        );
+
+        assert!(returned.to_string().contains("primary validation failure"));
+    }
 
     fn config() -> ResolvedConfig {
         ResolvedConfig {

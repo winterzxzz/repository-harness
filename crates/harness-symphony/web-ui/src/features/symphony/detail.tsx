@@ -188,6 +188,7 @@ export function TaskDetail({
   markingMergedRunId,
   retryingPrRunId,
   requestingChangesRunId,
+  cancellingRunId,
   onClose,
   onStart,
   onRetire,
@@ -195,7 +196,8 @@ export function TaskDetail({
   onSync,
   onMarkPrMerged,
   onRetryPr,
-  onRequestChanges
+  onRequestChanges,
+  onCancel
 }: {
   item: BoardItem;
   startingId: string | null;
@@ -205,6 +207,7 @@ export function TaskDetail({
   markingMergedRunId: string | null;
   retryingPrRunId: string | null;
   requestingChangesRunId: string | null;
+  cancellingRunId: string | null;
   onClose: (origin?: HTMLElement) => void;
   onStart: (storyId: string) => Promise<void>;
   onRetire: (item: BoardItem) => Promise<void>;
@@ -213,6 +216,7 @@ export function TaskDetail({
   onMarkPrMerged: (runId: string) => Promise<PrMergedResponse>;
   onRetryPr: (runId: string, action: RecoveryAction) => Promise<PrRetryResponse>;
   onRequestChanges: (runId: string, reason: string, files: File[]) => Promise<RequestChangesResponse>;
+  onCancel: (runId: string) => Promise<void>;
 }) {
   const [events, setEvents] = React.useState<RunEvent[]>([]);
   const [reviewState, setReviewState] = React.useState<ReviewState>({ status: "idle" });
@@ -220,6 +224,7 @@ export function TaskDetail({
   const dialogRef = React.useRef<HTMLElement>(null);
   const review = reviewState.status === "ready" ? reviewState.data : null;
   const reviewRef = React.useRef<ReviewResponse | null>(null);
+  const eventCursorRef = React.useRef<number | undefined>(undefined);
 
   React.useEffect(() => {
     reviewRef.current = review;
@@ -232,6 +237,7 @@ export function TaskDetail({
   React.useEffect(() => {
     setPreservedFailedReview(null);
     setEvents([]);
+    eventCursorRef.current = undefined;
     setReviewState({ status: "idle" });
   }, [item.id]);
 
@@ -249,9 +255,14 @@ export function TaskDetail({
       controller?.abort();
       controller = new AbortController();
       try {
-        const data = await fetchEvents(runId, { signal: controller.signal });
+        const data = await fetchEvents(runId, eventCursorRef.current, { signal: controller.signal });
         if (!cancelled) {
-          setEvents(data.events);
+          setEvents((current) =>
+            data.reset_required || eventCursorRef.current === undefined
+              ? data.events
+              : [...current, ...data.events]
+          );
+          eventCursorRef.current = data.last_sequence;
         }
       } catch (cause) {
         if (!cancelled && !(cause instanceof DOMException && cause.name === "AbortError")) {
@@ -390,6 +401,28 @@ export function TaskDetail({
           <Field label="Children" value={item.children.length > 0 ? item.children.join(", ") : "none"} />
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
+          {item.active_run ? (
+            <Button
+              variant="destructive"
+              disabled={cancellingRunId === item.active_run}
+              onClick={() => {
+                if (
+                  window.confirm(
+                    `Cancel active run ${item.active_run}? Partial artifacts will be retained.`
+                  )
+                ) {
+                  void onCancel(item.active_run!);
+                }
+              }}
+            >
+              {cancellingRunId === item.active_run ? (
+                <Loader2 data-icon="inline-start" className="motion-safe:animate-spin" />
+              ) : (
+                <X data-icon="inline-start" />
+              )}
+              Cancel run
+            </Button>
+          ) : null}
           {executionRecovery ? (
             <Button disabled={isRecovering} title={executionRecovery.confirmation} onClick={() => void onRecover(item.id, executionRecovery)}>
               {isRecovering ? (

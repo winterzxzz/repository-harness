@@ -448,6 +448,13 @@ mod tests {
             sync_status: "not_applied".to_owned(),
             next_action: "review".to_owned(),
             agent: "codex".to_owned(),
+            owner_pid: None,
+            agent_pid: None,
+            agent_start_identity: None,
+            heartbeat_at: None,
+            current_stage: "start".to_owned(),
+            cancel_requested: false,
+            terminal_reason: None,
         }
     }
 

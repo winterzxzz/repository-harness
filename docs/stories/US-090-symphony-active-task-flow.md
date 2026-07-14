@@ -26,7 +26,7 @@ visible in a neutral idle state.
 - The controller renders the seven-step horizontal flow above the existing
   command status rail and board.
 - Idle, active, waiting, failed, and completed presentations come from a
-  normalized backend model derived from existing Symphony state.
+  normalized backend model derived from the run's durable `current_stage`.
 - A failed task marks the lifecycle step that failed and exposes the existing
   concise recovery action without inventing a separate error step.
 - The flow uses text or icons in addition to color, respects reduced motion,
@@ -37,8 +37,9 @@ visible in a neutral idle state.
 ## Design Notes
 
 - API: extend the board response with one normalized `task_flow` object.
-- Domain rules: Symphony state remains authoritative; the frontend does not
-  parse human-readable logs to create lifecycle business state.
+- Domain rules: `run_state.current_stage` is authoritative from Start through
+  Done; failures and cancellations retain the stage where execution stopped.
+  The frontend does not parse human-readable logs to create lifecycle state.
 - UI surfaces: add a focused `ActiveTaskFlow` above `SummaryStrip`.
 - Responsive behavior: preserve one ordered row; allow bounded horizontal
   scrolling instead of wrapping or hiding steps.
