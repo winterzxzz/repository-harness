@@ -2901,7 +2901,7 @@ fn content_type(path: &Path) -> &'static str {
     }
 }
 
-const TASK_FLOW_STEPS: [&str; 7] = [
+const PR_TASK_FLOW_STEPS: [&str; 7] = [
     "start",
     "agent",
     "validation",
@@ -2910,6 +2910,8 @@ const TASK_FLOW_STEPS: [&str; 7] = [
     "sync",
     "done",
 ];
+const LOCAL_REVIEW_TASK_FLOW_STEPS: [&str; 6] =
+    ["start", "agent", "validation", "review", "sync", "done"];
 
 fn derive_task_flow(items: &[BoardItemResponse], runs: &[RunRecord]) -> Option<TaskFlowResponse> {
     let active = items.iter().find(|item| item.active_run.is_some());
@@ -2947,6 +2949,12 @@ fn derive_task_flow(items: &[BoardItemResponse], runs: &[RunRecord]) -> Option<T
             None,
             "Pull request merged. Waiting for local sync.".to_owned(),
         ),
+        "Review" if run.pr_status == "not_applicable" => (
+            "waiting",
+            durable_stage,
+            None,
+            "Agent work is ready for local review.".to_owned(),
+        ),
         "Review" => (
             "waiting",
             durable_stage,
@@ -2962,8 +2970,13 @@ fn derive_task_flow(items: &[BoardItemResponse], runs: &[RunRecord]) -> Option<T
         "Done" => ("done", "done", None, "Run synced successfully.".to_owned()),
         _ => return None,
     };
-    let current_index = TASK_FLOW_STEPS.iter().position(|step| *step == current)?;
-    let steps = TASK_FLOW_STEPS
+    let step_ids: &[&str] = if run.pr_status == "not_applicable" {
+        &LOCAL_REVIEW_TASK_FLOW_STEPS
+    } else {
+        &PR_TASK_FLOW_STEPS
+    };
+    let current_index = step_ids.iter().position(|step| *step == current)?;
+    let steps = step_ids
         .iter()
         .enumerate()
         .map(|(index, id)| TaskFlowStepResponse {
@@ -3942,7 +3955,7 @@ exit 1
     }
 
     #[test]
-    fn board_request_exposes_active_task_flow() {
+    fn derive_task_flow_keeps_pr_branch_for_active_run() {
         let temp_dir = tempfile::tempdir().unwrap();
         let config = test_config(&temp_dir);
         seed_story_with_status(&config.harness_db, "US-FLOW", "Active lifecycle", "planned");
@@ -3954,10 +3967,11 @@ exit 1
         assert!(response.contains(r#""current_step":"start""#));
         assert!(response.contains(r#""id":"start","state":"current""#));
         assert!(response.contains(r#""id":"agent","state":"pending""#));
+        assert!(response.contains(r#""id":"pr","state":"pending""#));
     }
 
     #[test]
-    fn task_flow_uses_durable_runtime_stage() {
+    fn derive_task_flow_uses_durable_runtime_stage() {
         let temp_dir = tempfile::tempdir().unwrap();
         let config = test_config(&temp_dir);
         seed_story_with_status(&config.harness_db, "US-FLOW", "Active lifecycle", "planned");
@@ -4948,7 +4962,7 @@ exit 1
     }
 
     #[test]
-    fn board_shows_completed_local_run_as_review_when_pr_creation_is_disabled() {
+    fn derive_task_flow_uses_local_review_branch_when_pr_is_not_applicable() {
         let temp_dir = tempfile::tempdir().unwrap();
         let mut config = test_config(&temp_dir);
         config.pull_request_create = "disabled".to_owned();
@@ -4974,7 +4988,7 @@ exit 1
                         .to_owned(),
             })
             .unwrap();
-        store.update_pr_status("run_local_board", "failed").unwrap();
+        create_review_pr(&config, "run_local_board").unwrap();
 
         let response = handle_request(&config, "GET /api/board HTTP/1.1\r\n\r\n").unwrap();
 
@@ -4982,6 +4996,9 @@ exit 1
         assert!(response.contains(r#""id":"US-LOCAL-BOARD""#));
         assert!(response.contains(r#""board_state":"Review""#));
         assert!(response.contains("review local run artifacts"));
+        assert!(response.contains(r#""current_step":"review""#));
+        assert!(response.contains(r#""id":"review","state":"current""#));
+        assert!(!response.contains(r#""id":"pr""#));
         assert!(!response.contains("PR creation failure"));
     }
 
