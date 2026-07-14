@@ -34,6 +34,15 @@ describe("deriveForkedTaskFlow", () => {
     expect(result.localLane.steps.map((step) => step.state)).toEqual(["pending"]);
   });
 
+  it("dims both lanes when the flow passed the join without a recorded path", () => {
+    const result = deriveForkedTaskFlow(flow("missing", "done"));
+
+    expect(result.prLane.status).toBe("not-taken");
+    expect(result.localLane.status).toBe("not-taken");
+    expect(result.prLane.steps.every((step) => step.state === null)).toBe(true);
+    expect(result.localLane.steps[0].state).toBeNull();
+  });
+
   it("maps canonical PR states onto the PR lane and dims local review", () => {
     const result = deriveForkedTaskFlow(flow("created"));
 

@@ -17,8 +17,10 @@ const tailIds: TaskFlowStepId[] = ["sync", "done"];
 export function deriveForkedTaskFlow(flow: TaskFlow): ForkedTaskFlow {
   const states = new Map(flow.steps.map((step) => [step.id, step.state]));
   const selected = flow.pr_status === "not_applicable" ? "local" : flow.pr_status === "missing" ? null : "pr";
+  const syncState = states.get("sync");
+  const passedJoin = syncState === "complete" || syncState === "current";
   const laneStatus = (lane: "pr" | "local"): ForkLaneStatus =>
-    selected === null ? "candidate" : selected === lane ? "taken" : "not-taken";
+    selected === null ? (passedJoin ? "not-taken" : "candidate") : selected === lane ? "taken" : "not-taken";
   const laneSteps = (lane: "pr" | "local", ids: TaskFlowStepId[]): ForkLane => {
     const status = laneStatus(lane);
     return {
