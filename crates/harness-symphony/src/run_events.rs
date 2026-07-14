@@ -93,7 +93,7 @@ impl RunEventWriter {
 
 fn should_compact(next_sequence: u64, max_events: usize) -> bool {
     let interval = max_events.clamp(1, COMPACTION_INTERVAL) as u64;
-    next_sequence > max_events as u64 && next_sequence % interval == 0
+    next_sequence > max_events as u64 && next_sequence.is_multiple_of(interval)
 }
 
 pub fn read_events_after(path: &Path, after: Option<u64>) -> std::io::Result<EventPage> {

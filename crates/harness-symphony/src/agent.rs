@@ -1303,9 +1303,10 @@ exit 3
     fn normalized_event_write_failure_is_reported_by_output_drain() {
         let temp_dir = tempfile::tempdir().unwrap();
         let blocked_parent = temp_dir.path().join("not-a-directory");
-        fs::write(&blocked_parent, "file").unwrap();
         let event_writer =
             RunEventWriter::new(blocked_parent.join("RUN_EVENTS.jsonl"), "opencode").unwrap();
+        fs::remove_dir(&blocked_parent).unwrap();
+        fs::write(&blocked_parent, "file").unwrap();
         let output_path = temp_dir.path().join("AGENT_OUTPUT.log");
         let writer = Arc::new(Mutex::new(
             CappedWriter::new(&output_path, AGENT_OUTPUT_MAX_BYTES).unwrap(),
