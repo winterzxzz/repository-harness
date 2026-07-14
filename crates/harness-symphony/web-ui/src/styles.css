@@ -466,7 +466,7 @@ a {
 .task-flow-fork {
   display: grid;
   grid-template-columns: minmax(280px, 3fr) minmax(300px, 3fr) minmax(190px, 2fr);
-  align-items: center;
+  align-items: start;
 }
 
 .task-flow-segment,
