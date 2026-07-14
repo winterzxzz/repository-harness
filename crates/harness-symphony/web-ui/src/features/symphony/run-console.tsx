@@ -85,9 +85,6 @@ export function RunConsole({
           </div>
         )}
       </div>
-      <span className="sr-only" aria-live={live ? "polite" : undefined}>
-        {live && transcript.length > 0 ? `Run console updated. ${transcript.length} transcript entries.` : ""}
-      </span>
     </section>
   );
 }
@@ -101,7 +98,7 @@ function ConsoleRow({ block }: { block: ConsoleBlock }) {
       <article className="grid gap-2 bg-slate-900/75 px-4 py-3 text-sm">
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
           <span className="font-semibold text-sky-300">{block.source}</span>
-          {block.timestamp ? <time>{block.timestamp}</time> : null}
+          {block.timestamp ? <time dateTime={block.timestamp}>{block.timestamp}</time> : null}
         </div>
         <p className="whitespace-pre-wrap break-words font-mono leading-6 text-slate-100">{block.text}</p>
       </article>
@@ -112,7 +109,7 @@ function ConsoleRow({ block }: { block: ConsoleBlock }) {
       <CheckCircle2 aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-emerald-400" />
       <span className="font-semibold text-slate-300">{block.label}</span>
       <span className="min-w-0 flex-1 break-words text-slate-200">{block.text}</span>
-      {block.timestamp ? <time className="text-xs text-slate-500">{block.timestamp}</time> : null}
+      {block.timestamp ? <time className="text-xs text-slate-500" dateTime={block.timestamp}>{block.timestamp}</time> : null}
     </div>
   );
 }

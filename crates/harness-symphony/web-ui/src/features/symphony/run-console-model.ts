@@ -244,7 +244,7 @@ function commandFrom(item: unknown): string | null {
     return stripAnsi(command);
   }
   if (Array.isArray(command)) {
-    return command.filter((part): part is string => typeof part === "string").join(" ");
+    return stripAnsi(command.filter((part): part is string => typeof part === "string").join(" "));
   }
   return null;
 }

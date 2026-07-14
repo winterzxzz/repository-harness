@@ -141,6 +141,25 @@ describe("buildConsoleTranscript", () => {
   });
 });
 
+test("strips ansi sequences from array-form commands", () => {
+  const transcript = buildConsoleTranscript([
+    {
+      method: "item/started",
+      params: {
+        item: {
+          id: "cmd-1",
+          type: "commandExecution",
+          command: ["npm", "[32mtest[0m"]
+        }
+      }
+    }
+  ]);
+
+  expect(transcript).toEqual([
+    expect.objectContaining({ kind: "command", id: "cmd-1", command: "npm test" })
+  ]);
+});
+
 test("stripAnsi removes terminal control sequences", () => {
   expect(stripAnsi("\u001b[1;32mPASS\u001b[0m\r\n")).toBe("PASS\r\n");
 });
