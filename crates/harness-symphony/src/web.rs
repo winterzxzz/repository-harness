@@ -448,6 +448,15 @@ struct CreateStoryResponse {
 struct EventsResponse {
     run_id: String,
     events: Vec<Value>,
+    last_sequence: u64,
+    reset_required: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct CancelRunResponse {
+    run_id: String,
+    status: String,
+    cancel_requested: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -614,9 +623,50 @@ binding to {} exposes it beyond this machine. Use a loopback host unless you tru
 }
 
 pub fn run_web_server(config: &ResolvedConfig, options: WebServerOptions) -> Result<(), WebError> {
+    reconcile_web_runs(config)?;
     let listener = prepare_web_server(options, webbrowser::open)?;
     serve(config, listener)
 }
+
+fn reconcile_web_runs(config: &ResolvedConfig) -> Result<(), WebError> {
+    let store = RunStateStore::new(config.state_db.clone());
+    let current_owner = std::process::id();
+    for run in store
+        .list_runs()?
+        .into_iter()
+        .filter(|run| matches!(run.status.as_str(), "prepared" | "running"))
+    {
+        if run.owner_pid == Some(current_owner) {
+            continue;
+        }
+        if let (Some(pid), Some(recorded)) = (run.agent_pid, run.agent_start_identity.as_deref()) {
+            if recorded != "unverified"
+                && crate::state::process_start_identity(pid).as_deref() == Some(recorded)
+            {
+                terminate_recorded_process(pid);
+            }
+        }
+        store.finish_execution(
+            &run.run_id,
+            "interrupted",
+            "controller restarted; previous run interrupted",
+        )?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn terminate_recorded_process(pid: u32) {
+    unsafe extern "C" {
+        fn kill(pid: i32, signal: i32) -> i32;
+    }
+    unsafe {
+        kill(-(pid as i32), 15);
+    }
+}
+
+#[cfg(not(unix))]
+fn terminate_recorded_process(_pid: u32) {}
 
 const CONNECTION_IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const MAX_CONCURRENT_CONNECTIONS: usize = 64;
@@ -771,9 +821,12 @@ fn handle_http_request(
             let story_id = retire_path_story_id(path).unwrap_or_default();
             retire_task_response(config, &story_id)
         }
-        ("GET", path) if events_path_run_id(path).is_some() => {
-            let run_id = events_path_run_id(path).unwrap_or_default();
-            events_response(config, &run_id)
+        ("GET", path) if events_path_parts(path).is_some() => {
+            let (run_id, after) = events_path_parts(path).unwrap();
+            events_response(config, &run_id, after)
+        }
+        ("POST", path) if cancel_path_run_id(path).is_some() => {
+            cancel_run_response(config, &cancel_path_run_id(path).unwrap())
         }
         ("GET", path) if review_path_run_id(path).is_some() => {
             let run_id = review_path_run_id(path).unwrap_or_default();
@@ -813,6 +866,7 @@ fn handle_http_request(
                 || context_path_story_id(path).is_some()
                 || traces_path_query(path).is_some()
                 || events_path_run_id(path).is_some()
+                || cancel_path_run_id(path).is_some()
                 || review_path_run_id(path).is_some()
                 || sync_path_run_id(path).is_some()
                 || pr_merged_path_run_id(path).is_some()
@@ -1016,6 +1070,7 @@ fn sync_run_response(config: &ResolvedConfig, run_id: &str) -> Result<HttpRespon
         );
     }
     let result = sync_changeset(config, run_id)?;
+    RunStateStore::new(config.state_db.clone()).set_stage(run_id, "done")?;
     let changes = result
         .changes
         .into_iter()
@@ -1047,6 +1102,7 @@ fn pr_merged_response(config: &ResolvedConfig, run_id: &str) -> Result<HttpRespo
     match store.show_run(run_id) {
         Ok(run) if run.pr_url.is_some() => {
             store.update_pr_status(run_id, "merged")?;
+            store.set_stage(run_id, "sync")?;
             json_response(
                 200,
                 &PrMergedResponse {
@@ -1280,8 +1336,11 @@ fn spawn_run(config: ResolvedConfig, prepared: PreparedRun) {
 }
 
 fn create_review_pr(config: &ResolvedConfig, run_id: &str) -> Result<(), WebError> {
+    let store = RunStateStore::new(config.state_db.clone());
+    store.set_stage(run_id, "pr")?;
     if pr_creation_disabled(config) {
-        RunStateStore::new(config.state_db.clone()).update_pr_status(run_id, "not_applicable")?;
+        store.update_pr_status(run_id, "not_applicable")?;
+        store.set_stage(run_id, "review")?;
         return Ok(());
     }
     if let Err(error) = create_pr(config, run_id, false) {
@@ -1289,10 +1348,15 @@ fn create_review_pr(config: &ResolvedConfig, run_id: &str) -> Result<(), WebErro
             .record_pr_failure(run_id, &error.to_string())?;
         return Err(error.into());
     }
+    store.set_stage(run_id, "review")?;
     Ok(())
 }
 
-fn events_response(config: &ResolvedConfig, run_id: &str) -> Result<HttpResponse, WebError> {
+fn events_response(
+    config: &ResolvedConfig,
+    run_id: &str,
+    after: Option<u64>,
+) -> Result<HttpResponse, WebError> {
     if !safe_identifier(run_id) {
         return json_response(
             400,
@@ -1301,15 +1365,67 @@ fn events_response(config: &ResolvedConfig, run_id: &str) -> Result<HttpResponse
             },
         );
     }
-    let event_path = config.runs_dir.join(run_id).join("APP_SERVER_EVENTS.jsonl");
-    let events = read_events(&event_path)?;
+    let run_dir = config.runs_dir.join(run_id);
+    let normalized = run_dir.join("RUN_EVENTS.jsonl");
+    let (events, last_sequence, reset_required) = if normalized.exists() {
+        let page = crate::run_events::read_events_after(&normalized, after)?;
+        (
+            page.events
+                .into_iter()
+                .map(|event| serde_json::to_value(event).expect("event serializes"))
+                .collect(),
+            page.last_sequence,
+            page.reset_required,
+        )
+    } else {
+        let events = read_events(&run_dir.join("APP_SERVER_EVENTS.jsonl"))?;
+        let last = events.len() as u64;
+        let events = if let Some(after) = after {
+            events.into_iter().skip(after as usize).collect()
+        } else {
+            events
+        };
+        (events, last, false)
+    };
     json_response(
         200,
         &EventsResponse {
             run_id: run_id.to_owned(),
             events,
+            last_sequence,
+            reset_required,
         },
     )
+}
+
+fn cancel_run_response(config: &ResolvedConfig, run_id: &str) -> Result<HttpResponse, WebError> {
+    let store = RunStateStore::new(config.state_db.clone());
+    match store.show_run(run_id) {
+        Err(StateError::RunNotFound(_)) => json_response(
+            404,
+            &ErrorResponse {
+                error: "run not found".to_owned(),
+            },
+        ),
+        Err(error) => Err(error.into()),
+        Ok(run) if !matches!(run.status.as_str(), "prepared" | "running") => json_response(
+            409,
+            &ErrorResponse {
+                error: format!("run is already {}", run.status),
+            },
+        ),
+        Ok(_) => {
+            store.request_cancel(run_id)?;
+            json_response(
+                202,
+                &CancelRunResponse {
+                    run_id: run_id.to_owned(),
+                    status: "cancelling".to_owned(),
+                    cancel_requested: true,
+                },
+            )
+        }
+    }
 }
 
 fn request_changes_response(
@@ -2210,8 +2326,29 @@ fn traces_path_query(path: &str) -> Option<String> {
 }
 
 fn events_path_run_id(path: &str) -> Option<String> {
-    let path = path.trim_end_matches('/');
+    let path = path.split('?').next()?.trim_end_matches('/');
     let run_id = path.strip_prefix("/api/runs/")?.strip_suffix("/events")?;
+    safe_identifier(run_id).then(|| run_id.to_owned())
+}
+
+fn events_path_parts(path: &str) -> Option<(String, Option<u64>)> {
+    let run_id = events_path_run_id(path)?;
+    let after = path
+        .split_once('?')
+        .and_then(|(_, query)| {
+            query
+                .split('&')
+                .find_map(|pair| pair.strip_prefix("after="))
+        })
+        .map(str::parse)
+        .transpose()
+        .ok()?;
+    Some((run_id, after))
+}
+
+fn cancel_path_run_id(path: &str) -> Option<String> {
+    let path = path.trim_end_matches('/');
+    let run_id = path.strip_prefix("/api/runs/")?.strip_suffix("/cancel")?;
     safe_identifier(run_id).then(|| run_id.to_owned())
 }
 
@@ -2641,48 +2778,42 @@ fn derive_task_flow(items: &[BoardItemResponse], runs: &[RunRecord]) -> Option<T
                 .iter()
                 .find(|item| {
                     item.run_id.as_deref() == Some(run.run_id.as_str())
-                        && matches!(item.board_state.as_str(), "Review" | "Needs Attention")
+                        && matches!(
+                            item.board_state.as_str(),
+                            "Review" | "Needs Attention" | "Done"
+                        )
                 })
                 .map(|item| (item, run))
         })?
     };
 
+    let durable_stage = run.current_stage.as_str();
     let (flow_state, current, failed, message) = match item.board_state.as_str() {
         "In Progress" => (
             "active",
-            "agent",
+            durable_stage,
             None,
             "Agent is implementing the task.".to_owned(),
         ),
         "Review" if run.pr_status == "merged" => (
             "waiting",
-            "sync",
+            durable_stage,
             None,
             "Pull request merged. Waiting for local sync.".to_owned(),
         ),
         "Review" => (
             "waiting",
-            "review",
+            durable_stage,
             None,
             "Agent work is ready for review and merge.".to_owned(),
         ),
-        "Needs Attention" if run.pr_status == "failed" => {
-            ("failed", "pr", Some("pr"), item.reason.clone())
-        }
-        "Needs Attention" => {
-            let validation_failed = item.failure_summary.as_ref().is_some_and(|summary| {
-                let value = format!("{} {}", summary.category, summary.reason).to_lowercase();
-                value.contains("validation")
-                    || value.contains("result")
-                    || value.contains("artifact")
-            });
-            let step = if validation_failed {
-                "validation"
-            } else {
-                "agent"
-            };
-            ("failed", step, Some(step), item.reason.clone())
-        }
+        "Needs Attention" => (
+            "failed",
+            durable_stage,
+            Some(durable_stage),
+            item.reason.clone(),
+        ),
+        "Done" => ("done", "done", None, "Run synced successfully.".to_owned()),
         _ => return None,
     };
     let current_index = TASK_FLOW_STEPS.iter().position(|step| *step == current)?;
@@ -3249,6 +3380,13 @@ mod tests {
             sync_status: "not_applied".to_owned(),
             next_action: "inspect run".to_owned(),
             agent: "codex".to_owned(),
+            owner_pid: None,
+            agent_pid: None,
+            agent_start_identity: None,
+            heartbeat_at: None,
+            current_stage: "start".to_owned(),
+            cancel_requested: false,
+            terminal_reason: None,
         }
     }
 
@@ -3822,6 +3960,76 @@ exit 1
         assert!(response.contains(r#""method":"turn/started""#));
         assert!(response.contains(r#""method":"turn/completed""#));
         assert!(!response.contains("not json"));
+    }
+
+    #[test]
+    fn events_request_supports_sequence_cursor() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = test_config(&temp_dir);
+        let run_dir = config.runs_dir.join("run_1");
+        fs::create_dir_all(&run_dir).unwrap();
+        let writer =
+            crate::run_events::RunEventWriter::new(run_dir.join("RUN_EVENTS.jsonl"), "opencode")
+                .unwrap();
+        writer.append("output", "agent", "first").unwrap();
+        writer.append("output", "agent", "second").unwrap();
+
+        let response = handle_request(
+            &config,
+            "GET /api/runs/run_1/events?after=1 HTTP/1.1\r\n\r\n",
+        )
+        .unwrap();
+        assert!(response.contains(r#""last_sequence":2"#));
+        assert!(!response.contains(r#""message":"first""#));
+        assert!(response.contains(r#""message":"second""#));
+    }
+
+    #[test]
+    fn cancel_request_marks_active_run() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = test_config(&temp_dir);
+        let store = RunStateStore::new(config.state_db.clone());
+        store
+            .add_run(crate::state::NewRunRecord {
+                run_id: "run_cancel".to_owned(),
+                story_id: "US-CANCEL".to_owned(),
+                branch: None,
+                worktree: temp_dir.path().join("worktree"),
+                lightweight: false,
+                status: "running".to_owned(),
+                result_path: None,
+                sync_status: "not_applied".to_owned(),
+                next_action: "running".to_owned(),
+            })
+            .unwrap();
+        let response =
+            handle_request(&config, "POST /api/runs/run_cancel/cancel HTTP/1.1\r\n\r\n").unwrap();
+        assert!(response.starts_with("HTTP/1.1 202 Accepted"));
+        assert!(store.show_run("run_cancel").unwrap().cancel_requested);
+    }
+
+    #[test]
+    fn startup_reconciles_stale_web_run() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = test_config(&temp_dir);
+        let store = RunStateStore::new(config.state_db.clone());
+        store
+            .add_run(crate::state::NewRunRecord {
+                run_id: "run_stale".to_owned(),
+                story_id: "US-STALE".to_owned(),
+                branch: None,
+                worktree: temp_dir.path().join("worktree"),
+                lightweight: false,
+                status: "running".to_owned(),
+                result_path: None,
+                sync_status: "not_applied".to_owned(),
+                next_action: "running".to_owned(),
+            })
+            .unwrap();
+        reconcile_web_runs(&config).unwrap();
+        let run = store.show_run("run_stale").unwrap();
+        assert_eq!(run.status, "interrupted");
+        assert!(store.active_run().unwrap().is_none());
     }
 
     #[test]

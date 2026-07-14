@@ -10,6 +10,8 @@ use thiserror::Error;
 
 use crate::config::ResolvedConfig;
 use crate::run::PreparedRun;
+use crate::run_events::RunEventWriter;
+use crate::state::{process_start_identity, RunStateStore};
 
 #[cfg(not(test))]
 const CODEX_IDLE_RECONCILE_SECONDS: u64 = 30;
@@ -34,6 +36,82 @@ pub enum AgentError {
     Io(#[from] std::io::Error),
     #[error("agent json error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("run cancelled by operator")]
+    Cancelled,
+    #[error("runtime state error: {0}")]
+    State(String),
+}
+
+struct AgentRuntime {
+    store: RunStateStore,
+    run_id: String,
+    events: RunEventWriter,
+    last_heartbeat: Instant,
+}
+
+impl AgentRuntime {
+    fn start(
+        config: &ResolvedConfig,
+        prepared: &PreparedRun,
+        child_pid: u32,
+    ) -> Result<Option<Self>, AgentError> {
+        let store = RunStateStore::new(config.state_db.clone());
+        if store.show_run(&prepared.run_id).is_err() {
+            return Ok(None);
+        }
+        let identity = process_start_identity(child_pid).unwrap_or_else(|| "unverified".to_owned());
+        store
+            .begin_execution(
+                &prepared.run_id,
+                std::process::id(),
+                child_pid,
+                &identity,
+                unix_timestamp(),
+            )
+            .map_err(|error| AgentError::State(error.to_string()))?;
+        let events = RunEventWriter::new(run_events_path(prepared), &config.agent_adapter)?;
+        events.append("lifecycle", "agent", "agent process started")?;
+        Ok(Some(Self {
+            store,
+            run_id: prepared.run_id.clone(),
+            events,
+            last_heartbeat: Instant::now(),
+        }))
+    }
+
+    fn tick(&mut self) -> Result<(), AgentError> {
+        if self
+            .store
+            .cancellation_requested(&self.run_id)
+            .map_err(|error| AgentError::State(error.to_string()))?
+        {
+            self.events
+                .append("warning", "agent", "cancellation requested")?;
+            return Err(AgentError::Cancelled);
+        }
+        if self.last_heartbeat.elapsed() >= Duration::from_secs(1) {
+            self.store
+                .refresh_heartbeat(&self.run_id, unix_timestamp())
+                .map_err(|error| AgentError::State(error.to_string()))?;
+            self.last_heartbeat = Instant::now();
+        }
+        Ok(())
+    }
+}
+
+fn unix_timestamp() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
+fn run_events_path(prepared: &PreparedRun) -> std::path::PathBuf {
+    prepared
+        .contract_path
+        .parent()
+        .unwrap_or(&prepared.worktree)
+        .join("RUN_EVENTS.jsonl")
 }
 
 pub fn run_agent(config: &ResolvedConfig, prepared: &PreparedRun) -> Result<(), AgentError> {
@@ -69,9 +147,8 @@ pub fn agent_adapter_status(config: &ResolvedConfig) -> Result<String, AgentErro
             }
         }
         "codex" => Ok(format!(
-            "codex app-server command: {}; runtime: {} minute(s)",
-            resolved_agent_command(config).join(" "),
-            config.agent_timeout_minutes
+            "codex app-server command: {}; runtime: uncapped (protocol stall guarded)",
+            resolved_agent_command(config).join(" ")
         )),
         "opencode" => Ok(format!(
             "opencode headless command: {}; runtime: {} minute(s)",
@@ -105,12 +182,14 @@ fn run_custom_agent_with_limits(
         return Err(AgentError::MissingCommand);
     }
     let output_log_path = agent_output_path(prepared);
-    let (status, stderr) = run_streaming_command(
+    let (status, stderr) = run_streaming_command_controlled(
         base_command(&command, prepared),
         &output_log_path,
         timeout,
         output_limit,
         config.agent_timeout_minutes,
+        config,
+        prepared,
     )?;
     if status.success() {
         return Ok(());
@@ -128,12 +207,14 @@ fn run_opencode_agent(config: &ResolvedConfig, prepared: &PreparedRun) -> Result
     }
     command.push(agent_prompt(config, prepared));
     let output_log_path = agent_output_path(prepared);
-    let (status, stderr) = run_streaming_command(
+    let (status, stderr) = run_streaming_command_controlled(
         base_command(&command, prepared),
         &output_log_path,
         agent_timeout(config),
         AGENT_OUTPUT_MAX_BYTES,
         config.agent_timeout_minutes,
+        config,
+        prepared,
     )?;
     if status.success() {
         return Ok(());
@@ -151,7 +232,7 @@ fn run_codex_agent(config: &ResolvedConfig, prepared: &PreparedRun) -> Result<()
 fn run_codex_agent_with_timeout(
     config: &ResolvedConfig,
     prepared: &PreparedRun,
-    timeout: Duration,
+    _timeout: Duration,
 ) -> Result<(), AgentError> {
     let command = resolved_agent_command(config);
     if command.is_empty() {
@@ -167,6 +248,7 @@ fn run_codex_agent_with_timeout(
             .stderr(Stdio::piped())
             .spawn()?,
     );
+    let mut runtime = AgentRuntime::start(config, prepared, child.id())?;
 
     let mut stdin = child
         .stdin
@@ -259,17 +341,16 @@ fn run_codex_agent_with_timeout(
     let mut event_count: u64 = 0;
     let mut next_request_id: i64 = 3;
     let mut pending_state_query: Option<i64> = None;
-    let deadline = Instant::now() + timeout;
     loop {
-        if Instant::now() >= deadline {
-            terminate_child(&mut child);
-            return Err(AgentError::Timeout {
-                timeout_minutes: config.agent_timeout_minutes,
-            });
-        }
         let line = match line_rx.recv_timeout(Duration::from_millis(250)) {
             Ok(line) => line,
             Err(mpsc::RecvTimeoutError::Timeout) => {
+                if let Some(runtime) = runtime.as_mut() {
+                    if let Err(error) = runtime.tick() {
+                        terminate_child(&mut child);
+                        return Err(error);
+                    }
+                }
                 if let Some(status) = child.try_wait()? {
                     let stderr = captured_stderr(&stderr_text);
                     return Err(AgentError::CommandFailed {
@@ -316,6 +397,21 @@ fn run_codex_agent_with_timeout(
         };
 
         terminate_on_error(append_event_log(&event_log_path, &line), &mut child)?;
+        if let Some(runtime) = runtime.as_ref() {
+            let kind = if line.contains("error") {
+                "error"
+            } else {
+                "message"
+            };
+            terminate_on_error(
+                runtime
+                    .events
+                    .append(kind, "agent", line.clone())
+                    .map(|_| ())
+                    .map_err(AgentError::from),
+                &mut child,
+            )?;
+        }
         let message: Value = terminate_on_error(
             serde_json::from_str(&line).map_err(AgentError::from),
             &mut child,
@@ -496,6 +592,66 @@ fn run_streaming_command(
     )
 }
 
+fn run_streaming_command_controlled(
+    mut command: Command,
+    output_path: &Path,
+    timeout: Duration,
+    output_limit: usize,
+    timeout_minutes: u32,
+    config: &ResolvedConfig,
+    prepared: &PreparedRun,
+) -> Result<(ExitStatus, String), AgentError> {
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    configure_process_group(&mut command);
+    let mut child = ProcessTreeGuard::new(
+        command
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?,
+    );
+    let mut runtime = AgentRuntime::start(config, prepared, child.id())?;
+    let stdout = child.stdout.take().expect("piped stdout missing");
+    let stderr = child.stderr.take().expect("piped stderr missing");
+    let writer = Arc::new(Mutex::new(CappedWriter::new(output_path, output_limit)?));
+    let stderr_text = Arc::new(Mutex::new(Vec::new()));
+    let event_writer = runtime.as_ref().map(|runtime| runtime.events.clone());
+    let stdout_thread =
+        spawn_output_drain_with_events(stdout, Arc::clone(&writer), None, event_writer.clone());
+    let stderr_thread = spawn_output_drain_with_events(
+        stderr,
+        Arc::clone(&writer),
+        Some(Arc::clone(&stderr_text)),
+        event_writer,
+    );
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if let Some(runtime) = runtime.as_mut() {
+            if let Err(error) = runtime.tick() {
+                child.terminate();
+                let _ = stdout_thread.join();
+                let _ = stderr_thread.join();
+                return Err(error);
+            }
+        }
+        if Instant::now() >= deadline {
+            child.terminate();
+            let _ = stdout_thread.join();
+            let _ = stderr_thread.join();
+            return Err(AgentError::Timeout { timeout_minutes });
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let _ = stdout_thread.join();
+    let _ = stderr_thread.join();
+    writer.lock().expect("output writer poisoned").finish()?;
+    Ok((status, captured_stderr(&stderr_text)))
+}
+
 fn run_streaming_command_with_writer<F>(
     mut command: Command,
     output_path: &Path,
@@ -570,6 +726,38 @@ fn spawn_output_drain<R: Read + Send + 'static>(
                 .lock()
                 .expect("output writer poisoned")
                 .write_chunk(&buffer[..count]);
+        }
+    })
+}
+
+fn spawn_output_drain_with_events<R: Read + Send + 'static>(
+    mut reader: R,
+    writer: Arc<Mutex<CappedWriter>>,
+    capture: Option<Arc<Mutex<Vec<u8>>>>,
+    events: Option<RunEventWriter>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let mut buffer = [0_u8; 8192];
+        while let Ok(count) = reader.read(&mut buffer) {
+            if count == 0 {
+                break;
+            }
+            if let Some(capture) = &capture {
+                capture
+                    .lock()
+                    .expect("stderr capture poisoned")
+                    .extend_from_slice(&buffer[..count]);
+            }
+            let _ = writer
+                .lock()
+                .expect("output writer poisoned")
+                .write_chunk(&buffer[..count]);
+            if let Some(events) = &events {
+                let message = String::from_utf8_lossy(&buffer[..count]).trim().to_owned();
+                if !message.is_empty() {
+                    let _ = events.append("output", "agent", message);
+                }
+            }
         }
     })
 }

@@ -7,6 +7,7 @@ mod interface;
 mod pr;
 mod retention;
 mod run;
+mod run_events;
 mod state;
 mod sync;
 mod upload;

@@ -41,6 +41,18 @@ export function formatRunLog(events: unknown[], agentName = "Codex"): RunLogEntr
   }
 
   events.forEach((event, index) => {
+    const normalizedMessage = getString(event, ["message"]);
+    const normalizedKind = getString(event, ["kind"]);
+    if (normalizedMessage && normalizedKind) {
+      entries.push({
+        kind: normalizedKind === "output" || normalizedKind === "message" ? "message" : "progress",
+        source: getString(event, ["agent"]) ?? agentName,
+        title: getString(event, ["stage"]) ?? normalizedKind,
+        message: normalizedMessage,
+        timestamp: getString(event, ["timestamp"])
+      });
+      return;
+    }
     const method = getString(event, ["method"]);
     const params = getValue(event, ["params"]);
     const timestamp = timestampFrom(event);

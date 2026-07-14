@@ -44,6 +44,13 @@ pub struct RunRecord {
     pub sync_status: String,
     pub next_action: String,
     pub agent: String,
+    pub owner_pid: Option<u32>,
+    pub agent_pid: Option<u32>,
+    pub agent_start_identity: Option<String>,
+    pub heartbeat_at: Option<i64>,
+    pub current_stage: String,
+    pub cancel_requested: bool,
+    pub terminal_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -186,6 +193,38 @@ impl RunStateStore {
             "agent",
             "ALTER TABLE run_state ADD COLUMN agent TEXT NOT NULL DEFAULT 'codex';",
         )?;
+        for (name, sql) in [
+            (
+                "owner_pid",
+                "ALTER TABLE run_state ADD COLUMN owner_pid INTEGER;",
+            ),
+            (
+                "agent_pid",
+                "ALTER TABLE run_state ADD COLUMN agent_pid INTEGER;",
+            ),
+            (
+                "agent_start_identity",
+                "ALTER TABLE run_state ADD COLUMN agent_start_identity TEXT;",
+            ),
+            (
+                "heartbeat_at",
+                "ALTER TABLE run_state ADD COLUMN heartbeat_at INTEGER;",
+            ),
+            (
+                "current_stage",
+                "ALTER TABLE run_state ADD COLUMN current_stage TEXT NOT NULL DEFAULT 'start';",
+            ),
+            (
+                "cancel_requested",
+                "ALTER TABLE run_state ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0;",
+            ),
+            (
+                "terminal_reason",
+                "ALTER TABLE run_state ADD COLUMN terminal_reason TEXT;",
+            ),
+        ] {
+            ensure_column(&connection, "run_state", name, sql)?;
+        }
         connection.execute_batch("COMMIT;")?;
         Ok(())
     }
@@ -297,12 +336,99 @@ impl RunStateStore {
         Ok(())
     }
 
+    pub fn begin_execution(
+        &self,
+        run_id: &str,
+        owner_pid: u32,
+        agent_pid: u32,
+        agent_start_identity: &str,
+        now: i64,
+    ) -> Result<(), StateError> {
+        self.init()?;
+        let connection = Connection::open(&self.path)?;
+        connection.execute(
+            "UPDATE run_state SET status='running', owner_pid=?2, agent_pid=?3,
+             agent_start_identity=?4, heartbeat_at=?5, current_stage='agent',
+             cancel_requested=0, terminal_reason=NULL, updated_at=datetime('now')
+             WHERE run_id=?1 AND status IN ('prepared','running')",
+            params![
+                run_id,
+                i64::from(owner_pid),
+                i64::from(agent_pid),
+                agent_start_identity,
+                now
+            ],
+        )?;
+        if connection.changes() == 0 {
+            return Err(StateError::RunNotFound(run_id.to_owned()));
+        }
+        Ok(())
+    }
+
+    pub fn refresh_heartbeat(&self, run_id: &str, now: i64) -> Result<(), StateError> {
+        self.init()?;
+        let connection = Connection::open(&self.path)?;
+        connection.execute("UPDATE run_state SET heartbeat_at=?2, updated_at=datetime('now') WHERE run_id=?1 AND status='running'", params![run_id, now])?;
+        if connection.changes() == 0 {
+            return Err(StateError::RunNotFound(run_id.to_owned()));
+        }
+        Ok(())
+    }
+
+    pub fn set_stage(&self, run_id: &str, stage: &str) -> Result<(), StateError> {
+        self.init()?;
+        let connection = Connection::open(&self.path)?;
+        connection.execute(
+            "UPDATE run_state SET current_stage=?2, updated_at=datetime('now') WHERE run_id=?1",
+            params![run_id, stage],
+        )?;
+        if connection.changes() == 0 {
+            return Err(StateError::RunNotFound(run_id.to_owned()));
+        }
+        Ok(())
+    }
+
+    pub fn request_cancel(&self, run_id: &str) -> Result<(), StateError> {
+        self.init()?;
+        let connection = Connection::open(&self.path)?;
+        connection.execute("UPDATE run_state SET cancel_requested=1, updated_at=datetime('now') WHERE run_id=?1 AND status IN ('prepared','running')", params![run_id])?;
+        if connection.changes() == 0 {
+            return Err(StateError::RunNotFound(run_id.to_owned()));
+        }
+        Ok(())
+    }
+
+    pub fn cancellation_requested(&self, run_id: &str) -> Result<bool, StateError> {
+        Ok(self.show_run(run_id)?.cancel_requested)
+    }
+
+    pub fn finish_execution(
+        &self,
+        run_id: &str,
+        status: &str,
+        reason: &str,
+    ) -> Result<(), StateError> {
+        self.init()?;
+        let connection = Connection::open(&self.path)?;
+        connection.execute(
+            "UPDATE run_state SET status=?2, next_action=?3, terminal_reason=?3,
+             owner_pid=NULL, agent_pid=NULL, agent_start_identity=NULL, heartbeat_at=NULL,
+             cancel_requested=0, updated_at=datetime('now') WHERE run_id=?1",
+            params![run_id, status, reason],
+        )?;
+        if connection.changes() == 0 {
+            return Err(StateError::RunNotFound(run_id.to_owned()));
+        }
+        Ok(())
+    }
+
     pub fn list_runs(&self) -> Result<Vec<RunRecord>, StateError> {
         self.init()?;
         let connection = Connection::open(&self.path)?;
         let mut statement = connection.prepare(
             "SELECT run_id, story_id, branch, worktree, lightweight, status, result_path,
-                    pr_url, pr_status, sync_status, next_action, agent
+                    pr_url, pr_status, sync_status, next_action, agent, owner_pid, agent_pid,
+                    agent_start_identity, heartbeat_at, current_stage, cancel_requested, terminal_reason
              FROM run_state
              ORDER BY created_at DESC, run_id DESC;",
         )?;
@@ -317,7 +443,8 @@ impl RunStateStore {
         connection
             .query_row(
                 "SELECT run_id, story_id, branch, worktree, lightweight, status, result_path,
-                        pr_url, pr_status, sync_status, next_action, agent
+                        pr_url, pr_status, sync_status, next_action, agent, owner_pid, agent_pid,
+                        agent_start_identity, heartbeat_at, current_stage, cancel_requested, terminal_reason
                  FROM run_state
                  WHERE run_id=?1;",
                 params![run_id],
@@ -333,7 +460,8 @@ impl RunStateStore {
         connection
             .query_row(
                 "SELECT run_id, story_id, branch, worktree, lightweight, status, result_path,
-                        pr_url, pr_status, sync_status, next_action, agent
+                        pr_url, pr_status, sync_status, next_action, agent, owner_pid, agent_pid,
+                        agent_start_identity, heartbeat_at, current_stage, cancel_requested, terminal_reason
                  FROM run_state
                  WHERE status IN ('prepared', 'running')
                  ORDER BY created_at ASC
@@ -925,6 +1053,13 @@ fn run_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunRecord> {
         sync_status: row.get(9)?,
         next_action: row.get(10)?,
         agent: row.get(11)?,
+        owner_pid: row.get::<_, Option<i64>>(12)?.map(|value| value as u32),
+        agent_pid: row.get::<_, Option<i64>>(13)?.map(|value| value as u32),
+        agent_start_identity: row.get(14)?,
+        heartbeat_at: row.get(15)?,
+        current_stage: row.get(16)?,
+        cancel_requested: row.get::<_, i64>(17)? != 0,
+        terminal_reason: row.get(18)?,
     })
 }
 
@@ -993,6 +1128,13 @@ fn probe_process(pid: u32) -> ProcessProbe {
     }
 }
 
+pub fn process_start_identity(pid: u32) -> Option<String> {
+    match probe_process(pid) {
+        ProcessProbe::Live(identity) => Some(identity),
+        ProcessProbe::Absent | ProcessProbe::Unknown => None,
+    }
+}
+
 #[cfg(windows)]
 fn probe_process(pid: u32) -> ProcessProbe {
     let query = format!(
@@ -1054,6 +1196,37 @@ mod tests {
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].run_id, "run_1");
         assert_eq!(runs[0].story_id, "US-STATE");
+    }
+
+    #[test]
+    fn runtime_control_transitions_are_durable() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = RunStateStore::new(temp_dir.path().join("state.db"));
+        store.add_run(new_record("run_1", "prepared")).unwrap();
+
+        store
+            .begin_execution("run_1", 4100, 4200, "agent-start", 1_721_000_000)
+            .unwrap();
+        let running = store.show_run("run_1").unwrap();
+        assert_eq!(running.status, "running");
+        assert_eq!(running.current_stage, "agent");
+        assert_eq!(running.owner_pid, Some(4100));
+        assert_eq!(running.agent_pid, Some(4200));
+        assert!(!running.cancel_requested);
+
+        store.request_cancel("run_1").unwrap();
+        assert!(store.cancellation_requested("run_1").unwrap());
+        store
+            .finish_execution("run_1", "cancelled", "operator cancelled run")
+            .unwrap();
+        let cancelled = store.show_run("run_1").unwrap();
+        assert_eq!(cancelled.status, "cancelled");
+        assert_eq!(cancelled.owner_pid, None);
+        assert_eq!(cancelled.agent_pid, None);
+        assert_eq!(
+            cancelled.terminal_reason.as_deref(),
+            Some("operator cancelled run")
+        );
     }
 
     #[test]

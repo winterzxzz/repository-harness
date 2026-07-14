@@ -572,28 +572,27 @@ pub fn execute_prepared_run(
     config: &ResolvedConfig,
     prepared: PreparedRun,
 ) -> Result<CompletedRun, RunError> {
+    let store = RunStateStore::new(config.state_db.clone());
     if let Err(error) = run_agent(config, &prepared) {
-        RunStateStore::new(config.state_db.clone()).update_status(
-            &prepared.run_id,
-            "failed",
-            "inspect agent command failure",
-        )?;
+        let (status, reason) = if matches!(error, AgentError::Cancelled) {
+            ("cancelled", "operator cancelled run")
+        } else {
+            ("failed", "inspect agent command failure")
+        };
+        store.finish_execution(&prepared.run_id, status, reason)?;
         return Err(error.into());
     }
 
     let run_id = prepared.run_id.clone();
+    store.set_stage(&run_id, "validation")?;
     let completed = match validate_finished_run(config, prepared) {
         Ok(completed) => completed,
         Err(error) => {
-            RunStateStore::new(config.state_db.clone()).update_status(
-                &run_id,
-                "failed",
-                "inspect invalid run result",
-            )?;
+            store.finish_execution(&run_id, "failed", "inspect invalid run result")?;
             return Err(error);
         }
     };
-    RunStateStore::new(config.state_db.clone()).update_status(
+    store.finish_execution(
         &completed.prepared.run_id,
         &completed.outcome,
         "review run result",

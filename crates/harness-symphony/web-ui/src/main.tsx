@@ -14,6 +14,7 @@ import {
   fetchBoard,
   fetchSettings,
   postCreateGuidedIntake,
+  postCancelRun,
   postMarkPrMerged,
   postRecoverTask,
   postRequestChanges,
@@ -73,6 +74,7 @@ function App() {
   const [markingMergedRunId, setMarkingMergedRunId] = React.useState<string | null>(null);
   const [retryingPrRunId, setRetryingPrRunId] = React.useState<string | null>(null);
   const [requestingChangesRunId, setRequestingChangesRunId] = React.useState<string | null>(null);
+  const [cancellingRunId, setCancellingRunId] = React.useState<string | null>(null);
   const [creatingStory, setCreatingStory] = React.useState(false);
   const [intakeError, setIntakeError] = React.useState<string | null>(null);
   const [defaultAgent, setDefaultAgent] = React.useState<AgentId>("codex");
@@ -302,6 +304,17 @@ function App() {
     },
     [loadBoard, toast]
   );
+
+  const cancelRun = React.useCallback(async (runId: string) => {
+    setCancellingRunId(runId);
+    try {
+      await postCancelRun(runId);
+      toast.add({ kind: "success", title: "Cancellation requested", description: `Run ${runId} is stopping.` });
+      await loadBoard();
+    } catch (cause) {
+      toast.add({ kind: "error", title: "Cancel failed", description: cause instanceof Error ? cause.message : "Cancel failed" });
+    } finally { setCancellingRunId(null); }
+  }, [loadBoard, toast]);
 
   const markPrMerged = React.useCallback(
     async (runId: string): Promise<PrMergedResponse> => {
@@ -573,6 +586,7 @@ function App() {
                 markingMergedRunId={markingMergedRunId}
                 retryingPrRunId={retryingPrRunId}
                 requestingChangesRunId={requestingChangesRunId}
+                cancellingRunId={cancellingRunId}
                 onClose={closeSelectedTask}
                 onStart={startTask}
                 onRetire={retireTask}
@@ -581,6 +595,7 @@ function App() {
                 onMarkPrMerged={markPrMerged}
                 onRetryPr={retryPr}
                 onRequestChanges={requestChanges}
+                onCancel={cancelRun}
               />
             </TaskDetailOverlay>
           ) : null}
