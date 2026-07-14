@@ -39,6 +39,16 @@ function taskFlow(current: (typeof flowStepIds)[number] = "agent") {
   };
 }
 
+function localReviewTaskFlow() {
+  const flow = taskFlow("review");
+  return {
+    ...flow,
+    state: "waiting",
+    message: "Agent work is ready for local review.",
+    steps: flow.steps.filter((step) => step.id !== "pr")
+  };
+}
+
 async function expectNoHorizontalOverflow(locator: Locator, label: string) {
   const overflow = await locator.evaluate(
     (element) => Math.ceil(element.scrollWidth) - Math.ceil(element.clientWidth)
@@ -155,6 +165,26 @@ test("active task lifecycle marks the current step", async ({ page }) => {
   await expect(flow).toContainText("US-090");
   await expect(flow.getByRole("listitem").nth(1)).toHaveAttribute("aria-current", "step");
   await expect(flow.getByText("Agent is implementing the task.")).toBeVisible();
+});
+
+test("PR-less task lifecycle omits pull request and uses local review wording", async ({ page }) => {
+  const item = boardItem("US-097", "Branched Task Flow", "Review");
+  item.run_id = "run_us_097";
+  await page.route("**/api/board", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ items: [item], task_flow: localReviewTaskFlow() })
+    });
+  });
+
+  await page.goto("/");
+
+  const flow = page.getByRole("region", { name: "Active task lifecycle" });
+  await expect(flow.getByRole("listitem")).toHaveCount(6);
+  await expect(flow.getByText("Pull request", { exact: true })).toHaveCount(0);
+  await expect(flow.getByText("Review", { exact: true })).toBeVisible();
+  await expect(flow.getByText("Review & merge", { exact: true })).toHaveCount(0);
+  await expect(flow.getByRole("listitem").nth(3)).toHaveAttribute("aria-current", "step");
 });
 
 test("status rail bounds a long active run identifier", async ({ page }) => {

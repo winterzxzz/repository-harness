@@ -197,7 +197,9 @@ function parseBoardResponse(value: unknown): BoardResponse {
   };
 }
 
-const taskFlowStepIds: TaskFlowStepId[] = ["start", "agent", "validation", "pr", "review", "sync", "done"];
+const prTaskFlowStepIds: TaskFlowStepId[] = ["start", "agent", "validation", "pr", "review", "sync", "done"];
+const localReviewTaskFlowStepIds: TaskFlowStepId[] = ["start", "agent", "validation", "review", "sync", "done"];
+const taskFlowStepIds = [prTaskFlowStepIds, localReviewTaskFlowStepIds];
 const taskFlowStepStates: TaskFlowStepState[] = ["pending", "current", "complete", "failed"];
 const taskFlowStates: TaskFlowState[] = ["active", "waiting", "failed", "done"];
 
@@ -206,16 +208,18 @@ function parseTaskFlow(value: unknown): TaskFlow {
   const state = expectString(record.state, "task_flow.state") as TaskFlowState;
   if (!taskFlowStates.includes(state)) throw new Error("task_flow.state is invalid");
   const currentStep = parseNullableString(record.current_step, "task_flow.current_step") as TaskFlowStepId | null;
-  if (currentStep !== null && !taskFlowStepIds.includes(currentStep)) throw new Error("task_flow.current_step is invalid");
+  if (currentStep !== null && !prTaskFlowStepIds.includes(currentStep)) throw new Error("task_flow.current_step is invalid");
   const steps = expectArray(record.steps, "task_flow.steps").map((value, index) => {
     const step = expectRecord(value, `task_flow.steps[${index}]`);
     const id = expectString(step.id, `task_flow.steps[${index}].id`) as TaskFlowStepId;
     const stepState = expectString(step.state, `task_flow.steps[${index}].state`) as TaskFlowStepState;
-    if (id !== taskFlowStepIds[index]) throw new Error("task_flow.steps must use canonical order");
     if (!taskFlowStepStates.includes(stepState)) throw new Error(`task_flow.steps[${index}].state is invalid`);
     return { id, state: stepState };
   });
-  if (steps.length !== taskFlowStepIds.length) throw new Error("task_flow.steps must contain seven steps");
+  const usesCanonicalBranch = taskFlowStepIds.some(
+    (branch) => branch.length === steps.length && branch.every((id, index) => steps[index]?.id === id)
+  );
+  if (!usesCanonicalBranch) throw new Error("task_flow.steps must use a canonical branch");
   return {
     story_id: expectString(record.story_id, "task_flow.story_id"),
     title: expectString(record.title, "task_flow.title"),

@@ -5,18 +5,18 @@ import { cn } from "../../lib/utils";
 import type { RecoveryAction, TaskFlow, TaskFlowStepId, TaskFlowStepState } from "./types";
 
 const stepIds: TaskFlowStepId[] = ["start", "agent", "validation", "pr", "review", "sync", "done"];
-const labels: Record<TaskFlowStepId, string> = {
+const labels: Record<Exclude<TaskFlowStepId, "review">, string> = {
   start: "Start",
   agent: "Agent",
   validation: "Validation",
   pr: "Pull request",
-  review: "Review & merge",
   sync: "Sync",
   done: "Done"
 };
 
 export function ActiveTaskFlow({ flow, stale = false, onRecover }: { flow: TaskFlow | null; stale?: boolean; onRecover?: (storyId: string, action: RecoveryAction) => void }) {
   const steps = flow?.steps ?? stepIds.map((id) => ({ id, state: "pending" as const }));
+  const reviewLabel = steps.some((step) => step.id === "pr") ? "Review & merge" : "Review";
   return (
     <Card className="overflow-hidden rounded-xl bg-card p-3 lg:p-4">
       <section aria-label="Active task lifecycle">
@@ -41,7 +41,7 @@ export function ActiveTaskFlow({ flow, stale = false, onRecover }: { flow: TaskF
         <div className="scrollbar-none mt-3 overflow-x-auto pb-1">
           <ol className="flex min-w-[760px] items-start" aria-label="Task lifecycle steps">
             {steps.map((step, index) => (
-              <FlowStep key={step.id} id={step.id} state={step.state} last={index === steps.length - 1} />
+              <FlowStep key={step.id} id={step.id} state={step.state} label={step.id === "review" ? reviewLabel : labels[step.id]} last={index === steps.length - 1} />
             ))}
           </ol>
         </div>
@@ -51,7 +51,7 @@ export function ActiveTaskFlow({ flow, stale = false, onRecover }: { flow: TaskF
   );
 }
 
-function FlowStep({ id, state, last }: { id: TaskFlowStepId; state: TaskFlowStepState; last: boolean }) {
+function FlowStep({ id, state, label, last }: { id: TaskFlowStepId; state: TaskFlowStepState; label: string; last: boolean }) {
   const Icon = state === "complete" ? Check : state === "failed" ? AlertTriangle : state === "current" ? Loader2 : Circle;
   return (
     <li
@@ -68,7 +68,7 @@ function FlowStep({ id, state, last }: { id: TaskFlowStepId; state: TaskFlowStep
       )}>
         <Icon className={cn("size-3.5", state === "current" && "motion-safe:animate-spin")} />
       </span>
-      <span className={cn("mt-1.5 text-[11px] font-semibold", state === "current" ? "text-blue-700" : state === "failed" ? "text-destructive" : state === "complete" ? "text-emerald-700" : "text-muted-foreground")}>{labels[id]}</span>
+      <span className={cn("mt-1.5 text-[11px] font-semibold", state === "current" ? "text-blue-700" : state === "failed" ? "text-destructive" : state === "complete" ? "text-emerald-700" : "text-muted-foreground")}>{label}</span>
       <span className="sr-only">{state}</span>
     </li>
   );
