@@ -477,65 +477,44 @@ a {
 
 .task-flow-lanes {
   position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding-inline: 18px;
+  height: 104px;
 }
 
-.task-flow-lanes::before,
-.task-flow-lanes::after {
+.task-flow-lane--pr,
+.task-flow-lane--local {
   position: absolute;
-  top: 30px;
-  bottom: 33px;
-  width: 18px;
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-  content: "";
-}
-
-.task-flow-lanes::before {
   left: 0;
-  border-left: 1px solid var(--border);
-  border-radius: 10px 0 0 10px;
-}
-
-.task-flow-lanes::after {
   right: 0;
-  border-right: 1px solid var(--border);
-  border-radius: 0 10px 10px 0;
 }
 
-.task-flow-lane {
-  position: relative;
-  padding-top: 18px;
-}
+.task-flow-lane--pr { top: 0; }
+.task-flow-lane--local { top: 46px; }
 
-.task-flow-lane__heading {
+.task-flow-bypass {
   position: absolute;
-  inset: 0 4px auto;
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  color: var(--muted-foreground);
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 1;
+  top: -34px;
+  bottom: auto;
+  left: 4px;
+  right: 4px;
+  height: 46px;
+  border-left: 1.5px solid var(--border);
+  border-right: 1.5px solid var(--border);
+  border-bottom: 1.5px solid var(--border);
+  border-radius: 0 0 16px 16px;
 }
 
-.task-flow-lane__heading span:last-child {
-  font-weight: 500;
+.task-flow-bypass--active {
+  border-color: #10b981;
 }
 
-.task-flow-lane--not-taken {
-  opacity: 0.48;
+.task-flow-lane--local ol {
+  padding-inline: 16px;
 }
 
 .task-flow-junction {
   position: absolute;
-  top: calc(50% - 2px);
+  top: 9px;
   z-index: 1;
-  size: 7px;
   width: 7px;
   height: 7px;
   border-radius: 9999px;
@@ -543,17 +522,19 @@ a {
   background: var(--card);
 }
 
-.task-flow-junction--left { left: -3px; }
-.task-flow-junction--right { right: -3px; }
+.task-flow-junction--left { left: 1px; }
+.task-flow-junction--right { right: 1px; }
 
-.task-flow-lanes--entered::before,
 .task-flow-lanes--entered .task-flow-junction--left {
   border-color: #10b981;
 }
 
-.task-flow-lanes--exited::after,
 .task-flow-lanes--exited .task-flow-junction--right {
   border-color: #10b981;
+}
+
+.task-flow-lane--not-taken {
+  opacity: 0.45;
 }
 
 /* ===========================================

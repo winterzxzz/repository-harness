@@ -104,20 +104,28 @@ function FlowSegment({
 
 function FlowLane({ name, lane }: { name: "Pull request" | "Local review"; lane: ForkLane }) {
   const statusLabel = lane.status === "not-taken" ? "not taken" : lane.status;
+  const local = name === "Local review";
+  const bypassTone =
+    lane.status === "taken" && lane.steps.some((step) => step.state === "complete" || step.state === "current");
   return (
-    <div className={cn("task-flow-lane", lane.status === "not-taken" && "task-flow-lane--not-taken")}>
-      <div className="task-flow-lane__heading" aria-hidden="true">
-        <span>{name} lane</span>
-        <span>{statusLabel}</span>
-      </div>
+    <div
+      className={cn(
+        "task-flow-lane",
+        local ? "task-flow-lane--local" : "task-flow-lane--pr",
+        lane.status === "not-taken" && "task-flow-lane--not-taken"
+      )}
+    >
+      {local ? (
+        <span aria-hidden="true" className={cn("task-flow-bypass", bypassTone && "task-flow-bypass--active")} />
+      ) : null}
       <ol aria-label={`${name} lane, ${statusLabel}`} data-lane-status={lane.status}>
         {lane.steps.map((step) => (
           <FlowStep
             key={step.id}
             step={step}
             label={name === "Pull request" && step.id === "review" ? "Review & merge" : labels[step.id]}
-            connectLeft
-            connectRight
+            connectLeft={!local}
+            connectRight={!local}
           />
         ))}
       </ol>
