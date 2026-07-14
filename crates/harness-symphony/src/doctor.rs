@@ -440,6 +440,7 @@ mod tests {
             compact_keep_last: 50,
             keep_failed_worktrees: true,
             cleanup_after_sync: false,
+            failed_worktree_retention_days: 7,
             auto_source: "harness-db".to_owned(),
             auto_poll_interval_seconds: 30,
             auto_max_attempts: 3,

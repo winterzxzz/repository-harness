@@ -1,6 +1,7 @@
 mod agent;
 mod auto;
 mod changeset;
+mod cleanup;
 mod config;
 mod doctor;
 mod interface;

@@ -57,6 +57,7 @@ Both installers must idempotently merge these rules into the target
 ```gitignore
 .symphony/
 .worktrees/
+!.harness/
 .harness/*
 !.harness/changesets/
 !.harness/changesets/*.changeset.jsonl

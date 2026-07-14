@@ -9,8 +9,10 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::changeset::{render_changeset, render_markdown, ChangesetError};
+use crate::cleanup::cleanup_runtime;
 use crate::config::ResolvedConfig;
 use crate::pr::{create_pr, PrError};
+use crate::retention::compact_runs;
 use crate::run::{
     execute_prepared_run, prepare_replacement_run, prepare_run, FeedbackFile, PreparedRun,
     ReplacementFeedback, RunContract, RunError,
@@ -626,6 +628,7 @@ binding to {} exposes it beyond this machine. Use a loopback host unless you tru
 
 pub fn run_web_server(config: &ResolvedConfig, options: WebServerOptions) -> Result<(), WebError> {
     reconcile_web_runs(config)?;
+    cleanup_best_effort(config);
     let listener = prepare_web_server(options, webbrowser::open)?;
     serve(config, listener)
 }
@@ -1133,6 +1136,7 @@ fn sync_run_response(config: &ResolvedConfig, run_id: &str) -> Result<HttpRespon
     }
     let result = sync_changeset(config, run_id)?;
     RunStateStore::new(config.state_db.clone()).set_stage(run_id, "done")?;
+    cleanup_best_effort(config);
     let changes = result
         .changes
         .into_iter()
@@ -1149,6 +1153,24 @@ fn sync_run_response(config: &ResolvedConfig, run_id: &str) -> Result<HttpRespon
             changes,
         },
     )
+}
+
+fn cleanup_best_effort(config: &ResolvedConfig) {
+    match cleanup_runtime(config, false) {
+        Ok(result) => {
+            for item in result.items.iter().filter(|item| item.error.is_some()) {
+                eprintln!(
+                    "warning: Symphony cleanup skipped {}: {}",
+                    item.path.display(),
+                    item.error.as_deref().unwrap_or("unknown error")
+                );
+            }
+        }
+        Err(error) => eprintln!("warning: Symphony cleanup failed: {error}"),
+    }
+    if let Err(error) = compact_runs(config, config.compact_keep_last) {
+        eprintln!("warning: Symphony run compaction failed: {error}");
+    }
 }
 
 fn pr_merged_response(config: &ResolvedConfig, run_id: &str) -> Result<HttpResponse, WebError> {
@@ -4855,7 +4877,10 @@ exit 1
     #[test]
     fn sync_request_applies_only_requested_run_changeset() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let config = test_config(&temp_dir);
+        let mut config = test_config(&temp_dir);
+        config.cleanup_after_sync = true;
+        let run_worktree = config.worktrees_dir.join("run_sync");
+        fs::create_dir_all(&run_worktree).unwrap();
         fs::create_dir_all(&config.changeset_directory).unwrap();
         fs::create_dir_all(temp_dir.path().join("scripts/bin")).unwrap();
         fs::write(
@@ -4886,7 +4911,7 @@ exit 1
                 run_id: "run_sync".to_owned(),
                 story_id: "US-SYNC".to_owned(),
                 branch: Some("symphony/run_sync".to_owned()),
-                worktree: temp_dir.path().join("worktree"),
+                worktree: run_worktree.clone(),
                 lightweight: false,
                 status: "completed".to_owned(),
                 result_path: Some(PathBuf::from(".harness/runs/run_sync/RESULT.json")),
@@ -4908,6 +4933,7 @@ exit 1
         let args = fs::read_to_string(temp_dir.path().join("sync-args.log")).unwrap();
         assert!(args.contains(".harness/changesets/run_sync.changeset.jsonl"));
         assert!(!args.contains("run_other.changeset.jsonl"));
+        assert!(!run_worktree.exists());
     }
 
     #[test]

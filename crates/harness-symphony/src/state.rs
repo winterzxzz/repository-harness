@@ -54,6 +54,16 @@ pub struct RunRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CleanupRunRecord {
+    pub run_id: String,
+    pub worktree: PathBuf,
+    pub lightweight: bool,
+    pub status: String,
+    pub sync_status: String,
+    pub updated_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueueRecord {
     pub story_id: String,
     pub source: String,
@@ -433,6 +443,28 @@ impl RunStateStore {
              ORDER BY created_at DESC, run_id DESC;",
         )?;
         let rows = statement.query_map([], run_from_row)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(StateError::from)
+    }
+
+    pub fn list_cleanup_runs(&self) -> Result<Vec<CleanupRunRecord>, StateError> {
+        self.init()?;
+        let connection = Connection::open(&self.path)?;
+        let mut statement = connection.prepare(
+            "SELECT run_id, worktree, lightweight, status, sync_status,
+                    CAST(strftime('%s', updated_at) AS INTEGER)
+             FROM run_state ORDER BY updated_at ASC, run_id ASC;",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(CleanupRunRecord {
+                run_id: row.get(0)?,
+                worktree: PathBuf::from(row.get::<_, String>(1)?),
+                lightweight: row.get::<_, i64>(2)? != 0,
+                status: row.get(3)?,
+                sync_status: row.get(4)?,
+                updated_at_epoch: row.get(5)?,
+            })
+        })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .map_err(StateError::from)
     }
@@ -1241,6 +1273,28 @@ mod tests {
             .unwrap();
 
         assert!(store.cancellation_requested("run_1").unwrap());
+    }
+
+    #[test]
+    fn lists_cleanup_run_state_with_update_age() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db = temp_dir.path().join(".symphony/state.db");
+        let store = RunStateStore::new(db.clone());
+        store.add_run(new_record("run_old", "failed")).unwrap();
+        Connection::open(db)
+            .unwrap()
+            .execute(
+                "UPDATE run_state SET updated_at=datetime('now', '-8 days') WHERE run_id='run_old';",
+                [],
+            )
+            .unwrap();
+
+        let runs = store.list_cleanup_runs().unwrap();
+
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].run_id, "run_old");
+        assert_eq!(runs[0].status, "failed");
+        assert!(runs[0].updated_at_epoch > 0);
     }
 
     #[test]

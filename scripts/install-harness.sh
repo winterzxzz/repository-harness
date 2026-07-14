@@ -107,7 +107,7 @@ copy_file() {
   local relative="$1"
   local target="$TARGET_DIR/$relative"
 
-  if [ "$relative" = ".gitignore" ] && [ -e "$target" ] && [ "$FORCE" -eq 0 ]; then
+  if [ "$relative" = ".gitignore" ] && [ -e "$target" ]; then
     merge_gitignore "$target"
     return
   fi
@@ -154,18 +154,27 @@ copy_file() {
 
 merge_gitignore() {
   local target="$1"
-  local marker="# Harness durable layer"
-local rules="harness.db
+  local rules="# Harness durable layer
+harness.db
 harness.db-wal
 harness.db-shm
 scripts/bin/harness-cli
-scripts/bin/harness-cli.exe"
+scripts/bin/harness-cli.exe
+.symphony/
+.worktrees/
+!.harness/
+.harness/*
+!.harness/changesets/
+!.harness/changesets/*.changeset.jsonl"
+  local missing=""
+  while IFS= read -r rule || [ -n "$rule" ]; do
+    grep -Fxq "$rule" "$target" || missing="${missing}${rule}
+"
+  done <<EOF
+$rules
+EOF
 
-if grep -Fxq "harness.db" "$target" &&
-   grep -Fxq "harness.db-wal" "$target" &&
-   grep -Fxq "harness.db-shm" "$target" &&
-   grep -Fxq "scripts/bin/harness-cli" "$target" &&
-   grep -Fxq "scripts/bin/harness-cli.exe" "$target"; then
+  if [ -z "$missing" ]; then
     log "skip     .gitignore (harness rules already present)"
     SKIPPED=$((SKIPPED + 1))
     return
@@ -177,7 +186,7 @@ if grep -Fxq "harness.db" "$target" &&
     if [ -s "$target" ]; then
       printf '\n' >> "$target"
     fi
-    printf '%s\n%s\n' "$marker" "$rules" >> "$target"
+    printf '%s' "$missing" >> "$target"
     log "updated  .gitignore (appended harness rules)"
   fi
   UPDATED=$((UPDATED + 1))

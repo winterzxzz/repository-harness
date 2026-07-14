@@ -71,4 +71,17 @@ and runtime lifecycle contract.
 
 ## Evidence
 
-Add implementation and validation evidence after execution.
+- Added operational cleanup defaults, a seven-day failed-worktree retention,
+  guarded terminal/orphan worktree cleanup, dry-run reporting, and terminal-only
+  run evidence compaction.
+- Added automatic best-effort cleanup at run/auto/Web startup and after
+  successful CLI or Web sync; cleanup errors do not reverse sync success.
+- Updated Bash and PowerShell installer merge rules for `.symphony/`,
+  `.worktrees/`, and local `.harness/` state while preserving changesets.
+- Cleanup safety tests cover registered and locked worktrees, branch
+  preservation, active-path aliases, zero-day orphans, outside-root paths, and
+  symlink traversal.
+- `cargo test -p harness-symphony -- --test-threads=1`: 214 passed, 0 failed.
+- `cargo clippy -p harness-symphony -- -D warnings`: passed.
+- `scripts/validate-install-payload.sh`: passed, including idempotent existing
+  target rules and Git visibility checks.
