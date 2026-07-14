@@ -674,21 +674,31 @@ fn terminate_recorded_process(pid: u32, recorded_identity: &str) -> Result<(), W
     }
     const SIGTERM: i32 = 15;
     const SIGKILL: i32 = 9;
-    let process_group = -(pid as i32);
+    let process_group = validated_process_group(pid)?;
     unsafe {
         kill(process_group, SIGTERM);
     }
-    if wait_for_recorded_process_exit(pid, recorded_identity, 25) {
+    if wait_for_recorded_process_exit(pid, recorded_identity, 5) {
         return Ok(());
     }
     unsafe {
         kill(process_group, SIGKILL);
     }
-    if wait_for_recorded_process_exit(pid, recorded_identity, 50) {
+    if wait_for_recorded_process_exit(pid, recorded_identity, 10) {
         Ok(())
     } else {
         Err(WebError::ProcessTermination { pid })
     }
+}
+
+#[cfg(unix)]
+fn validated_process_group(pid: u32) -> Result<i32, WebError> {
+    let platform_pid =
+        i32::try_from(pid).map_err(|_| WebError::ProcessTermination { pid })?;
+    if platform_pid == 0 {
+        return Err(WebError::ProcessTermination { pid });
+    }
+    Ok(-platform_pid)
 }
 
 #[cfg(windows)]
@@ -709,17 +719,21 @@ fn terminate_recorded_process(pid: u32, _recorded_identity: &str) -> Result<(), 
 }
 
 fn wait_for_recorded_process_exit(pid: u32, recorded_identity: &str, attempts: usize) -> bool {
-    for _ in 0..attempts {
+    for attempt in 0..attempts {
         if crate::state::process_start_identity(pid).as_deref() != Some(recorded_identity) {
             return true;
         }
         #[cfg(unix)]
-        if recorded_process_is_zombie(pid) {
+        if should_probe_zombie(attempt, attempts) && recorded_process_is_zombie(pid) {
             return true;
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        std::thread::sleep(std::time::Duration::from_millis(50));
     }
     false
+}
+
+fn should_probe_zombie(attempt: usize, attempts: usize) -> bool {
+    attempt.saturating_add(1) == attempts
 }
 
 #[cfg(unix)]
@@ -4184,6 +4198,20 @@ exit 1
         assert!(error.to_string().contains("injected termination failure"));
         assert_eq!(store.show_run("run_live").unwrap().status, "running");
         assert_eq!(store.active_run().unwrap().unwrap().run_id, "run_live");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_group_rejects_zero_and_unrepresentable_pid() {
+        assert!(validated_process_group(0).is_err());
+        assert!(validated_process_group(u32::MAX).is_err());
+    }
+
+    #[test]
+    fn zombie_probe_runs_only_on_last_wait_attempt() {
+        assert!(!should_probe_zombie(0, 5));
+        assert!(!should_probe_zombie(3, 5));
+        assert!(should_probe_zombie(4, 5));
     }
 
     #[cfg(unix)]
