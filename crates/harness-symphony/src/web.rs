@@ -759,18 +759,49 @@ impl Drop for ConnectionSlot {
     }
 }
 
-fn serve(config: &ResolvedConfig, listener: TcpListener) -> Result<(), WebError> {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+struct ExternalLeaseExpiryWorker {
+    shutdown: Option<std::sync::mpsc::Sender<()>>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
 
-    let expiry_config = config.clone();
-    std::thread::Builder::new()
+impl Drop for ExternalLeaseExpiryWorker {
+    fn drop(&mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+fn spawn_external_lease_expiry_worker(
+    config: ResolvedConfig,
+    interval: std::time::Duration,
+) -> std::io::Result<ExternalLeaseExpiryWorker> {
+    let (shutdown, shutdown_rx) = std::sync::mpsc::channel();
+    let handle = std::thread::Builder::new()
         .name("symphony-external-lease-expiry".to_owned())
         .spawn(move || loop {
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            if let Err(error) = crate::external::reconcile_external_runs(&expiry_config) {
+            match shutdown_rx.recv_timeout(interval) {
+                Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            }
+            if let Err(error) = crate::external::reconcile_external_runs(&config) {
                 eprintln!("warning: external lease reconciliation failed: {error}");
             }
         })?;
+    Ok(ExternalLeaseExpiryWorker {
+        shutdown: Some(shutdown),
+        handle: Some(handle),
+    })
+}
+
+fn serve(config: &ResolvedConfig, listener: TcpListener) -> Result<(), WebError> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let _expiry_worker =
+        spawn_external_lease_expiry_worker(config.clone(), std::time::Duration::from_secs(5))?;
     let active = std::sync::Arc::new(AtomicUsize::new(0));
     for stream in listener.incoming() {
         let mut stream = match stream {
@@ -4237,6 +4268,19 @@ exit 1
             store.show_run("run_external_expired").unwrap().status,
             "stale"
         );
+    }
+
+    #[test]
+    fn lease_expiry_worker_stops_promptly_when_dropped() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = test_config(&temp_dir);
+        let worker =
+            spawn_external_lease_expiry_worker(config, std::time::Duration::from_secs(30)).unwrap();
+        let started = std::time::Instant::now();
+
+        drop(worker);
+
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
     }
 
     #[test]

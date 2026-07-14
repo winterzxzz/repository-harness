@@ -469,7 +469,38 @@ impl RunStateStore {
         now: i64,
         ttl_seconds: u32,
     ) -> Result<Vec<String>, StateError> {
-        self.init()?;
+        if !self.path.exists() {
+            self.init()?;
+        }
+        let schema_connection = Connection::open(&self.path)?;
+        let columns = {
+            let mut statement = schema_connection.prepare("PRAGMA table_info(run_state)")?;
+            let columns = statement
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<Result<std::collections::HashSet<_>, _>>()?;
+            columns
+        };
+        if !["status", "execution_mode", "heartbeat_at"]
+            .into_iter()
+            .all(|column| columns.contains(column))
+        {
+            drop(schema_connection);
+            self.init()?;
+        }
+
+        let connection = Connection::open(&self.path)?;
+        let has_expired = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM run_state WHERE status='running'
+             AND execution_mode='external' AND heartbeat_at IS NOT NULL
+             AND heartbeat_at + ?1 <= ?2)",
+            params![i64::from(ttl_seconds), now],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !has_expired {
+            return Ok(Vec::new());
+        }
+        drop(connection);
+
         let mut connection = Connection::open(&self.path)?;
         let transaction =
             connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -1473,6 +1504,43 @@ mod tests {
             Some("external heartbeat lease expired")
         );
         assert!(store.heartbeat_external("run_external", 1_021).is_err());
+    }
+
+    #[test]
+    fn reconciliation_without_expired_runs_does_not_take_a_write_lock() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("state.db");
+        let store = RunStateStore::new(path.clone());
+        store
+            .add_run(new_record("run_external", "prepared"))
+            .unwrap();
+        store
+            .start_external("run_external", "executor", 1_000)
+            .unwrap();
+        let mut writer = Connection::open(path).unwrap();
+        let transaction = writer
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .unwrap();
+
+        assert!(store
+            .reconcile_expired_external_runs(1_001, 120)
+            .unwrap()
+            .is_empty());
+
+        transaction.rollback().unwrap();
+    }
+
+    #[test]
+    fn reconciliation_initializes_a_fresh_state_database() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("nested/state.db");
+        let store = RunStateStore::new(path.clone());
+
+        assert!(store
+            .reconcile_expired_external_runs(1_001, 120)
+            .unwrap()
+            .is_empty());
+        assert!(path.exists());
     }
 
     #[test]

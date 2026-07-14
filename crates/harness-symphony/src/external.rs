@@ -4,7 +4,7 @@ use thiserror::Error;
 
 use crate::config::ResolvedConfig;
 use crate::run::{finalize_prepared_run, CompletedRun, PreparedRun, RunError};
-use crate::run_events::{read_events_after, RunEventWriter};
+use crate::run_events::{read_last_event, RunEventWriter};
 use crate::state::{RunRecord, RunStateStore, StateError};
 
 #[derive(Debug, Error)]
@@ -61,8 +61,11 @@ pub fn heartbeat(
     store.heartbeat_external(run_id, unix_timestamp())?;
     if let Some(step) = step.map(str::trim) {
         let path = event_path(config, run_id);
-        let page = read_events_after(&path, None)?;
-        if page.events.last().map(|event| event.message.as_str()) != Some(step) {
+        if read_last_event(&path)?
+            .as_ref()
+            .map(|event| event.message.as_str())
+            != Some(step)
+        {
             RunEventWriter::new(path, &record.agent)?.append("progress", "agent", step)?;
         }
     }
