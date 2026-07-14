@@ -12,6 +12,8 @@ pub enum StateError {
     ActiveRunExists(String),
     #[error("run not found: {0}")]
     RunNotFound(String),
+    #[error("run {id} cannot perform external lifecycle transition from {status}")]
+    InvalidExternalTransition { id: String, status: String },
     #[error("auto queue ownership lost for story {0}")]
     QueueOwnershipLost(String),
     #[error("run {id} cannot be replaced because status is {status}; only completed runs can request changes")]
@@ -51,6 +53,8 @@ pub struct RunRecord {
     pub current_stage: String,
     pub cancel_requested: bool,
     pub terminal_reason: Option<String>,
+    pub execution_mode: String,
+    pub harness_db_digest: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -232,6 +236,14 @@ impl RunStateStore {
                 "terminal_reason",
                 "ALTER TABLE run_state ADD COLUMN terminal_reason TEXT;",
             ),
+            (
+                "execution_mode",
+                "ALTER TABLE run_state ADD COLUMN execution_mode TEXT NOT NULL DEFAULT 'managed';",
+            ),
+            (
+                "harness_db_digest",
+                "ALTER TABLE run_state ADD COLUMN harness_db_digest TEXT;",
+            ),
         ] {
             ensure_column(&connection, "run_state", name, sql)?;
         }
@@ -385,6 +397,139 @@ impl RunStateStore {
         Ok(())
     }
 
+    pub fn set_harness_db_digest(&self, run_id: &str, digest: &str) -> Result<(), StateError> {
+        self.init()?;
+        let connection = Connection::open(&self.path)?;
+        connection.execute(
+            "UPDATE run_state SET harness_db_digest=?2, updated_at=datetime('now') WHERE run_id=?1",
+            params![run_id, digest],
+        )?;
+        if connection.changes() == 0 {
+            return Err(StateError::RunNotFound(run_id.to_owned()));
+        }
+        Ok(())
+    }
+
+    pub fn start_external(&self, run_id: &str, executor: &str, now: i64) -> Result<(), StateError> {
+        self.init()?;
+        let mut connection = Connection::open(&self.path)?;
+        let transaction =
+            connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let status = transaction
+            .query_row(
+                "SELECT status FROM run_state WHERE run_id=?1",
+                params![run_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .ok_or_else(|| StateError::RunNotFound(run_id.to_owned()))?;
+        if status != "prepared" || active_run_id(&transaction)?.as_deref() != Some(run_id) {
+            return Err(StateError::InvalidExternalTransition {
+                id: run_id.to_owned(),
+                status,
+            });
+        }
+        transaction.execute(
+            "UPDATE run_state SET status='running', execution_mode='external', agent=?2,
+             heartbeat_at=?3, current_stage='agent', terminal_reason=NULL,
+             updated_at=datetime('now') WHERE run_id=?1 AND status='prepared'",
+            params![run_id, executor, now],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn heartbeat_external(&self, run_id: &str, now: i64) -> Result<(), StateError> {
+        self.init()?;
+        let connection = Connection::open(&self.path)?;
+        connection.execute(
+            "UPDATE run_state SET heartbeat_at=?2, updated_at=datetime('now')
+             WHERE run_id=?1 AND status='running' AND execution_mode='external'",
+            params![run_id, now],
+        )?;
+        if connection.changes() == 0 {
+            let status = connection
+                .query_row(
+                    "SELECT status || '/' || execution_mode FROM run_state WHERE run_id=?1",
+                    params![run_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?
+                .ok_or_else(|| StateError::RunNotFound(run_id.to_owned()))?;
+            return Err(StateError::InvalidExternalTransition {
+                id: run_id.to_owned(),
+                status,
+            });
+        }
+        Ok(())
+    }
+
+    pub fn reconcile_expired_external_runs(
+        &self,
+        now: i64,
+        ttl_seconds: u32,
+    ) -> Result<Vec<String>, StateError> {
+        if !self.path.exists() {
+            self.init()?;
+        }
+        let schema_connection = Connection::open(&self.path)?;
+        let columns = {
+            let mut statement = schema_connection.prepare("PRAGMA table_info(run_state)")?;
+            let columns = statement
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<Result<std::collections::HashSet<_>, _>>()?;
+            columns
+        };
+        if !["status", "execution_mode", "heartbeat_at"]
+            .into_iter()
+            .all(|column| columns.contains(column))
+        {
+            drop(schema_connection);
+            self.init()?;
+        }
+
+        let connection = Connection::open(&self.path)?;
+        let has_expired = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM run_state WHERE status='running'
+             AND execution_mode='external' AND heartbeat_at IS NOT NULL
+             AND heartbeat_at + ?1 <= ?2)",
+            params![i64::from(ttl_seconds), now],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !has_expired {
+            return Ok(Vec::new());
+        }
+        drop(connection);
+
+        let mut connection = Connection::open(&self.path)?;
+        let transaction =
+            connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let expired = {
+            let mut statement = transaction.prepare(
+                "SELECT run_id FROM run_state WHERE status='running'
+                 AND execution_mode='external' AND heartbeat_at IS NOT NULL
+                 AND heartbeat_at + ?1 <= ?2 ORDER BY run_id",
+            )?;
+            let rows = statement
+                .query_map(params![i64::from(ttl_seconds), now], |row| {
+                    row.get::<_, String>(0)
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        for run_id in &expired {
+            transaction.execute(
+                "UPDATE run_state SET status='stale',
+                 next_action='inspect expired external executor and retry or complete late artifacts',
+                 terminal_reason='external heartbeat lease expired', updated_at=datetime('now')
+                 WHERE run_id=?1 AND status='running' AND execution_mode='external'",
+                params![run_id],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(expired)
+    }
+
     pub fn set_stage(&self, run_id: &str, stage: &str) -> Result<(), StateError> {
         self.init()?;
         let connection = Connection::open(&self.path)?;
@@ -438,7 +583,8 @@ impl RunStateStore {
         let mut statement = connection.prepare(
             "SELECT run_id, story_id, branch, worktree, lightweight, status, result_path,
                     pr_url, pr_status, sync_status, next_action, agent, owner_pid, agent_pid,
-                    agent_start_identity, heartbeat_at, current_stage, cancel_requested, terminal_reason
+                    agent_start_identity, heartbeat_at, current_stage, cancel_requested, terminal_reason,
+                    execution_mode, harness_db_digest
              FROM run_state
              ORDER BY created_at DESC, run_id DESC;",
         )?;
@@ -476,7 +622,8 @@ impl RunStateStore {
             .query_row(
                 "SELECT run_id, story_id, branch, worktree, lightweight, status, result_path,
                         pr_url, pr_status, sync_status, next_action, agent, owner_pid, agent_pid,
-                        agent_start_identity, heartbeat_at, current_stage, cancel_requested, terminal_reason
+                        agent_start_identity, heartbeat_at, current_stage, cancel_requested, terminal_reason,
+                        execution_mode, harness_db_digest
                  FROM run_state
                  WHERE run_id=?1;",
                 params![run_id],
@@ -493,7 +640,8 @@ impl RunStateStore {
             .query_row(
                 "SELECT run_id, story_id, branch, worktree, lightweight, status, result_path,
                         pr_url, pr_status, sync_status, next_action, agent, owner_pid, agent_pid,
-                        agent_start_identity, heartbeat_at, current_stage, cancel_requested, terminal_reason
+                        agent_start_identity, heartbeat_at, current_stage, cancel_requested, terminal_reason,
+                        execution_mode, harness_db_digest
                  FROM run_state
                  WHERE status IN ('prepared', 'running')
                  ORDER BY created_at ASC
@@ -1092,6 +1240,8 @@ fn run_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunRecord> {
         current_stage: row.get(16)?,
         cancel_requested: row.get::<_, i64>(17)? != 0,
         terminal_reason: row.get(18)?,
+        execution_mode: row.get(19)?,
+        harness_db_digest: row.get(20)?,
     })
 }
 
@@ -1320,6 +1470,124 @@ mod tests {
         store.add_run(new_record("run_2", "prepared")).unwrap();
 
         assert_eq!(store.active_run().unwrap().unwrap().run_id, "run_2");
+    }
+
+    #[test]
+    fn external_start_heartbeat_and_expiry_are_guarded() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = RunStateStore::new(temp_dir.path().join("state.db"));
+        store
+            .add_run(new_record("run_external", "prepared"))
+            .unwrap();
+
+        store
+            .start_external("run_external", "claude-subagent", 880)
+            .unwrap();
+        let started = store.show_run("run_external").unwrap();
+        assert_eq!(started.execution_mode, "external");
+        assert_eq!(started.agent, "claude-subagent");
+        assert!(store.start_external("run_external", "other", 881).is_err());
+
+        store.heartbeat_external("run_external", 900).unwrap();
+        assert!(store
+            .reconcile_expired_external_runs(1_019, 120)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            store.reconcile_expired_external_runs(1_020, 120).unwrap(),
+            vec!["run_external"]
+        );
+        let expired = store.show_run("run_external").unwrap();
+        assert_eq!(expired.status, "stale");
+        assert_eq!(
+            expired.terminal_reason.as_deref(),
+            Some("external heartbeat lease expired")
+        );
+        assert!(store.heartbeat_external("run_external", 1_021).is_err());
+    }
+
+    #[test]
+    fn reconciliation_without_expired_runs_does_not_take_a_write_lock() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("state.db");
+        let store = RunStateStore::new(path.clone());
+        store
+            .add_run(new_record("run_external", "prepared"))
+            .unwrap();
+        store
+            .start_external("run_external", "executor", 1_000)
+            .unwrap();
+        let mut writer = Connection::open(path).unwrap();
+        let transaction = writer
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .unwrap();
+
+        assert!(store
+            .reconcile_expired_external_runs(1_001, 120)
+            .unwrap()
+            .is_empty());
+
+        transaction.rollback().unwrap();
+    }
+
+    #[test]
+    fn reconciliation_initializes_a_fresh_state_database() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("nested/state.db");
+        let store = RunStateStore::new(path.clone());
+
+        assert!(store
+            .reconcile_expired_external_runs(1_001, 120)
+            .unwrap()
+            .is_empty());
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn heartbeat_and_expiry_race_has_one_consistent_winner() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("state.db");
+        let store = RunStateStore::new(path.clone());
+        store.add_run(new_record("run_race", "prepared")).unwrap();
+        store.start_external("run_race", "executor", 1).unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+        let heartbeat_barrier = barrier.clone();
+        let heartbeat_path = path.clone();
+        let heartbeat = std::thread::spawn(move || {
+            heartbeat_barrier.wait();
+            RunStateStore::new(heartbeat_path).heartbeat_external("run_race", 2)
+        });
+        let expiry_barrier = barrier.clone();
+        let expiry = std::thread::spawn(move || {
+            expiry_barrier.wait();
+            RunStateStore::new(path).reconcile_expired_external_runs(2, 1)
+        });
+        barrier.wait();
+        let heartbeat_result = heartbeat.join().unwrap();
+        let expired = expiry.join().unwrap().unwrap();
+        let run = store.show_run("run_race").unwrap();
+
+        if heartbeat_result.is_ok() {
+            assert!(expired.is_empty());
+            assert_eq!(run.status, "running");
+            assert_eq!(run.heartbeat_at, Some(2));
+        } else {
+            assert_eq!(expired, vec!["run_race"]);
+            assert_eq!(run.status, "stale");
+        }
+    }
+
+    #[test]
+    fn legacy_rows_default_to_managed_execution() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = RunStateStore::new(temp_dir.path().join("state.db"));
+        store
+            .add_run(new_record("run_managed", "prepared"))
+            .unwrap();
+        let run = store.show_run("run_managed").unwrap();
+        assert_eq!(run.execution_mode, "managed");
+        assert_eq!(run.harness_db_digest, None);
+        assert!(store.heartbeat_external("run_managed", 10).is_err());
     }
 
     #[test]

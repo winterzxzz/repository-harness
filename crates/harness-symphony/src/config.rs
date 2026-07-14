@@ -39,6 +39,7 @@ pub struct ResolvedConfig {
     pub changeset_render_in_summary: bool,
     pub allow_here_for_tiny: bool,
     pub compact_keep_last: u32,
+    pub external_heartbeat_ttl_seconds: u32,
     pub keep_failed_worktrees: bool,
     pub cleanup_after_sync: bool,
     pub failed_worktree_retention_days: u32,
@@ -127,6 +128,11 @@ pub struct RunsConfig {
     pub allow_here_for_tiny: bool,
     #[serde(default = "default_compact_keep_last")]
     pub compact_keep_last: u32,
+    #[serde(
+        default = "default_external_heartbeat_ttl_seconds",
+        deserialize_with = "deserialize_external_heartbeat_ttl_seconds"
+    )]
+    pub external_heartbeat_ttl_seconds: u32,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -221,6 +227,7 @@ impl Default for RunsConfig {
         Self {
             allow_here_for_tiny: true,
             compact_keep_last: default_compact_keep_last(),
+            external_heartbeat_ttl_seconds: default_external_heartbeat_ttl_seconds(),
         }
     }
 }
@@ -282,6 +289,7 @@ impl SymphonyConfig {
             changeset_render_in_summary: self.changeset.render_in_summary,
             allow_here_for_tiny: self.runs.allow_here_for_tiny,
             compact_keep_last: self.runs.compact_keep_last,
+            external_heartbeat_ttl_seconds: self.runs.external_heartbeat_ttl_seconds,
             keep_failed_worktrees: self.cleanup.keep_failed_worktrees,
             cleanup_after_sync: self.cleanup.cleanup_after_sync,
             failed_worktree_retention_days: self.cleanup.failed_worktree_retention_days,
@@ -384,6 +392,25 @@ fn default_changeset_directory() -> PathBuf {
 
 fn default_compact_keep_last() -> u32 {
     50
+}
+
+pub const DEFAULT_EXTERNAL_HEARTBEAT_TTL_SECONDS: u32 = 120;
+
+fn default_external_heartbeat_ttl_seconds() -> u32 {
+    DEFAULT_EXTERNAL_HEARTBEAT_TTL_SECONDS
+}
+
+fn deserialize_external_heartbeat_ttl_seconds<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = u32::deserialize(deserializer)?;
+    if value == 0 {
+        return Err(serde::de::Error::custom(
+            "external_heartbeat_ttl_seconds must be greater than zero",
+        ));
+    }
+    Ok(value)
 }
 
 fn default_failed_worktree_retention_days() -> u32 {
@@ -520,5 +547,22 @@ auto:
         assert!(error
             .to_string()
             .contains("timeout_minutes must be greater than zero"));
+    }
+
+    #[test]
+    fn external_heartbeat_ttl_defaults_to_120_seconds() {
+        let resolved = SymphonyConfig::default().resolve(Path::new("/repo"));
+        assert_eq!(resolved.external_heartbeat_ttl_seconds, 120);
+    }
+
+    #[test]
+    fn external_heartbeat_ttl_must_be_positive() {
+        let error = serde_yaml::from_str::<SymphonyConfig>(
+            "version: 1\nruns:\n  external_heartbeat_ttl_seconds: 0\n",
+        )
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("external_heartbeat_ttl_seconds must be greater than zero"));
     }
 }

@@ -4,6 +4,8 @@ mod changeset;
 mod cleanup;
 mod config;
 mod doctor;
+mod external;
+mod harness_digest;
 mod interface;
 mod pr;
 mod retention;

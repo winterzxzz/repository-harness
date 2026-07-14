@@ -10,8 +10,9 @@ use serde_json::{json, Value};
 use thiserror::Error;
 
 use crate::agent::{run_agent, AgentError};
-use crate::changeset::{append_rendered_section, ChangesetError};
+use crate::changeset::{append_rendered_section, validate_run_changeset, ChangesetError};
 use crate::config::ResolvedConfig;
+use crate::harness_digest::logical_digest;
 use crate::state::{NewRunRecord, RunStateStore, StateError};
 use crate::sync::SyncError;
 
@@ -231,6 +232,11 @@ fn prepare_run_with_post_resource_hook(
             next_action: format!("Launch agent for {story_id} or inspect {contract_path:?}"),
         })?;
         store.record_run_agent(&run_id, &config.agent_adapter)?;
+        store.set_harness_db_digest(
+            &run_id,
+            &logical_digest(&harness_db_path)
+                .map_err(|error| RunError::InvalidResult(error.to_string()))?,
+        )?;
         Ok(())
     })();
     if let Err(error) = preparation {
@@ -370,6 +376,11 @@ fn finalize_replacement_run(
         cleanup_prepared_resources(config, &prepared);
         return Err(error.into());
     }
+    store.set_harness_db_digest(
+        &prepared.run_id,
+        &logical_digest(&prepared.harness_db_path)
+            .map_err(|error| RunError::InvalidResult(error.to_string()))?,
+    )?;
     Ok(prepared)
 }
 
@@ -540,6 +551,11 @@ fn prepare_here_run_with_post_resource_hook(
             ),
         })?;
         store.record_run_agent(&run_id, &config.agent_adapter)?;
+        store.set_harness_db_digest(
+            &run_id,
+            &logical_digest(&harness_db_path)
+                .map_err(|error| RunError::InvalidResult(error.to_string()))?,
+        )?;
         Ok(())
     })();
     if let Err(error) = preparation {
@@ -599,8 +615,44 @@ pub fn execute_prepared_run(
         ));
     }
 
+    finalize_prepared_run(config, prepared)
+}
+
+pub(crate) fn finalize_prepared_run(
+    config: &ResolvedConfig,
+    prepared: PreparedRun,
+) -> Result<CompletedRun, RunError> {
+    let store = RunStateStore::new(config.state_db.clone());
     let run_id = prepared.run_id.clone();
     store.set_stage(&run_id, "validation")?;
+    let record = store.show_run(&run_id)?;
+    if let Some(baseline) = record.harness_db_digest.as_deref() {
+        let current = match logical_digest(&prepared.harness_db_path) {
+            Ok(current) => current,
+            Err(error) => {
+                return validation_failure(
+                    &store,
+                    &run_id,
+                    RunError::InvalidResult(error.to_string()),
+                );
+            }
+        };
+        if current != baseline {
+            let changeset_path = prepared.worktree.join(format!(
+                ".harness/changesets/{}.changeset.jsonl",
+                prepared.run_id
+            ));
+            if !changeset_path.exists() {
+                let error = RunError::InvalidResult(
+                    "copied harness.db changed without a valid run changeset".to_owned(),
+                );
+                return validation_failure(&store, &run_id, error);
+            }
+            if let Err(error) = validate_run_changeset(&changeset_path, &prepared.run_id) {
+                return validation_failure(&store, &run_id, error.into());
+            }
+        }
+    }
     let completed = match validate_finished_run(config, prepared) {
         Ok(completed) => completed,
         Err(error) => {
@@ -621,6 +673,19 @@ pub fn execute_prepared_run(
     Ok(completed)
 }
 
+fn validation_failure(
+    store: &RunStateStore,
+    run_id: &str,
+    error: RunError,
+) -> Result<CompletedRun, RunError> {
+    let finish_result = store.finish_execution(run_id, "failed", "inspect invalid run result");
+    Err(preserve_primary_error(
+        error,
+        finish_result,
+        "validation failure",
+    ))
+}
+
 fn load_runnable_story(db_path: &Path, story_id: &str) -> Result<Story, RunError> {
     let story = load_story(db_path, story_id)?;
     if !matches!(story.status.as_str(), "planned" | "in_progress") {
@@ -633,7 +698,13 @@ fn load_runnable_story(db_path: &Path, story_id: &str) -> Result<Story, RunError
 }
 
 fn ensure_no_active_run(config: &ResolvedConfig) -> Result<(), RunError> {
-    if let Some(active) = RunStateStore::new(config.state_db.clone()).active_run()? {
+    let store = RunStateStore::new(config.state_db.clone());
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    store.reconcile_expired_external_runs(now, config.external_heartbeat_ttl_seconds)?;
+    if let Some(active) = store.active_run()? {
         return Err(StateError::ActiveRunExists(active.run_id).into());
     }
     Ok(())
@@ -1074,6 +1145,126 @@ mod tests {
         assert!(returned.to_string().contains("primary validation failure"));
     }
 
+    #[test]
+    fn digest_failure_records_validation_failure_and_releases_lock() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = config_for_root(temp_dir.path());
+        let worktree = config.worktrees_dir.join("run_bad_digest");
+        fs::create_dir_all(&worktree).unwrap();
+        let store = RunStateStore::new(config.state_db.clone());
+        store
+            .add_run(NewRunRecord {
+                run_id: "run_bad_digest".to_owned(),
+                story_id: "US-094".to_owned(),
+                branch: Some("symphony/run_bad_digest".to_owned()),
+                worktree: worktree.clone(),
+                lightweight: false,
+                status: "running".to_owned(),
+                result_path: None,
+                sync_status: "not_applied".to_owned(),
+                next_action: "running".to_owned(),
+            })
+            .unwrap();
+        store
+            .set_harness_db_digest("run_bad_digest", "baseline")
+            .unwrap();
+        let prepared = PreparedRun {
+            run_id: "run_bad_digest".to_owned(),
+            story_id: "US-094".to_owned(),
+            branch: Some("symphony/run_bad_digest".to_owned()),
+            worktree: worktree.clone(),
+            contract_path: config.runs_dir.join("run_bad_digest/RUN_CONTRACT.json"),
+            harness_db_path: worktree.join("missing-harness.db"),
+            lightweight: false,
+            request_changes: None,
+        };
+
+        assert!(finalize_prepared_run(&config, prepared).is_err());
+        assert_eq!(store.show_run("run_bad_digest").unwrap().status, "failed");
+        assert!(store.active_run().unwrap().is_none());
+    }
+
+    #[test]
+    fn changed_database_without_changeset_records_validation_failure() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = config_for_root(temp_dir.path());
+        let worktree = config.worktrees_dir.join("run_changed_db");
+        fs::create_dir_all(&worktree).unwrap();
+        let db_path = worktree.join("harness.db");
+        let connection = Connection::open(&db_path).unwrap();
+        connection
+            .execute("CREATE TABLE fixture (id INTEGER PRIMARY KEY)", [])
+            .unwrap();
+        drop(connection);
+        let store = RunStateStore::new(config.state_db.clone());
+        store
+            .add_run(NewRunRecord {
+                run_id: "run_changed_db".to_owned(),
+                story_id: "US-094".to_owned(),
+                branch: Some("symphony/run_changed_db".to_owned()),
+                worktree: worktree.clone(),
+                lightweight: false,
+                status: "running".to_owned(),
+                result_path: None,
+                sync_status: "not_applied".to_owned(),
+                next_action: "running".to_owned(),
+            })
+            .unwrap();
+        store
+            .set_harness_db_digest("run_changed_db", &logical_digest(&db_path).unwrap())
+            .unwrap();
+        Connection::open(&db_path)
+            .unwrap()
+            .execute("INSERT INTO fixture (id) VALUES (1)", [])
+            .unwrap();
+        let prepared = PreparedRun {
+            run_id: "run_changed_db".to_owned(),
+            story_id: "US-094".to_owned(),
+            branch: Some("symphony/run_changed_db".to_owned()),
+            worktree,
+            contract_path: config.runs_dir.join("run_changed_db/RUN_CONTRACT.json"),
+            harness_db_path: db_path,
+            lightweight: false,
+            request_changes: None,
+        };
+
+        let error = finalize_prepared_run(&config, prepared).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("changed without a valid run changeset"));
+        assert_eq!(store.show_run("run_changed_db").unwrap().status, "failed");
+        assert!(store.active_run().unwrap().is_none());
+    }
+
+    #[test]
+    fn active_run_check_reconciles_expired_external_lease() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut config = config_for_root(temp_dir.path());
+        config.external_heartbeat_ttl_seconds = 1;
+        let store = RunStateStore::new(config.state_db.clone());
+        store
+            .add_run(NewRunRecord {
+                run_id: "run_expired".to_owned(),
+                story_id: "US-OLD".to_owned(),
+                branch: Some("symphony/run_expired".to_owned()),
+                worktree: config.worktrees_dir.join("run_expired"),
+                lightweight: false,
+                status: "prepared".to_owned(),
+                result_path: None,
+                sync_status: "not_applied".to_owned(),
+                next_action: "running".to_owned(),
+            })
+            .unwrap();
+        store
+            .start_external("run_expired", "claude-subagent", 1)
+            .unwrap();
+
+        ensure_no_active_run(&config).unwrap();
+
+        assert_eq!(store.show_run("run_expired").unwrap().status, "stale");
+    }
+
     fn config() -> ResolvedConfig {
         ResolvedConfig {
             version: 1,
@@ -1093,6 +1284,7 @@ mod tests {
             changeset_render_in_summary: true,
             allow_here_for_tiny: true,
             compact_keep_last: 50,
+            external_heartbeat_ttl_seconds: 120,
             keep_failed_worktrees: true,
             cleanup_after_sync: false,
             failed_worktree_retention_days: 7,

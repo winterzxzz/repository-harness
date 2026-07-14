@@ -482,6 +482,11 @@ by Symphony to the user. Keep intake, investigation, planning, and direct tiny
 edits in the current agent session. If `HARNESS_RUN_ID` is already set, continue
 inside the current Symphony run instead of starting a nested run.
 
+For an approved external-executor story, the main agent runs `run --prepare-only`,
+`runs start`, periodic `runs heartbeat`, and `runs complete` from the source
+repository. The subagent edits only inside the printed worktree and never
+invokes root lifecycle commands.
+
 Before a step that could use an external tool, run
 `scripts/bin/harness-cli query tools --capability <name> --status present` to
 see what is equipped; an absent capability is a clean skip.

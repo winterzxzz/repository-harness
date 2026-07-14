@@ -11,6 +11,7 @@ use thiserror::Error;
 use crate::changeset::{render_changeset, render_markdown, ChangesetError};
 use crate::cleanup::cleanup_runtime;
 use crate::config::ResolvedConfig;
+use crate::external::ExternalError;
 use crate::pr::{create_pr, PrError};
 use crate::retention::compact_runs;
 use crate::run::{
@@ -43,6 +44,8 @@ pub enum WebError {
     Sync(#[from] SyncError),
     #[error("{0}")]
     Upload(#[from] UploadError),
+    #[error("{0}")]
+    External(#[from] ExternalError),
     #[error("web server io error: {0}")]
     Io(#[from] std::io::Error),
     #[error("json error: {0}")]
@@ -641,13 +644,12 @@ fn reconcile_web_runs_with<F>(config: &ResolvedConfig, mut terminate: F) -> Resu
 where
     F: FnMut(u32, &str) -> Result<(), WebError>,
 {
+    crate::external::reconcile_external_runs(config)?;
     let store = RunStateStore::new(config.state_db.clone());
     let current_owner = std::process::id();
-    for run in store
-        .list_runs()?
-        .into_iter()
-        .filter(|run| matches!(run.status.as_str(), "prepared" | "running"))
-    {
+    for run in store.list_runs()?.into_iter().filter(|run| {
+        run.execution_mode == "managed" && matches!(run.status.as_str(), "prepared" | "running")
+    }) {
         if run.owner_pid == Some(current_owner) {
             continue;
         }
@@ -757,9 +759,49 @@ impl Drop for ConnectionSlot {
     }
 }
 
+struct ExternalLeaseExpiryWorker {
+    shutdown: Option<std::sync::mpsc::Sender<()>>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for ExternalLeaseExpiryWorker {
+    fn drop(&mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+fn spawn_external_lease_expiry_worker(
+    config: ResolvedConfig,
+    interval: std::time::Duration,
+) -> std::io::Result<ExternalLeaseExpiryWorker> {
+    let (shutdown, shutdown_rx) = std::sync::mpsc::channel();
+    let handle = std::thread::Builder::new()
+        .name("symphony-external-lease-expiry".to_owned())
+        .spawn(move || loop {
+            match shutdown_rx.recv_timeout(interval) {
+                Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            }
+            if let Err(error) = crate::external::reconcile_external_runs(&config) {
+                eprintln!("warning: external lease reconciliation failed: {error}");
+            }
+        })?;
+    Ok(ExternalLeaseExpiryWorker {
+        shutdown: Some(shutdown),
+        handle: Some(handle),
+    })
+}
+
 fn serve(config: &ResolvedConfig, listener: TcpListener) -> Result<(), WebError> {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    let _expiry_worker =
+        spawn_external_lease_expiry_worker(config.clone(), std::time::Duration::from_secs(5))?;
     let active = std::sync::Arc::new(AtomicUsize::new(0));
     for stream in listener.incoming() {
         let mut stream = match stream {
@@ -853,6 +895,7 @@ fn handle_http_request(
     config: &ResolvedConfig,
     request: &HttpRequest,
 ) -> Result<HttpResponse, WebError> {
+    crate::external::reconcile_external_runs(config)?;
     let method = request.method.as_str();
     let path = request.path.as_str();
     match (method, path) {
@@ -1770,7 +1813,13 @@ fn review_response(config: &ResolvedConfig, run_id: &str) -> Result<HttpResponse
     } else {
         committed_changeset_path
     };
-    let event_path = run_dir.join("APP_SERVER_EVENTS.jsonl");
+    let normalized_event_path = run_dir.join("RUN_EVENTS.jsonl");
+    let managed_event_path = run_dir.join("APP_SERVER_EVENTS.jsonl");
+    let event_path = if normalized_event_path.exists() {
+        normalized_event_path
+    } else {
+        managed_event_path
+    };
 
     let summary = read_optional_text(&summary_path)?;
     let result_artifact = read_optional_json_artifact(&result_path);
@@ -2174,7 +2223,7 @@ fn run_needs_attention(config: &ResolvedConfig, run: &crate::state::RunRecord) -
     }
     matches!(
         run.status.as_str(),
-        "failed" | "cancelled" | "partial" | "blocked" | "needs_intake"
+        "failed" | "cancelled" | "partial" | "blocked" | "needs_intake" | "stale"
     ) || (run.status == "completed" && (run.pr_status == "failed" || run.pr_url.is_none()))
 }
 
@@ -2235,7 +2284,7 @@ fn recovery_action_for_run(
 fn execution_retryable_run(run: &crate::state::RunRecord) -> bool {
     matches!(
         run.status.as_str(),
-        "failed" | "cancelled" | "partial" | "blocked" | "needs_intake" | "interrupted"
+        "failed" | "cancelled" | "partial" | "blocked" | "needs_intake" | "interrupted" | "stale"
     )
 }
 
@@ -3484,6 +3533,8 @@ mod tests {
             current_stage: "start".to_owned(),
             cancel_requested: false,
             terminal_reason: None,
+            execution_mode: "managed".to_owned(),
+            harness_db_digest: None,
         }
     }
 
@@ -4158,6 +4209,81 @@ exit 1
     }
 
     #[test]
+    fn startup_preserves_live_external_run() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = test_config(&temp_dir);
+        let worktree = temp_dir.path().join("worktree-external");
+        fs::create_dir_all(&worktree).unwrap();
+        let store = RunStateStore::new(config.state_db.clone());
+        store
+            .add_run(crate::state::NewRunRecord {
+                run_id: "run_external".to_owned(),
+                story_id: "US-094".to_owned(),
+                branch: None,
+                worktree,
+                lightweight: false,
+                status: "prepared".to_owned(),
+                result_path: None,
+                sync_status: "not_applied".to_owned(),
+                next_action: "running".to_owned(),
+            })
+            .unwrap();
+        store
+            .start_external("run_external", "claude-subagent", i64::MAX / 2)
+            .unwrap();
+
+        reconcile_web_runs(&config).unwrap();
+
+        assert_eq!(store.show_run("run_external").unwrap().status, "running");
+    }
+
+    #[test]
+    fn request_boundary_reconciles_expired_external_run() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut config = test_config(&temp_dir);
+        config.external_heartbeat_ttl_seconds = 1;
+        let worktree = temp_dir.path().join("worktree-external-expired");
+        fs::create_dir_all(&worktree).unwrap();
+        let store = RunStateStore::new(config.state_db.clone());
+        store
+            .add_run(crate::state::NewRunRecord {
+                run_id: "run_external_expired".to_owned(),
+                story_id: "US-094".to_owned(),
+                branch: None,
+                worktree,
+                lightweight: false,
+                status: "prepared".to_owned(),
+                result_path: None,
+                sync_status: "not_applied".to_owned(),
+                next_action: "running".to_owned(),
+            })
+            .unwrap();
+        store
+            .start_external("run_external_expired", "claude-subagent", 1)
+            .unwrap();
+
+        handle_request(&config, "GET /health HTTP/1.1\r\n\r\n").unwrap();
+
+        assert_eq!(
+            store.show_run("run_external_expired").unwrap().status,
+            "stale"
+        );
+    }
+
+    #[test]
+    fn lease_expiry_worker_stops_promptly_when_dropped() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = test_config(&temp_dir);
+        let worker =
+            spawn_external_lease_expiry_worker(config, std::time::Duration::from_secs(30)).unwrap();
+        let started = std::time::Instant::now();
+
+        drop(worker);
+
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    #[test]
     fn startup_reconciliation_keeps_lock_when_recorded_process_cannot_be_stopped() {
         let temp_dir = tempfile::tempdir().unwrap();
         let config = test_config(&temp_dir);
@@ -4300,6 +4426,29 @@ exit 1
         assert!(response.contains("https://example.test/pr/1"));
         assert!(response.contains("src/lib.rs"));
         assert!(response.contains("turn/completed"));
+    }
+
+    #[test]
+    fn review_request_reads_normalized_external_events() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = test_config(&temp_dir);
+        add_test_run(&config, "run_external_review", "completed");
+        write_summary(&config, "run_external_review");
+        let run_dir = config.runs_dir.join("run_external_review");
+        fs::write(
+            run_dir.join("RUN_EVENTS.jsonl"),
+            r#"{"sequence":1,"timestamp":"2026-07-14T00:00:00Z","agent":"claude-subagent","kind":"progress","stage":"agent","message":"external milestone"}"#,
+        )
+        .unwrap();
+
+        let response = handle_request(
+            &config,
+            "GET /api/runs/run_external_review/review HTTP/1.1\r\n\r\n",
+        )
+        .unwrap();
+
+        assert!(response.contains("external milestone"));
+        assert!(response.contains("RUN_EVENTS.jsonl"));
     }
 
     #[test]

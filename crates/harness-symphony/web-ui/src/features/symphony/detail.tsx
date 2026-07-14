@@ -559,6 +559,7 @@ function ReviewPanel({
       <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2">
         <Field label="Outcome" value={review.outcome ?? "unknown"} />
         <Field label="Status" value={review.status} />
+        <Field label="Executor" value={agentLabel(review.agent)} />
       </div>
 
       {review.failure_summary ? <FailureSummaryPanel summary={review.failure_summary} /> : null}
@@ -941,12 +942,17 @@ function PriorFailureEvidence({ review }: { review: ReviewResponse }) {
 function EventLog({ events, live = false, agent }: { events: RunEvent[]; live?: boolean; agent?: string }) {
   const entries = formatRunLog(events, agentLabel(agent ?? "codex")).slice(-12);
   const stage = runMonitorStage(events);
+  const hasNormalizedEvents = events.some((event) => {
+    if (typeof event !== "object" || event === null) return false;
+    const value = event as Record<string, unknown>;
+    return typeof value.sequence === "number" && typeof value.kind === "string";
+  });
 
   return (
     <div id="logs" className="flex flex-col gap-3 p-4" role="region" aria-label="Run monitor" aria-live={live ? "polite" : undefined}>
       <div className="flex items-baseline justify-between gap-3">
         <SectionTitle>Run monitor</SectionTitle>
-        <p className="text-xs text-muted-foreground">Raw artifact: APP_SERVER_EVENTS.jsonl</p>
+        <p className="text-xs text-muted-foreground">Raw artifact: {hasNormalizedEvents ? "RUN_EVENTS.jsonl" : "APP_SERVER_EVENTS.jsonl"}</p>
       </div>
       <h4 className="sr-only">Run communication</h4>
       <p className="text-xs font-semibold text-muted-foreground">Events {events.length} - {stage}</p>

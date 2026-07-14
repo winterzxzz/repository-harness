@@ -133,22 +133,27 @@ flowchart LR
 
 Run these from the repository root.
 
-### 1. Build The CLI
+### 1. Check The Installed CLI
 
 ```bash
-cargo build -p harness-symphony
+command -v harness-symphony
 ```
 
-During development, the command path is:
+The Harness installer must provision `harness-symphony` on `PATH`. If this
+check fails, install or upgrade the Harness package before continuing. Source
+repository contributors may build the crate locally, but fresh installs do not
+contain the Cargo workspace and must not rely on `target/debug` paths.
+
+Check the available commands:
 
 ```bash
-target/debug/harness-symphony
+harness-symphony --help
 ```
 
 ### 2. Check Readiness
 
 ```bash
-target/debug/harness-symphony doctor
+harness-symphony doctor
 ```
 
 Fix any `fail` rows before running a normal story. Warnings are usually
@@ -159,7 +164,7 @@ actionable configuration gaps; read the message before deciding to continue.
 Start the Web UI from the repository root:
 
 ```bash
-target/debug/harness-symphony web
+harness-symphony web
 ```
 
 After the server binds, Symphony opens the controller in the system default
@@ -167,7 +172,7 @@ browser. For CI, SSH, Electron, or other headless use, keep the server running
 without opening a browser:
 
 ```bash
-target/debug/harness-symphony web --no-open
+harness-symphony web --no-open
 ```
 
 If the browser cannot be opened, Symphony prints the controller URL and keeps
@@ -193,7 +198,7 @@ harness-symphony web
 ### 4. See Runnable Work
 
 ```bash
-target/debug/harness-symphony work list
+harness-symphony work list
 ```
 
 Look for a story with `Runnable` set to `yes` or `warn`.
@@ -209,7 +214,7 @@ Use `--prepare-only` when you want to inspect what Symphony will give the agent
 before actually launching one:
 
 ```bash
-target/debug/harness-symphony run <story-id> --prepare-only
+harness-symphony run <story-id> --prepare-only
 ```
 
 Prepare does not pull from upstream: the run branches from your current HEAD.
@@ -236,7 +241,7 @@ and forbidden paths.
 When the repo is configured with an agent adapter, run:
 
 ```bash
-target/debug/harness-symphony run <story-id>
+harness-symphony run <story-id>
 ```
 
 The agent must produce:
@@ -259,7 +264,7 @@ Symphony validates the result before accepting the run.
 Tiny-lane stories can use a lighter path:
 
 ```bash
-target/debug/harness-symphony run <story-id> --here
+harness-symphony run <story-id> --here
 ```
 
 Use `--here` only for tiny stories. It skips the separate worktree, but it still
@@ -273,19 +278,19 @@ because they need the full isolation loop.
 Check status:
 
 ```bash
-target/debug/harness-symphony status
+harness-symphony status
 ```
 
 List runs:
 
 ```bash
-target/debug/harness-symphony runs list
+harness-symphony runs list
 ```
 
 Inspect one run:
 
 ```bash
-target/debug/harness-symphony runs show <run_id>
+harness-symphony runs show <run_id>
 ```
 
 Review these local files before opening a PR:
@@ -306,13 +311,13 @@ If PR creation is disabled, review these artifacts locally before syncing.
 If PR creation is configured, create a PR for a finished run:
 
 ```bash
-target/debug/harness-symphony pr create <run_id>
+harness-symphony pr create <run_id>
 ```
 
 Retry PR creation after fixing configuration or provider issues:
 
 ```bash
-target/debug/harness-symphony pr retry <run_id>
+harness-symphony pr retry <run_id>
 ```
 
 PRs should include the run summary, result file, changeset, and any product or
@@ -328,7 +333,7 @@ After pulling merged changes, apply committed changesets to your local
 `harness.db`:
 
 ```bash
-target/debug/harness-symphony sync
+harness-symphony sync
 ```
 
 `sync` is idempotent. Running it twice is safe; already applied changesets are
@@ -400,8 +405,43 @@ instead of silently resuming it.
 Inspect the resolved configuration:
 
 ```bash
-target/debug/harness-symphony config show
+harness-symphony config show
 ```
+
+## External Executor Lifecycle
+
+Use the external lifecycle when a main agent must own orchestration while a
+subagent implements inside Symphony's prepared worktree. Run the lifecycle
+commands from the source repository, or pass `--repo-root <source-repo>`.
+
+```bash
+harness-symphony run <story-id> --prepare-only
+harness-symphony runs start <run_id> --executor claude-subagent
+harness-symphony runs heartbeat <run_id> --step "implementation started"
+harness-symphony runs heartbeat <run_id>
+harness-symphony runs complete <run_id>
+```
+
+The main agent owns every command above. The subagent edits only in the printed
+worktree, writes `SUMMARY.md` and `RESULT.json`, and uses the run environment
+for Harness CLI writes so semantic changes produce the matching changeset. It
+must not invoke lifecycle commands or access the source repository's Symphony
+state.
+
+Send a heartbeat at least every 30 seconds. The default lease TTL is 120
+seconds and `runs.external_heartbeat_ttl_seconds` can set another positive
+value; keep the heartbeat interval at or below one quarter of that TTL.
+Heartbeat without `--step` refreshes the lease without adding a duplicate
+progress event. Use `--step` only for a changed, bounded milestone.
+
+When the lease expires, Symphony marks the run `stale`, releases the active
+lock, and keeps its worktree as evidence. A later `runs complete <run_id>` may
+still validate late artifacts, even after a newer run becomes active; it does
+not disturb that newer lock. Missing or invalid artifacts, or a changed copied
+database without a valid matching changeset, complete as a validation failure.
+
+The Web UI displays the existing agent name as the executor, shows normalized
+milestones, and treats stale runs as Needs Attention.
 
 ## The Mental Model
 
@@ -411,15 +451,18 @@ drop-in implementation of OpenAI Symphony.
 
 | If you want to... | Run... |
 | --- | --- |
-| Check whether Symphony can run here | `target/debug/harness-symphony doctor` |
-| Find runnable stories | `target/debug/harness-symphony work list` |
-| Create an isolated workspace only | `target/debug/harness-symphony run <story-id> --prepare-only` |
-| Run a normal or high-risk story | `target/debug/harness-symphony run <story-id>` |
-| Run a tiny story in the current checkout | `target/debug/harness-symphony run <story-id> --here` |
-| See what happened locally | `target/debug/harness-symphony status` |
-| Inspect a run | `target/debug/harness-symphony runs show <run_id>` |
-| Create a PR for a finished run | `target/debug/harness-symphony pr create <run_id>` |
-| Apply merged changesets | `target/debug/harness-symphony sync` |
+| Check whether Symphony can run here | `harness-symphony doctor` |
+| Find runnable stories | `harness-symphony work list` |
+| Create an isolated workspace only | `harness-symphony run <story-id> --prepare-only` |
+| Run a normal or high-risk story | `harness-symphony run <story-id>` |
+| Run a tiny story in the current checkout | `harness-symphony run <story-id> --here` |
+| See what happened locally | `harness-symphony status` |
+| Inspect a run | `harness-symphony runs show <run_id>` |
+| Start a prepared external run | `harness-symphony runs start <run_id> --executor <name>` |
+| Refresh an external lease | `harness-symphony runs heartbeat <run_id> [--step <text>]` |
+| Complete an external run | `harness-symphony runs complete <run_id>` |
+| Create a PR for a finished run | `harness-symphony pr create <run_id>` |
+| Apply merged changesets | `harness-symphony sync` |
 
 ## Common Mistakes
 

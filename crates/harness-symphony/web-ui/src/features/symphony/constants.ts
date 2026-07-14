@@ -7,7 +7,13 @@ export const agents: { id: AgentId; label: string }[] = [
 ];
 
 export function agentLabel(agent: string): string {
-  return agents.find((entry) => entry.id === agent)?.label ?? agent;
+  const known = agents.find((entry) => entry.id === agent)?.label;
+  if (known) return known;
+  return agent
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 export const buckets: BoardBucket[] = ["Drafts", "Active", "Ready", "Done"];

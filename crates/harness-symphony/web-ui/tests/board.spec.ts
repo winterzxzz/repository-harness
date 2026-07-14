@@ -1692,6 +1692,7 @@ test("review logs render readable chat and progress entries while preserving raw
         run_id: "run_chat",
         story_id: "US-060",
         status: "completed",
+        agent: "claude-subagent",
         outcome: "completed",
         summary: "Readable logs implemented.",
         result: null,
@@ -1703,6 +1704,7 @@ test("review logs render readable chat and progress entries while preserving raw
         artifact_paths: [".harness/runs/run_chat/APP_SERVER_EVENTS.jsonl"],
         suggested_next_action: "Review the readable log.",
         events: [
+          { sequence: 1, timestamp: "2026-06-27T09:59:59Z", agent: "claude-subagent", kind: "progress", stage: "agent", message: "Tests passing" },
           { method: "thread/started", params: { thread: { id: "thr_chat" }, timestamp: "2026-06-27T10:00:00Z" } },
           { method: "turn/started", params: { turn: { status: "inProgress" } } },
           { method: "item/agentMessage/delta", params: { itemId: "msg_1", delta: "Implemented " } },
@@ -1726,7 +1728,10 @@ test("review logs render readable chat and progress entries while preserving raw
   await expect(detail.getByText("Workspace diff updated")).toBeVisible();
   await expect(detail.getByText("Run finished")).toBeVisible();
   await expect(detail.getByText("Unsupported event payload with keys: unsupported, note.")).toBeVisible();
-  await expect(detail.getByText("Raw artifact: APP_SERVER_EVENTS.jsonl")).toBeVisible();
+  await expect(detail.getByText("Executor")).toBeVisible();
+  await expect(detail.getByText("Claude Subagent", { exact: true }).first()).toBeVisible();
+  await expect(detail.getByText("Tests passing")).toBeVisible();
+  await expect(detail.getByText("Raw artifact: RUN_EVENTS.jsonl")).toBeVisible();
   await expect(detail.getByText(".harness/runs/run_chat/APP_SERVER_EVENTS.jsonl")).toBeVisible();
 });
 

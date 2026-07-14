@@ -424,6 +424,7 @@ mod tests {
             changeset_render_in_summary: true,
             allow_here_for_tiny: true,
             compact_keep_last: 50,
+            external_heartbeat_ttl_seconds: 120,
             keep_failed_worktrees: true,
             cleanup_after_sync: false,
             failed_worktree_retention_days: 7,
@@ -455,6 +456,8 @@ mod tests {
             current_stage: "start".to_owned(),
             cancel_requested: false,
             terminal_reason: None,
+            execution_mode: "managed".to_owned(),
+            harness_db_digest: None,
         }
     }
 

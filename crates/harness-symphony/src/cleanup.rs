@@ -27,6 +27,7 @@ pub enum CleanupReason {
     ExpiredFailed,
     ExpiredInterrupted,
     ExpiredCancelled,
+    ExpiredStale,
     Orphan,
 }
 
@@ -37,6 +38,7 @@ impl std::fmt::Display for CleanupReason {
             Self::ExpiredFailed => "expired-failed",
             Self::ExpiredInterrupted => "expired-interrupted",
             Self::ExpiredCancelled => "expired-cancelled",
+            Self::ExpiredStale => "expired-stale",
             Self::Orphan => "orphan",
         })
     }
@@ -88,7 +90,9 @@ fn cleanup_runtime_at(
     dry_run: bool,
     now: i64,
 ) -> Result<CleanupResult, CleanupError> {
-    let runs = RunStateStore::new(config.state_db.clone()).list_cleanup_runs()?;
+    let store = RunStateStore::new(config.state_db.clone());
+    store.reconcile_expired_external_runs(now, config.external_heartbeat_ttl_seconds)?;
+    let runs = store.list_cleanup_runs()?;
     let registered = registered_worktrees(config)?;
     let known = runs
         .iter()
@@ -169,6 +173,7 @@ fn eligible_reason(
         "failed" => Some(CleanupReason::ExpiredFailed),
         "interrupted" => Some(CleanupReason::ExpiredInterrupted),
         "cancelled" => Some(CleanupReason::ExpiredCancelled),
+        "stale" => Some(CleanupReason::ExpiredStale),
         _ => None,
     }
 }
@@ -408,6 +413,38 @@ mod tests {
 
         assert_eq!(result.removed_count(), 1);
         assert!(!orphan.exists());
+    }
+
+    #[test]
+    fn stale_run_uses_failed_worktree_retention() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut config = SymphonyConfig::default().resolve(temp.path());
+        config.keep_failed_worktrees = false;
+        let worktree = config.worktrees_dir.join("run_stale");
+        fs::create_dir_all(&worktree).unwrap();
+        add_run(&config, "run_stale", "stale", "not_applied");
+
+        let result = cleanup_runtime(&config, true).unwrap();
+
+        assert_eq!(result.items[0].reason, CleanupReason::ExpiredStale);
+    }
+
+    #[test]
+    fn cleanup_reconciles_expired_external_run_before_selecting_candidates() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut config = SymphonyConfig::default().resolve(temp.path());
+        config.keep_failed_worktrees = false;
+        config.external_heartbeat_ttl_seconds = 1;
+        let worktree = config.worktrees_dir.join("run_expired_external");
+        fs::create_dir_all(&worktree).unwrap();
+        add_run(&config, "run_expired_external", "prepared", "not_applied");
+        RunStateStore::new(config.state_db.clone())
+            .start_external("run_expired_external", "claude-subagent", 1)
+            .unwrap();
+
+        let result = cleanup_runtime_at(&config, true, 2).unwrap();
+
+        assert_eq!(result.items[0].reason, CleanupReason::ExpiredStale);
     }
 
     #[test]

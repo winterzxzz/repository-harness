@@ -36,6 +36,7 @@ for required in \
   docs/CONTEXT_RULES.md \
   docs/FEATURE_INTAKE.md \
   docs/HARNESS.md \
+  docs/SYMPHONY_QUICKSTART.md \
   docs/HARNESS_BACKLOG.md \
   docs/TEST_MATRIX.md \
   docs/decisions/README.md \
@@ -144,6 +145,19 @@ fi
 test -f "$FRESH_TARGET/docs/HARNESS.md" || fail "fresh install omitted core policy"
 test -f "$FRESH_TARGET/docs/decisions/README.md" || fail "fresh install omitted decision scaffold"
 test -f "$FRESH_TARGET/AGENTS.md" || fail "fresh install omitted AGENTS.md"
+test -f "$FRESH_TARGET/docs/SYMPHONY_QUICKSTART.md" || \
+  fail "fresh install omitted Symphony Quickstart"
+grep -Fq 'command -v harness-symphony' "$FRESH_TARGET/docs/SYMPHONY_QUICKSTART.md" || \
+  fail "fresh install Quickstart does not verify the installed Symphony command"
+if grep -Fq 'target/debug/harness-symphony' "$FRESH_TARGET/docs/SYMPHONY_QUICKSTART.md"; then
+  fail "fresh install Quickstart relies on a source-only Symphony build path"
+fi
+for command in 'runs start' 'runs heartbeat' 'runs complete'; do
+  grep -Fq "$command" "$FRESH_TARGET/AGENTS.md" || \
+    fail "fresh install AGENTS.md omits external lifecycle command: $command"
+  grep -Fq "$command" "$FRESH_TARGET/docs/SYMPHONY_QUICKSTART.md" || \
+    fail "fresh install Quickstart omits external lifecycle command: $command"
+done
 test -f "$FRESH_TARGET/CLAUDE.md" || fail "fresh install omitted CLAUDE.md"
 grep -Fq '@AGENTS.md' "$FRESH_TARGET/CLAUDE.md" || \
   fail "fresh install CLAUDE.md does not import AGENTS.md"
@@ -181,6 +195,10 @@ grep -Fq 'Do not pass `--no-web`' "$REFRESH_AGENT_TARGET/AGENTS.md" || \
   fail "refreshed AGENTS.md does not preserve Symphony Web UI startup"
 grep -Fq 'HARNESS_RUN_ID' "$REFRESH_AGENT_TARGET/AGENTS.md" || \
   fail "refreshed AGENTS.md does not prevent nested Symphony runs"
+for command in 'runs start' 'runs heartbeat' 'runs complete'; do
+  grep -Fq "$command" "$REFRESH_AGENT_TARGET/AGENTS.md" || \
+    fail "refreshed AGENTS.md omits external lifecycle command: $command"
+done
 test ! -e "$FRESH_TARGET/README.md" || fail "fresh install copied source repository README"
 for decision_file in "$FRESH_TARGET/docs/decisions"/[0-9][0-9][0-9][0-9]*.md; do
   test ! -f "$decision_file" || fail "fresh install copied numbered decision history"

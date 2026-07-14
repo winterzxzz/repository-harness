@@ -1,5 +1,5 @@
 use std::fs::{self, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -132,6 +132,43 @@ pub fn read_events_after(path: &Path, after: Option<u64>) -> std::io::Result<Eve
     })
 }
 
+pub fn read_last_event(path: &Path) -> std::io::Result<Option<RunEvent>> {
+    const READ_CHUNK_SIZE: u64 = 8 * 1024;
+
+    let mut file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let mut position = file.metadata()?.len();
+    let mut line_suffix = Vec::new();
+    while position > 0 {
+        let start = position.saturating_sub(READ_CHUNK_SIZE);
+        let mut chunk = vec![0; (position - start) as usize];
+        file.seek(SeekFrom::Start(start))?;
+        file.read_exact(&mut chunk)?;
+        chunk.extend_from_slice(&line_suffix);
+
+        let mut lines = chunk.split(|byte| *byte == b'\n');
+        let first = lines.next().unwrap_or_default().to_vec();
+        let complete_lines = lines.collect::<Vec<_>>();
+        for line in complete_lines.into_iter().rev() {
+            if line.is_empty() {
+                continue;
+            }
+            if let Ok(event) = serde_json::from_slice::<RunEvent>(line) {
+                return Ok(Some(event));
+            }
+        }
+        line_suffix = first;
+        position = start;
+    }
+    if line_suffix.is_empty() {
+        return Ok(None);
+    }
+    Ok(serde_json::from_slice::<RunEvent>(&line_suffix).ok())
+}
+
 fn compact(path: &Path, max_events: usize) -> std::io::Result<()> {
     let page = read_events_after(path, None)?;
     if page.events.len() <= max_events {
@@ -243,5 +280,20 @@ mod tests {
         let page = read_events_after(&path, Some(0)).unwrap();
         assert!(page.reset_required);
         assert_eq!(page.events.last().unwrap().message, "terminal");
+    }
+
+    #[test]
+    fn last_event_handles_missing_blank_and_malformed_tail_lines() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("RUN_EVENTS.jsonl");
+        assert_eq!(read_last_event(&path).unwrap(), None);
+
+        let writer = RunEventWriter::new(path.clone(), "codex").unwrap();
+        writer.append("progress", "agent", "first").unwrap();
+        let expected = writer.append("progress", "agent", "second").unwrap();
+        let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+        file.write_all(b"\nnot-json\n\n").unwrap();
+
+        assert_eq!(read_last_event(&path).unwrap(), Some(expected));
     }
 }
