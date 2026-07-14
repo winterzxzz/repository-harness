@@ -577,7 +577,7 @@ fn derive_board_item(story: StoryRow, derivation: BoardDerivation<'_>) -> BoardI
             "prepared" | "running" => {
                 (BoardState::InProgress, format!("active run {}", run.run_id))
             }
-            "failed" | "cancelled" | "partial" | "blocked" | "needs_intake" => {
+            "failed" | "cancelled" | "partial" | "blocked" | "needs_intake" | "stale" => {
                 (BoardState::NeedsAttention, run.next_action.clone())
             }
             "completed" if is_synced(run) => (BoardState::Done, "synced locally".to_owned()),
@@ -965,6 +965,7 @@ mod tests {
         insert_story(&db_path, "US-FAILED", "planned");
         insert_story(&db_path, "US-SYNCED", "planned");
         insert_story(&db_path, "US-DONE", "implemented");
+        insert_story(&db_path, "US-STALE", "planned");
 
         add_run(
             state_db.clone(),
@@ -979,6 +980,14 @@ mod tests {
             "US-FAILED",
             "run_3",
             "failed",
+            "not_applied",
+            None,
+        );
+        add_run(
+            state_db.clone(),
+            "US-STALE",
+            "run_stale",
+            "stale",
             "not_applied",
             None,
         );
@@ -1012,6 +1021,7 @@ mod tests {
         assert_eq!(state_for("US-RUNNING"), BoardState::InProgress);
         assert_eq!(state_for("US-REVIEW"), BoardState::Review);
         assert_eq!(state_for("US-FAILED"), BoardState::NeedsAttention);
+        assert_eq!(state_for("US-STALE"), BoardState::NeedsAttention);
         assert_eq!(state_for("US-SYNCED"), BoardState::Done);
         assert_eq!(state_for("US-DONE"), BoardState::Done);
     }

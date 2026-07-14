@@ -307,6 +307,15 @@ This repo uses Harness. Before work, read:
 
 Use the Rust Harness CLI at `scripts/bin/harness-cli` on macOS/Linux or
 `scripts/bin/harness-cli.exe` on Windows as the main operational tool.
+
+For an explicitly approved, execution-ready story, hand implementation to
+Symphony with `harness-symphony run <story-id>`. If `HARNESS_RUN_ID` is already
+set, continue inside the current run instead of starting a nested run.
+
+For an approved external-executor story, the main agent runs `run --prepare-only`,
+`runs start`, periodic `runs heartbeat`, and `runs complete` from the source
+repository. The subagent edits only inside the printed worktree and never
+invokes root lifecycle commands.
 <!-- HARNESS:END -->
 '@
 }

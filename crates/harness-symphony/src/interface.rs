@@ -8,6 +8,10 @@ use crate::auto::{options_from_config, run_auto_mode, AutoError, AutoRunSummary}
 use crate::cleanup::{cleanup_runtime, CleanupError, CleanupResult};
 use crate::config::{ConfigError, ResolvedConfig, SymphonyConfig};
 use crate::doctor::{print_report, run_doctor, DoctorError};
+use crate::external::{
+    complete as complete_external, heartbeat as heartbeat_external, reconcile_external_runs,
+    start as start_external, ExternalError,
+};
 use crate::pr::{create_pr, PrCreateResult, PrError};
 use crate::retention::{compact_runs, CompactResult, RetentionError};
 use crate::run::{
@@ -139,6 +143,20 @@ enum RunsAction {
     List,
     /// Show one local Symphony run.
     Show { run_id: String },
+    /// Start a prepared run under a main-agent-owned external executor lease.
+    Start {
+        run_id: String,
+        #[arg(long)]
+        executor: String,
+    },
+    /// Refresh an external executor lease and optionally record a milestone.
+    Heartbeat {
+        run_id: String,
+        #[arg(long)]
+        step: Option<String>,
+    },
+    /// Validate and finalize a running or stale external run.
+    Complete { run_id: String },
     /// Compact old local run artifacts.
     Compact {
         /// Number of newest run artifact directories to keep.
@@ -213,6 +231,8 @@ pub enum InterfaceError {
     Auto(#[from] AutoError),
     #[error("{0}")]
     Web(#[from] WebError),
+    #[error("{0}")]
+    External(#[from] ExternalError),
     #[error("could not determine current directory: {0}")]
     CurrentDir(std::io::Error),
 }
@@ -240,10 +260,12 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
         Command::Work(args) => match args.action {
             WorkAction::List => print_work_items(&list_work(&resolved.harness_db)?),
             WorkAction::Board => {
+                reconcile_external_runs(&resolved)?;
                 print_board_items(&list_board(&resolved.harness_db, &resolved.state_db)?)
             }
         },
         Command::Run(args) => {
+            reconcile_external_runs(&resolved)?;
             cleanup_best_effort(&resolved);
             if !args.prepare_only && !args.no_web {
                 print_ensure_web(&ensure_web_server(&repo_root, &default_web_options()));
@@ -262,9 +284,22 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
             }
         }
         Command::Runs(args) => match args.action {
-            RunsAction::List => print_runs(&RunStateStore::new(resolved.state_db).list_runs()?),
+            RunsAction::List => {
+                reconcile_external_runs(&resolved)?;
+                print_runs(&RunStateStore::new(resolved.state_db).list_runs()?);
+            }
             RunsAction::Show { run_id } => {
+                reconcile_external_runs(&resolved)?;
                 print_run_detail(&RunStateStore::new(resolved.state_db).show_run(&run_id)?);
+            }
+            RunsAction::Start { run_id, executor } => {
+                print_run_detail(&start_external(&resolved, &run_id, &executor)?);
+            }
+            RunsAction::Heartbeat { run_id, step } => {
+                print_run_detail(&heartbeat_external(&resolved, &run_id, step.as_deref())?);
+            }
+            RunsAction::Complete { run_id } => {
+                print_completed_run(&complete_external(&resolved, &run_id)?);
             }
             RunsAction::Compact { keep_last } => {
                 print_compact_result(&compact_runs(
@@ -326,10 +361,13 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
             options.max_idle_cycles = args.max_idle_cycles;
             print_auto_result(&run_auto_mode(&resolved, options)?);
         }
-        Command::Status => print_status(
-            &RunStateStore::new(resolved.state_db.clone()).active_run()?,
-            &unapplied_changesets(&resolved)?,
-        ),
+        Command::Status => {
+            reconcile_external_runs(&resolved)?;
+            print_status(
+                &RunStateStore::new(resolved.state_db.clone()).active_run()?,
+                &unapplied_changesets(&resolved)?,
+            );
+        }
     }
 
     Ok(())
@@ -415,6 +453,10 @@ fn print_config(config: &ResolvedConfig) {
     );
     println!("allow_here_for_tiny: {}", config.allow_here_for_tiny);
     println!("compact_keep_last: {}", config.compact_keep_last);
+    println!(
+        "external_heartbeat_ttl_seconds: {}",
+        config.external_heartbeat_ttl_seconds
+    );
     println!("keep_failed_worktrees: {}", config.keep_failed_worktrees);
     println!("cleanup_after_sync: {}", config.cleanup_after_sync);
     println!(
@@ -544,6 +586,14 @@ fn print_run_detail(run: &RunRecord) {
     println!("worktree_state: {}", worktree_state(run));
     println!("lightweight: {}", run.lightweight);
     println!("status: {}", run.status);
+    println!("execution_mode: {}", run.execution_mode);
+    println!("executor: {}", run.agent);
+    println!(
+        "heartbeat_at: {}",
+        run.heartbeat_at
+            .map(|value| value.to_string())
+            .unwrap_or_default()
+    );
     println!(
         "result_path: {}",
         run.result_path
@@ -775,6 +825,29 @@ mod tests {
             panic!("expected runs command");
         };
         assert!(matches!(args.action, RunsAction::Cleanup { dry_run: true }));
+    }
+
+    #[test]
+    fn runs_external_lifecycle_cli_parses() {
+        assert!(Cli::try_parse_from([
+            "harness-symphony",
+            "runs",
+            "start",
+            "run_1",
+            "--executor",
+            "claude-subagent"
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from([
+            "harness-symphony",
+            "runs",
+            "heartbeat",
+            "run_1",
+            "--step",
+            "tests passing"
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from(["harness-symphony", "runs", "complete", "run_1"]).is_ok());
     }
 
     #[test]

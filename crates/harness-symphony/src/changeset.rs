@@ -16,6 +16,20 @@ pub enum ChangesetError {
     },
     #[error("changeset {0} does not start with changeset.header")]
     MissingHeader(String),
+    #[error("changeset {path} belongs to run {actual}, expected {expected}")]
+    HeaderMismatch {
+        path: String,
+        actual: String,
+        expected: String,
+    },
+    #[error("changeset {0} contains no semantic operations")]
+    Empty(String),
+    #[error("changeset {path} contains invalid semantic operation at line {line}: {reason}")]
+    InvalidOperation {
+        path: String,
+        line: usize,
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,6 +76,122 @@ pub fn changeset_id(path: &Path) -> Result<String, ChangesetError> {
         .and_then(Value::as_str)
         .unwrap_or("unknown")
         .to_owned())
+}
+
+pub fn validate_run_changeset(path: &Path, expected_run_id: &str) -> Result<usize, ChangesetError> {
+    let operations = read_operations(path)?;
+    let header = operations
+        .first()
+        .filter(|value| value.get("op").and_then(Value::as_str) == Some("changeset.header"))
+        .ok_or_else(|| ChangesetError::MissingHeader(path.display().to_string()))?;
+    let actual = header
+        .get("run_id")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    if actual != expected_run_id {
+        return Err(ChangesetError::HeaderMismatch {
+            path: path.display().to_string(),
+            actual: actual.to_owned(),
+            expected: expected_run_id.to_owned(),
+        });
+    }
+    for (index, operation) in operations.iter().enumerate().skip(1) {
+        validate_semantic_operation(operation).map_err(|reason| {
+            ChangesetError::InvalidOperation {
+                path: path.display().to_string(),
+                line: index + 1,
+                reason,
+            }
+        })?;
+    }
+    let semantic = operations.len().saturating_sub(1);
+    if semantic == 0 {
+        return Err(ChangesetError::Empty(path.display().to_string()));
+    }
+    Ok(semantic)
+}
+
+fn validate_semantic_operation(operation: &Value) -> Result<(), String> {
+    let op = operation
+        .get("op")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "missing string op".to_owned())?;
+    if operation.get("version").and_then(Value::as_i64) != Some(1) {
+        return Err("version must be 1".to_owned());
+    }
+    let numeric_id = matches!(
+        op,
+        "intake.add" | "backlog.add" | "backlog.close" | "intervention.add" | "trace.add"
+    );
+    let string_id = matches!(
+        op,
+        "story.add"
+            | "story.update"
+            | "story.verify"
+            | "decision.add"
+            | "decision.verify"
+            | "tool.register"
+            | "tool.check"
+            | "tool.remove"
+    );
+    if !numeric_id && !string_id {
+        return Err(format!("unsupported op {op}"));
+    }
+    if numeric_id && operation.get("id").and_then(Value::as_i64).is_none() {
+        return Err("missing integer id".to_owned());
+    }
+    if string_id
+        && operation
+            .get("id")
+            .and_then(Value::as_str)
+            .is_none_or(|value| value.is_empty())
+    {
+        return Err("missing non-empty string id".to_owned());
+    }
+    let payload = operation
+        .get("payload")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "missing object payload".to_owned())?;
+    let required = match op {
+        "intake.add" => &["input_type", "summary", "risk_lane"][..],
+        "story.add" => &["title", "risk_lane"][..],
+        "story.verify" | "decision.verify" => &["result"][..],
+        "decision.add" => &["title", "status"][..],
+        "backlog.add" => &["title"][..],
+        "trace.add" => &["task_summary"][..],
+        "backlog.close" | "tool.check" => &["status"][..],
+        "tool.register" => &["command", "description", "responsibility", "kind"][..],
+        "intervention.add" => &["type", "description", "source"][..],
+        "story.update" => {
+            if !payload.keys().any(|key| {
+                matches!(
+                    key.as_str(),
+                    "status"
+                        | "evidence"
+                        | "unit_proof"
+                        | "integration_proof"
+                        | "e2e_proof"
+                        | "platform_proof"
+                        | "verify_command"
+                )
+            }) {
+                return Err("story.update payload contains no supported fields".to_owned());
+            }
+            &[][..]
+        }
+        "tool.remove" => &[][..],
+        _ => unreachable!(),
+    };
+    for field in required {
+        if payload
+            .get(*field)
+            .and_then(Value::as_str)
+            .is_none_or(|value| value.is_empty())
+        {
+            return Err(format!("payload missing non-empty string {field}"));
+        }
+    }
+    Ok(())
 }
 
 pub fn render_changeset(path: &Path) -> Result<RenderedChangeset, ChangesetError> {
@@ -279,6 +409,43 @@ mod tests {
         assert!(markdown.contains("## Harness Changes"));
         assert!(markdown.contains("| story.update | US-040 |"));
         assert!(markdown.contains("future.op"));
+    }
+
+    #[test]
+    fn validates_matching_header_and_semantic_operations() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("run_1.changeset.jsonl");
+        fs::write(
+            &path,
+            "{\"op\":\"changeset.header\",\"version\":1,\"run_id\":\"run_1\"}\n{\"op\":\"story.update\",\"version\":1,\"id\":\"US-094\",\"payload\":{\"status\":\"implemented\"}}\n",
+        )
+        .unwrap();
+        assert_eq!(validate_run_changeset(&path, "run_1").unwrap(), 1);
+        assert!(validate_run_changeset(&path, "run_other").is_err());
+    }
+
+    #[test]
+    fn rejects_structurally_invalid_semantic_operations() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("run_1.changeset.jsonl");
+        for invalid in [
+            "{}",
+            r#"{"op":"changeset.header","version":1,"run_id":"run_1"}"#,
+            r#"{"op":"story.update","version":1,"payload":{}}"#,
+            r#"{"op":"unknown.operation","version":1,"id":"US-094","payload":{}}"#,
+        ] {
+            fs::write(
+                &path,
+                format!(
+                    "{{\"op\":\"changeset.header\",\"version\":1,\"run_id\":\"run_1\"}}\n{invalid}\n"
+                ),
+            )
+            .unwrap();
+            assert!(
+                validate_run_changeset(&path, "run_1").is_err(),
+                "accepted invalid operation: {invalid}"
+            );
+        }
     }
 
     #[test]

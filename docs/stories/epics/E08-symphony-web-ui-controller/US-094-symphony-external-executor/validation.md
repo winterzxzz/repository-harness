@@ -43,5 +43,21 @@ scripts/bin/harness-cli story verify US-094
 
 ## Acceptance Evidence
 
-Pending implementation. Final evidence must include one monitored Claude
-main-agent/subagent run from prepare through validated completion.
+- `cargo fmt --check`, `cargo test --workspace`, and
+  `cargo clippy --workspace -- -D warnings` passed. The workspace run included
+  253 Symphony tests plus 63 Harness CLI/bench tests and doc tests.
+- The Web UI production build passed, all 41 Playwright tests passed, and the
+  Electron desktop smoke passed.
+- `scripts/validate-install-payload.sh` passed for the fresh installer,
+  merge/update paths, agent-shim refresh, and shared Bash/PowerShell payload.
+- Temporary lifecycle run `run_1784006084764676000_80083_0` completed through
+  prepare, external start, heartbeat milestone, shared artifact validation,
+  and canonical `completed` state with executor `claude-subagent`.
+- A separate one-second-TTL fixture proved stale lock release and late
+  completion while newer run `run_1784006102600026000_83724_0` remained the
+  active prepared run.
+- Review regressions cover strict semantic changeset validation, digest-error
+  lock release, changed-database rejection, heartbeat/expiry concurrency,
+  request/prepare/cleanup reconciliation, normalized external review events,
+  and late completion while a newer run owns the active lock.
+- `git diff --check` passed.
