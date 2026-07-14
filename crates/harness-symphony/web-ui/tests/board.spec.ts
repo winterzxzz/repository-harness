@@ -1660,6 +1660,54 @@ test("artifact control is explicitly unavailable and long review values stay bou
   await expectNoHorizontalOverflow(detail, "mobile detail dialog");
 });
 
+test("pr-less completed review enables sync approval", async ({ page }) => {
+  let synced = false;
+  await page.route("**/api/board", async (route) => {
+    const item = boardItem("US-096", "Demo Story", "Review");
+    item.run_id = "run_no_pr";
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [item] }) });
+  });
+  await page.route("**/api/runs/run_no_pr/review", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        run_id: "run_no_pr",
+        story_id: "US-096",
+        status: "completed",
+        agent: "codex",
+        outcome: "completed",
+        summary: "Demo completed.",
+        result: null,
+        validation: { commands: [{ command: "true", result: "pass" }] },
+        changed_files: [],
+        changeset_preview: null,
+        pr_url: null,
+        pr_status: "not_applicable",
+        artifact_paths: [],
+        suggested_next_action: "Review local run artifacts and approve sync when ready.",
+        events: []
+      })
+    });
+  });
+  await page.route("**/api/runs/run_no_pr/sync", async (route) => {
+    synced = true;
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ run_id: "run_no_pr", sync_status: "synced", operations: 2 })
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /US-096/ }).click();
+  const detail = page.getByRole("dialog", { name: "Selected work detail" });
+
+  const approve = detail.getByRole("button", { name: "Approve Sync" });
+  await expect(approve).toBeEnabled();
+  await expect(detail.getByRole("button", { name: "Mark Merged" })).toBeDisabled();
+  await approve.click();
+  await expect.poll(async () => synced).toBe(true);
+});
+
 test("review logs render readable chat and progress entries while preserving raw artifacts", async ({ page }) => {
   await page.route("**/api/board", async (route) => {
     await route.fulfill({

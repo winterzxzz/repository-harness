@@ -545,7 +545,8 @@ function ReviewPanel({
   onRequestChanges: (runId: string, reason: string, files: File[]) => Promise<RequestChangesResponse>;
 }) {
   const canMarkMerged = review.pr_status === "created" && review.pr_url !== null;
-  const canSync = review.pr_status === "merged" && review.status === "completed";
+  const canSync =
+    review.status === "completed" && (review.pr_status === "merged" || review.pr_status === "not_applicable");
   const prRecovery = review.recovery_action?.kind === "pr_retry" ? review.recovery_action : null;
 
   return (
@@ -555,7 +556,10 @@ function ReviewPanel({
           <SectionTitle>Review evidence</SectionTitle>
           <p className="bounded-text mt-1 text-sm leading-6 text-muted-foreground">{review.suggested_next_action}</p>
         </div>
-        <Badge tone={review.pr_status === "created" ? "accent" : "danger"} className="shrink-0">
+        <Badge
+          tone={review.pr_status === "created" ? "accent" : review.pr_status === "not_applicable" ? "neutral" : "danger"}
+          className="shrink-0"
+        >
           {review.pr_status}
         </Badge>
       </div>
