@@ -30,7 +30,6 @@ import type {
   RunEvent
 } from "./types";
 import { cn } from "../../lib/utils";
-import { formatRunLog } from "../../run-log";
 import { agentLabel } from "./constants";
 import { RunConsole } from "./run-console";
 import { retainRunEvents } from "./run-console-model";
@@ -501,15 +500,9 @@ export function TaskDetail({
       {item.active_run && preservedFailedReview ? <PriorFailureEvidence review={preservedFailedReview} /> : null}
 
       {item.active_run ? (
-        <>
-          <EventLog events={events} live agent={review?.agent} />
-          <RunConsole events={events} live agent={review?.agent} />
-        </>
+        <RunConsole events={events} live agent={review?.agent} />
       ) : review ? (
-        <>
-          <EventLog events={review.events} agent={review.agent} />
-          <RunConsole events={review.events} agent={review.agent} />
-        </>
+        <RunConsole events={review.events} agent={review.agent} />
       ) : null}
     </aside>
   );
@@ -948,80 +941,6 @@ function PriorFailureEvidence({ review }: { review: ReviewResponse }) {
       </div>
     </div>
   );
-}
-
-function EventLog({ events, live = false, agent }: { events: RunEvent[]; live?: boolean; agent?: string }) {
-  const entries = formatRunLog(events, agentLabel(agent ?? "codex")).slice(-12);
-  const stage = runMonitorStage(events);
-  const hasNormalizedEvents = events.some((event) => {
-    if (typeof event !== "object" || event === null) return false;
-    const value = event as Record<string, unknown>;
-    return typeof value.sequence === "number" && typeof value.kind === "string";
-  });
-
-  return (
-    <div id="logs" className="flex flex-col gap-3 p-4" role="region" aria-label="Run monitor" aria-live={live ? "polite" : undefined}>
-      <div className="flex items-baseline justify-between gap-3">
-        <SectionTitle>Run monitor</SectionTitle>
-        <p className="text-xs text-muted-foreground">Raw artifact: {hasNormalizedEvents ? "RUN_EVENTS.jsonl" : "APP_SERVER_EVENTS.jsonl"}</p>
-      </div>
-      <h4 className="sr-only">Run communication</h4>
-      <p className="text-xs font-semibold text-muted-foreground">Events {events.length} - {stage}</p>
-      <div className="grid gap-2 sm:grid-cols-3">
-        <Field label="Stage" value={stage} />
-        <Field label="Events" value={String(events.length)} />
-        <Field label="Last update" value={entries.at(-1)?.timestamp ?? "pending"} />
-      </div>
-      <div className="max-h-80 overflow-auto rounded-md border border-border bg-muted">
-        {entries.length > 0 ? (
-          entries.map((entry, index) => (
-            <div
-              key={`${entry.method ?? entry.title}-${index}`}
-              className={cn(
-                "grid min-h-12 grid-cols-[minmax(0,1fr)] gap-2 border-b border-border/60 px-4 py-3.5 text-sm last:border-b-0 transition-colors duration-150",
-                entry.kind === "message" ? "bg-background/40 hover:bg-background/60" : "bg-muted/30 hover:bg-muted/45"
-              )}
-            >
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge tone={entry.kind === "message" ? "accent" : entry.kind === "progress" ? "info" : "neutral"}>
-                    {entry.source}
-                  </Badge>
-                  <strong className="font-semibold">{entry.title}</strong>
-                </div>
-                {entry.timestamp ? <span className="text-xs text-muted-foreground">{entry.timestamp}</span> : null}
-              </div>
-              <p className="break-words text-sm leading-6 text-muted-foreground">{entry.message}</p>
-            </div>
-          ))
-        ) : (
-          <div className="flex min-h-12 items-center px-3 text-sm text-muted-foreground">No run communication yet</div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function runMonitorStage(events: RunEvent[]): string {
-  const methods = events.map(eventMethod);
-  if (methods.includes("turn/completed")) {
-    return "Artifacts";
-  }
-  if (methods.some((method) => method?.includes("diff") || method?.includes("completed"))) {
-    return "Execution";
-  }
-  if (methods.some((method) => method?.includes("started"))) {
-    return "Preparation";
-  }
-  return "Waiting";
-}
-
-function eventMethod(event: RunEvent): string | undefined {
-  if (typeof event !== "object" || event === null || Array.isArray(event)) {
-    return undefined;
-  }
-  const value = (event as { method?: unknown }).method;
-  return typeof value === "string" ? value : undefined;
 }
 
 function Field({ label, value }: { label: string; value: string }) {

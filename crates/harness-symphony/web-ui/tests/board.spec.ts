@@ -729,7 +729,7 @@ test("tool status dashboard lists tools and triggers scan", async ({ page }) => 
   await expect(page.getByRole("region", { name: "Tool registry" })).toContainText("present");
 });
 
-test("run monitor summarizes active event progress", async ({ page }) => {
+test("run console waits for actionable events on an active run", async ({ page }) => {
   await page.route("**/api/board", async (route) => {
     const item = boardItem("US-081", "Run Monitor Progress", "In Progress");
     item.active_run = "run_us_081";
@@ -754,10 +754,10 @@ test("run monitor summarizes active event progress", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: /US-081/ }).click();
 
-  const monitor = page.getByRole("region", { name: "Run monitor" });
-  await expect(monitor.getByRole("heading", { name: "Run monitor" })).toBeVisible();
-  await expect(monitor).toContainText("Events 2");
-  await expect(monitor).toContainText("Execution");
+  const runConsole = page.getByRole("region", { name: "Run console" });
+  await expect(runConsole.getByRole("heading", { name: "Run console" })).toBeVisible();
+  await expect(runConsole).toContainText("Live");
+  await expect(runConsole).toContainText("Waiting for command output and agent milestones");
 });
 
 test("ready review requests changes with reason and image evidence", async ({ page }) => {
@@ -1495,9 +1495,10 @@ test("execution recovery retries needs attention work and preserves failed evide
         run_id: "run_recovery",
         events: [
           { method: "turn/started", params: { turn: { status: "inProgress" } } },
-          { method: "item/agentMessage/delta", params: { itemId: "retry_msg", delta: "Retry run is now live." } }
+          { method: "item/agentMessage/delta", params: { itemId: "retry_msg", delta: "Retry run is now live." } },
+          { method: "item/completed", params: { item: { id: "retry_msg", type: "agentMessage" } } }
         ],
-        last_sequence: 2,
+        last_sequence: 3,
         reset_required: false
       })
     });
@@ -1513,7 +1514,7 @@ test("execution recovery retries needs attention work and preserves failed evide
   await expect(page.getByRole("button", { name: /US-067/ })).toContainText("active");
   await expect(detail.getByRole("heading", { name: "Prior failed run evidence" })).toBeVisible();
   await expect(detail.getByText(".harness/runs/run_failed/APP_SERVER_EVENTS.jsonl").first()).toBeVisible();
-  await expect(detail.getByRole("heading", { name: "Run communication" })).toBeVisible();
+  await expect(detail.getByRole("region", { name: "Run console" }).getByRole("heading", { name: "Run console" })).toBeVisible();
   await expect(detail.getByText("Retry run is now live.")).toBeVisible();
 });
 
@@ -1721,17 +1722,10 @@ test("review logs render readable chat and progress entries while preserving raw
   await page.getByRole("button", { name: /US-060/ }).click();
   const detail = page.getByRole("dialog", { name: "Selected work detail" });
 
-  await expect(detail.getByRole("heading", { name: "Run communication" })).toBeVisible();
-  await expect(detail.getByText("Assistant", { exact: true })).toBeVisible();
-  await expect(detail.getByText("Implemented readable logs.")).toBeVisible();
-  await expect(detail.getByText("Run started")).toBeVisible();
-  await expect(detail.getByText("Workspace diff updated")).toBeVisible();
-  await expect(detail.getByText("Run finished")).toBeVisible();
-  await expect(detail.getByText("Unsupported event payload with keys: unsupported, note.")).toBeVisible();
-  await expect(detail.getByText("Executor")).toBeVisible();
+  await expect(detail.getByRole("region", { name: "Run console" }).getByRole("heading", { name: "Run console" })).toBeVisible();
+  await expect(detail.getByText("Executor").first()).toBeVisible();
   await expect(detail.getByText("Claude Subagent", { exact: true }).first()).toBeVisible();
-  await expect(detail.getByRole("region", { name: "Run monitor" }).getByText("Tests passing")).toBeVisible();
-  await expect(detail.getByText("Raw artifact: RUN_EVENTS.jsonl")).toBeVisible();
+  await expect(detail.getByRole("region", { name: "Run console" }).getByText("Tests passing")).toBeVisible();
   await expect(detail.getByText(".harness/runs/run_chat/APP_SERVER_EVENTS.jsonl")).toBeVisible();
 });
 
@@ -1922,8 +1916,8 @@ test("runtime events poll with a sequence cursor and cancel run", async ({ page 
   await page.goto("/");
   await page.getByRole("button", { name: /US-093/ }).click();
   const detail = page.getByRole("dialog", { name: "Selected work detail" });
-  await expect(detail.getByRole("region", { name: "Run monitor" }).getByText("Running cargo test -p harness-symphony")).toBeVisible();
-  await expect(detail.getByRole("region", { name: "Run monitor" }).getByText("Tests are still running")).toBeVisible({ timeout: 5000 });
+  await expect(detail.getByRole("region", { name: "Run console" }).getByText("Running cargo test -p harness-symphony")).toBeVisible();
+  await expect(detail.getByRole("region", { name: "Run console" }).getByText("Tests are still running")).toBeVisible({ timeout: 5000 });
 
   await detail.getByRole("button", { name: "Cancel run" }).click();
   await expect.poll(async () => cancelRequested).toBe(true);
