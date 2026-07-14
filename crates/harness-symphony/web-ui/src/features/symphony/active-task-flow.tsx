@@ -56,6 +56,8 @@ export function ActiveTaskFlow({ flow, stale = false, onRecover }: { flow: TaskF
           <div className="task-flow-fork min-w-[880px]" aria-label="Task lifecycle steps">
             <FlowSegment name="Shared start" steps={fork.head} connectTrailingEdge />
             <div className="task-flow-lanes">
+              <span aria-hidden="true" className="task-flow-junction task-flow-junction--left" />
+              <span aria-hidden="true" className="task-flow-junction task-flow-junction--right" />
               <FlowLane name="Pull request" lane={fork.prLane} />
               <FlowLane name="Local review" lane={fork.localLane} />
             </div>

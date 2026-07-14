@@ -486,33 +486,30 @@ a {
 .task-flow-lanes::before,
 .task-flow-lanes::after {
   position: absolute;
-  top: 26px;
-  bottom: 14px;
-  width: 1px;
-  background: var(--border);
+  top: 30px;
+  bottom: 33px;
+  width: 18px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
   content: "";
 }
 
-.task-flow-lanes::before { left: 0; }
-.task-flow-lanes::after { right: 0; }
+.task-flow-lanes::before {
+  left: 0;
+  border-left: 1px solid var(--border);
+  border-radius: 10px 0 0 10px;
+}
+
+.task-flow-lanes::after {
+  right: 0;
+  border-right: 1px solid var(--border);
+  border-radius: 0 10px 10px 0;
+}
 
 .task-flow-lane {
   position: relative;
   padding-top: 18px;
 }
-
-.task-flow-lane::before,
-.task-flow-lane::after {
-  position: absolute;
-  top: 30px;
-  width: 18px;
-  height: 1px;
-  background: var(--border);
-  content: "";
-}
-
-.task-flow-lane::before { left: -18px; }
-.task-flow-lane::after { right: -18px; }
 
 .task-flow-lane__heading {
   position: absolute;
@@ -533,6 +530,21 @@ a {
 .task-flow-lane--not-taken {
   opacity: 0.48;
 }
+
+.task-flow-junction {
+  position: absolute;
+  top: calc(50% - 2px);
+  z-index: 1;
+  size: 7px;
+  width: 7px;
+  height: 7px;
+  border-radius: 9999px;
+  border: 1px solid var(--border);
+  background: var(--card);
+}
+
+.task-flow-junction--left { left: -3px; }
+.task-flow-junction--right { right: -3px; }
 
 /* ===========================================
    BOARD SURFACE GRID TEXTURE — light mode
