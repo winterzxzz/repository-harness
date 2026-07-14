@@ -546,6 +546,16 @@ a {
 .task-flow-junction--left { left: -3px; }
 .task-flow-junction--right { right: -3px; }
 
+.task-flow-lanes--entered::before,
+.task-flow-lanes--entered .task-flow-junction--left {
+  border-color: #10b981;
+}
+
+.task-flow-lanes--exited::after,
+.task-flow-lanes--exited .task-flow-junction--right {
+  border-color: #10b981;
+}
+
 /* ===========================================
    BOARD SURFACE GRID TEXTURE — light mode
    Glassmorphism-inspired dot grid

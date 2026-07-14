@@ -55,7 +55,13 @@ export function ActiveTaskFlow({ flow, stale = false, onRecover }: { flow: TaskF
         <div className="scrollbar-none mt-3 overflow-x-auto pb-1">
           <div className="task-flow-fork min-w-[880px]" aria-label="Task lifecycle steps">
             <FlowSegment name="Shared start" steps={fork.head} connectTrailingEdge />
-            <div className="task-flow-lanes">
+            <div
+              className={cn(
+                "task-flow-lanes",
+                fork.head.at(-1)?.state === "complete" && "task-flow-lanes--entered",
+                (fork.tail[0]?.state === "complete" || fork.tail[0]?.state === "current") && "task-flow-lanes--exited"
+              )}
+            >
               <span aria-hidden="true" className="task-flow-junction task-flow-junction--left" />
               <span aria-hidden="true" className="task-flow-junction task-flow-junction--right" />
               <FlowLane name="Pull request" lane={fork.prLane} />
