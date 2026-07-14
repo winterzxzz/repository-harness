@@ -31,6 +31,7 @@ function taskFlow(current: (typeof flowStepIds)[number] = "agent") {
     state: current === "done" ? "done" : "active",
     current_step: current,
     message: current === "agent" ? "Agent is implementing the task." : "Task lifecycle updated.",
+    pr_status: "missing",
     steps: flowStepIds.map((id, index) => ({
       id,
       state: index < currentIndex ? "complete" : index === currentIndex ? "current" : "pending"
@@ -45,6 +46,7 @@ function localReviewTaskFlow() {
     ...flow,
     state: "waiting",
     message: "Agent work is ready for local review.",
+    pr_status: "not_applicable",
     steps: flow.steps.filter((step) => step.id !== "pr")
   };
 }
@@ -116,7 +118,7 @@ test("board renders task columns and detail controls", async ({ page }) => {
   const lifecycleLabels = await lifecycle.getByRole("listitem").evaluateAll((items) =>
     items.map((item) => item.textContent?.replace(/(complete|current|failed|pending)$/, ""))
   );
-  expect(lifecycleLabels).toEqual(["Start", "Agent", "Validation", "Pull request", "Review & merge", "Sync", "Done"]);
+  expect(lifecycleLabels).toEqual(["Start", "Agent", "Validation", "Pull request", "Review & merge", "Review", "Sync", "Done"]);
   await page.getByRole("button", { name: /US-052/ }).click();
 
   const detail = page.getByRole("dialog", { name: "Selected work detail" });
@@ -144,7 +146,7 @@ test("active task lifecycle is always visible above the command rail", async ({ 
   const rail = page.getByRole("region", { name: "Command status rail" });
   await expect(flow).toBeVisible();
   await expect(flow).toContainText("No task is currently running");
-  await expect(flow.getByRole("listitem")).toHaveCount(7);
+  await expect(flow.getByRole("listitem")).toHaveCount(8);
   expect(await flow.evaluate((node, other) => Boolean(node.compareDocumentPosition(other) & Node.DOCUMENT_POSITION_FOLLOWING), await rail.elementHandle())).toBe(true);
 });
 
@@ -167,7 +169,59 @@ test("active task lifecycle marks the current step", async ({ page }) => {
   await expect(flow.getByText("Agent is implementing the task.")).toBeVisible();
 });
 
-test("PR-less task lifecycle omits pull request and uses local review wording", async ({ page }) => {
+test("undecided task flow presents both review lanes as neutral candidates", async ({ page }) => {
+  const item = boardItem("US-098", "Forked Task Flow", "In Progress");
+  item.run_id = "run_us_098_undecided";
+  item.active_run = item.run_id;
+  await page.route("**/api/board", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ items: [item], task_flow: taskFlow("agent") })
+    });
+  });
+
+  await page.goto("/");
+
+  const lifecycle = page.getByRole("region", { name: "Active task lifecycle" });
+  await expect(lifecycle.getByRole("list", { name: "Pull request lane, candidate" })).toBeVisible();
+  await expect(lifecycle.getByRole("list", { name: "Local review lane, candidate" })).toBeVisible();
+});
+
+test("PR task flow dims the local-review lane", async ({ page }) => {
+  const item = boardItem("US-098", "Forked Task Flow", "Review");
+  item.run_id = "run_us_098_pr";
+  const flow = taskFlow("review");
+  flow.pr_status = "created";
+  await page.route("**/api/board", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [item], task_flow: flow }) });
+  });
+
+  await page.goto("/");
+
+  const lifecycle = page.getByRole("region", { name: "Active task lifecycle" });
+  await expect(lifecycle.getByRole("list", { name: "Pull request lane, taken" })).toBeVisible();
+  const localLane = lifecycle.getByRole("list", { name: "Local review lane, not taken" });
+  await expect(localLane).toBeVisible();
+  await expect(localLane).toHaveAttribute("data-lane-status", "not-taken");
+});
+
+test("PR-less task flow dims the pull-request lane", async ({ page }) => {
+  const item = boardItem("US-098", "Forked Task Flow", "Review");
+  item.run_id = "run_us_098_local";
+  await page.route("**/api/board", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [item], task_flow: localReviewTaskFlow() }) });
+  });
+
+  await page.goto("/");
+
+  const lifecycle = page.getByRole("region", { name: "Active task lifecycle" });
+  const prLane = lifecycle.getByRole("list", { name: "Pull request lane, not taken" });
+  await expect(prLane).toBeVisible();
+  await expect(prLane).toHaveAttribute("data-lane-status", "not-taken");
+  await expect(lifecycle.getByRole("list", { name: "Local review lane, taken" })).toBeVisible();
+});
+
+test("PR-less task lifecycle keeps the full fork and marks local review current", async ({ page }) => {
   const item = boardItem("US-097", "Branched Task Flow", "Review");
   item.run_id = "run_us_097";
   await page.route("**/api/board", async (route) => {
@@ -180,11 +234,11 @@ test("PR-less task lifecycle omits pull request and uses local review wording", 
   await page.goto("/");
 
   const flow = page.getByRole("region", { name: "Active task lifecycle" });
-  await expect(flow.getByRole("listitem")).toHaveCount(6);
-  await expect(flow.getByText("Pull request", { exact: true })).toHaveCount(0);
+  await expect(flow.getByRole("listitem")).toHaveCount(8);
+  await expect(flow.getByText("Pull request", { exact: true })).toBeVisible();
   await expect(flow.getByText("Review", { exact: true })).toBeVisible();
-  await expect(flow.getByText("Review & merge", { exact: true })).toHaveCount(0);
-  await expect(flow.getByRole("listitem").nth(3)).toHaveAttribute("aria-current", "step");
+  await expect(flow.getByText("Review & merge", { exact: true })).toBeVisible();
+  await expect(flow.getByRole("listitem").nth(5)).toHaveAttribute("aria-current", "step");
 });
 
 test("status rail bounds a long active run identifier", async ({ page }) => {

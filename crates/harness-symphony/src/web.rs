@@ -351,6 +351,7 @@ struct TaskFlowResponse {
     state: String,
     current_step: Option<String>,
     message: String,
+    pr_status: String,
     steps: Vec<TaskFlowStepResponse>,
     recovery_action: Option<RecoveryAction>,
 }
@@ -2998,6 +2999,7 @@ fn derive_task_flow(items: &[BoardItemResponse], runs: &[RunRecord]) -> Option<T
         state: flow_state.to_owned(),
         current_step: (flow_state != "done").then(|| current.to_owned()),
         message,
+        pr_status: run.pr_status.clone(),
         steps,
         recovery_action: item.recovery_action.clone(),
     })
@@ -3965,6 +3967,7 @@ exit 1
 
         assert!(response.contains(r#""story_id":"US-FLOW""#));
         assert!(response.contains(r#""current_step":"start""#));
+        assert!(response.contains(r#""pr_status":"missing""#));
         assert!(response.contains(r#""id":"start","state":"current""#));
         assert!(response.contains(r#""id":"agent","state":"pending""#));
         assert!(response.contains(r#""id":"pr","state":"pending""#));
@@ -4992,6 +4995,7 @@ exit 1
 
         let response = handle_request(&config, "GET /api/board HTTP/1.1\r\n\r\n").unwrap();
 
+        assert!(response.contains(r#""pr_status":"not_applicable""#));
         assert!(response.starts_with("HTTP/1.1 200 OK"));
         assert!(response.contains(r#""id":"US-LOCAL-BOARD""#));
         assert!(response.contains(r#""board_state":"Review""#));

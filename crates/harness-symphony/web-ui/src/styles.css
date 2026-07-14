@@ -463,6 +463,77 @@ a {
   overflow-x: auto;
 }
 
+.task-flow-fork {
+  display: grid;
+  grid-template-columns: minmax(280px, 3fr) minmax(300px, 3fr) minmax(190px, 2fr);
+  align-items: center;
+}
+
+.task-flow-segment,
+.task-flow-lane ol {
+  display: flex;
+  align-items: flex-start;
+}
+
+.task-flow-lanes {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-inline: 18px;
+}
+
+.task-flow-lanes::before,
+.task-flow-lanes::after {
+  position: absolute;
+  top: 26px;
+  bottom: 14px;
+  width: 1px;
+  background: var(--border);
+  content: "";
+}
+
+.task-flow-lanes::before { left: 0; }
+.task-flow-lanes::after { right: 0; }
+
+.task-flow-lane {
+  position: relative;
+  padding-top: 18px;
+}
+
+.task-flow-lane::before,
+.task-flow-lane::after {
+  position: absolute;
+  top: 30px;
+  width: 18px;
+  height: 1px;
+  background: var(--border);
+  content: "";
+}
+
+.task-flow-lane::before { left: -18px; }
+.task-flow-lane::after { right: -18px; }
+
+.task-flow-lane__heading {
+  position: absolute;
+  inset: 0 4px auto;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted-foreground);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.task-flow-lane__heading span:last-child {
+  font-weight: 500;
+}
+
+.task-flow-lane--not-taken {
+  opacity: 0.48;
+}
+
 /* ===========================================
    BOARD SURFACE GRID TEXTURE — light mode
    Glassmorphism-inspired dot grid
