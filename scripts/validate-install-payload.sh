@@ -61,6 +61,12 @@ reject_pattern '^harness\.db(-wal|-shm)?$'
 
 grep -Fq 'PAYLOAD_MANIFEST="scripts/harness-install-files.txt"' \
   "$ROOT_DIR/scripts/install-harness.sh" || fail "Bash installer does not use the shared manifest"
+grep -Fq 'crates/harness-symphony/' \
+  "$ROOT_DIR/.github/workflows/post-merge-maintenance.yml" || \
+  fail "post-merge maintenance does not release the kit for Symphony source changes"
+grep -Eq 'scripts/\([^)]*harness-symphony' \
+  "$ROOT_DIR/.github/workflows/post-merge-maintenance.yml" || \
+  fail "post-merge maintenance does not release the kit for Symphony launcher changes"
 grep -Fq "\$script:PayloadManifest = \"scripts/harness-install-files.txt\"" \
   "$ROOT_DIR/scripts/install-harness.ps1" || fail "PowerShell installer does not use the shared manifest"
 grep -Fq 'function Assert-ManagedPathSafe' \

@@ -55,7 +55,7 @@ jobs:
           fi
 
           kit_changed="$cli_changed"
-          if [ "$kit_changed" = false ] && grep -Eq '^(AGENTS\.md$|\.gitignore$|scripts/(install-harness\.sh|harness-install-files\.txt|harness-upstream-repository|harness-kit-version|harness$|build-harness-macos-kit\.sh|render-homebrew-formula\.sh|validate-harness-macos-kit\.sh)$|packaging/homebrew/)' <<<"$changed_files"; then
+          if [ "$kit_changed" = false ] && grep -Eq '^(AGENTS\.md$|\.gitignore$|crates/harness-symphony/|scripts/(install-harness\.sh|harness-install-files\.txt|harness-upstream-repository|harness-kit-version|harness$|harness-symphony$|build-harness-macos-kit\.sh|render-homebrew-formula\.sh|validate-harness-macos-kit\.sh)$|packaging/homebrew/)' <<<"$changed_files"; then
             kit_changed=true
           fi
           if [ "$kit_changed" = false ]; then
