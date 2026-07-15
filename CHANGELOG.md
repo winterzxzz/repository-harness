@@ -2,6 +2,14 @@
 
 Releases are produced manually; follow `docs/RELEASE.md`.
 
+## 2026-07-15 - Manual release harness-kit-v0.2.5
+
+- Show the executor name and model as run console header badges during live
+  and recorded runs; previously agent identity only appeared in review
+  evidence after completion.
+- Keep the bundled Harness CLI at `harness-cli-v0.1.12`; no CLI source or
+  schema changes require a new CLI release.
+
 ## 2026-07-15 - Manual release harness-kit-v0.2.4
 
 - Publish the independent `e2e` run stage (US-101): Symphony executes each
