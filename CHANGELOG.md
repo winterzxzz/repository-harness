@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-07-15 - Manual release harness-kit-v0.2.4
+
+- Publish the independent `e2e` run stage (US-101): Symphony executes each
+  story's declared E2E command in the run worktree between `agent` and
+  `validation`, streams its output live, bounds it with `e2e.timeout_minutes`
+  (default 15), skips cleanly without a command, and fails the run on a
+  non-zero exit or timeout.
+- Render run summaries as markdown in the Web UI task detail and declutter the
+  panel: Agent, Adapter, and Model lead the review evidence; dependencies,
+  context pack, and secondary evidence collapse behind details sections.
+- Release `harness-cli-v0.1.12`: schema migration 009 adds
+  `story.e2e_command`, and `story add|update` gain the `--e2e-command` flag
+  with changeset replay support.
+
 ## 2026-07-15 - Manual release harness-kit-v0.2.3
 
 - Publish Symphony branched and forked task-flow views with PR and local-review
