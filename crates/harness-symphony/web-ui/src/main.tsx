@@ -14,6 +14,7 @@ import {
   fetchBoard,
   fetchSettings,
   postCreateGuidedIntake,
+  postApproveRun,
   postCancelRun,
   postMarkPrMerged,
   postRecoverTask,
@@ -36,6 +37,7 @@ import { ControllerSidebar } from "./features/symphony/sidebar";
 import { ToastProvider, useToast } from "./features/symphony/toast";
 import type {
   AgentId,
+  ApproveResponse,
   BoardBucket,
   BoardItem,
   GuidedIntakeDraft,
@@ -71,6 +73,7 @@ function App() {
   const [deletingId, setDeletingId] = React.useState<string | null>(null);
   const [recoveringId, setRecoveringId] = React.useState<string | null>(null);
   const [syncingRunId, setSyncingRunId] = React.useState<string | null>(null);
+  const [approvingRunId, setApprovingRunId] = React.useState<string | null>(null);
   const [markingMergedRunId, setMarkingMergedRunId] = React.useState<string | null>(null);
   const [retryingPrRunId, setRetryingPrRunId] = React.useState<string | null>(null);
   const [requestingChangesRunId, setRequestingChangesRunId] = React.useState<string | null>(null);
@@ -347,6 +350,27 @@ function App() {
     [loadBoard, toast]
   );
 
+  const approveRun = React.useCallback(
+    async (runId: string): Promise<ApproveResponse> => {
+      setApprovingRunId(runId);
+      setError(null);
+      try {
+        const result = await postApproveRun(runId);
+        await loadBoard();
+        toast.add({ kind: "success", title: "Run approved", description: `Run ${runId} is ready to sync.` });
+        return result;
+      } catch (cause) {
+        const msg = cause instanceof Error ? cause.message : "Approval failed";
+        setError(msg);
+        toast.add({ kind: "error", title: "Approval failed", description: msg });
+        throw cause;
+      } finally {
+        setApprovingRunId(null);
+      }
+    },
+    [loadBoard, toast]
+  );
+
   const retryPr = React.useCallback(
     async (runId: string, action: RecoveryAction): Promise<PrRetryResponse> => {
       if (!window.confirm(action.confirmation)) {
@@ -593,6 +617,7 @@ function App() {
                 deletingId={deletingId}
                 recoveringId={recoveringId}
                 syncingRunId={syncingRunId}
+                approvingRunId={approvingRunId}
                 markingMergedRunId={markingMergedRunId}
                 retryingPrRunId={retryingPrRunId}
                 requestingChangesRunId={requestingChangesRunId}
@@ -602,6 +627,7 @@ function App() {
                 onRetire={retireTask}
                 onRecover={recoverTask}
                 onSync={syncRun}
+                onApprove={approveRun}
                 onMarkPrMerged={markPrMerged}
                 onRetryPr={retryPr}
                 onRequestChanges={requestChanges}

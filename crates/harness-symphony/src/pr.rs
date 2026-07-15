@@ -458,6 +458,8 @@ mod tests {
             terminal_reason: None,
             execution_mode: "managed".to_owned(),
             harness_db_digest: None,
+            reviewed_at: None,
+            reviewer_note: None,
         }
     }
 

@@ -24,6 +24,8 @@ pub enum SyncError {
     GitFailed(String),
     #[error("checkout has local changes; commit, stash, or reset before syncing:\n{0}")]
     DirtyCheckout(String),
+    #[error("approve the run before sync: {0}")]
+    ApprovalRequired(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,6 +33,7 @@ pub struct SyncChange {
     pub id: String,
     pub path: PathBuf,
     pub applied: bool,
+    pub blocked: bool,
     pub operations: usize,
 }
 
@@ -46,15 +49,29 @@ pub fn sync_changesets(config: &ResolvedConfig) -> Result<SyncResult, SyncError>
     let paths = changeset_files(&config.changeset_directory)?;
     let mut changes = Vec::new();
     for path in paths {
+        let id = changeset_id(&path)?;
+        if run_requires_review_approval(&store, &id)? {
+            changes.push(SyncChange {
+                id,
+                path,
+                applied: false,
+                blocked: true,
+                operations: 0,
+            });
+            continue;
+        }
         changes.push(apply_changeset_path(config, &store, path)?);
     }
     Ok(SyncResult { changes })
 }
 
 pub fn sync_changeset(config: &ResolvedConfig, run_id: &str) -> Result<SyncResult, SyncError> {
-    refresh_checkout_from_upstream(config)?;
     let store = RunStateStore::new(config.state_db.clone());
     store.init()?;
+    if run_requires_review_approval(&store, run_id)? {
+        return Err(SyncError::ApprovalRequired(run_id.to_owned()));
+    }
+    refresh_checkout_from_upstream(config)?;
     let path = config
         .changeset_directory
         .join(format!("{run_id}.changeset.jsonl"));
@@ -68,6 +85,7 @@ pub fn sync_changeset(config: &ResolvedConfig, run_id: &str) -> Result<SyncResul
                 id: run_id.to_owned(),
                 path,
                 applied: true,
+                blocked: false,
                 operations: 0,
             }],
         });
@@ -140,6 +158,7 @@ fn apply_changeset_path(
             id,
             path,
             applied: true,
+            blocked: false,
             operations: 0,
         });
     }
@@ -174,8 +193,22 @@ fn apply_changeset_path(
         id,
         path,
         applied: durable_applied,
+        blocked: false,
         operations,
     })
+}
+
+pub fn run_requires_review_approval(
+    store: &RunStateStore,
+    run_id: &str,
+) -> Result<bool, SyncError> {
+    match store.show_run(run_id) {
+        Ok(run) => {
+            Ok(run.status == "completed" && run.pr_status != "merged" && run.reviewed_at.is_none())
+        }
+        Err(StateError::RunNotFound(_)) => Ok(false),
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn upstream_branch(repo_root: &Path) -> Result<Option<String>, SyncError> {
@@ -342,6 +375,80 @@ mod tests {
     }
 
     #[test]
+    fn bulk_sync_blocks_completed_pr_less_run_until_approved() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = config_for_root(temp_dir.path());
+        fs::create_dir_all(&config.changeset_directory).unwrap();
+        fs::write(
+            config
+                .changeset_directory
+                .join("run_unapproved.changeset.jsonl"),
+            r#"{"op":"changeset.header","version":1,"run_id":"run_unapproved"}
+{"op":"story.update","version":1,"id":"US-REVIEW","payload":{"status":"implemented"}}
+"#,
+        )
+        .unwrap();
+        let store = RunStateStore::new(config.state_db.clone());
+        store
+            .add_run(crate::state::NewRunRecord {
+                run_id: "run_unapproved".to_owned(),
+                story_id: "US-REVIEW".to_owned(),
+                branch: Some("symphony/run_unapproved".to_owned()),
+                worktree: temp_dir.path().join("worktree"),
+                lightweight: false,
+                status: "completed".to_owned(),
+                result_path: Some(PathBuf::from(".harness/runs/run_unapproved/RESULT.json")),
+                sync_status: "not_applied".to_owned(),
+                next_action: "approve or request changes".to_owned(),
+            })
+            .unwrap();
+
+        let result = sync_changesets(&config).unwrap();
+
+        assert_eq!(result.changes.len(), 1);
+        assert!(result.changes[0].blocked);
+        assert!(!result.changes[0].applied);
+        assert!(!store.changeset_synced("run_unapproved").unwrap());
+    }
+
+    #[test]
+    fn bulk_sync_blocks_unmerged_pr_run_until_reviewed() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = config_for_root(temp_dir.path());
+        fs::create_dir_all(&config.changeset_directory).unwrap();
+        fs::write(
+            config
+                .changeset_directory
+                .join("run_pr_review.changeset.jsonl"),
+            r#"{"op":"changeset.header","version":1,"run_id":"run_pr_review"}"#,
+        )
+        .unwrap();
+        let store = RunStateStore::new(config.state_db.clone());
+        store
+            .add_run(crate::state::NewRunRecord {
+                run_id: "run_pr_review".to_owned(),
+                story_id: "US-PR-REVIEW".to_owned(),
+                branch: Some("symphony/run_pr_review".to_owned()),
+                worktree: temp_dir.path().join("worktree"),
+                lightweight: false,
+                status: "completed".to_owned(),
+                result_path: None,
+                sync_status: "not_applied".to_owned(),
+                next_action: "review pull request".to_owned(),
+            })
+            .unwrap();
+        store
+            .update_pr_url("run_pr_review", "https://example.test/pr/1")
+            .unwrap();
+
+        let result = sync_changesets(&config).unwrap();
+
+        assert_eq!(result.changes.len(), 1);
+        assert!(result.changes[0].blocked);
+        assert!(!store.changeset_synced("run_pr_review").unwrap());
+    }
+
+    #[test]
     fn already_applied_changeset_marks_run_synced() {
         let temp_dir = tempfile::tempdir().unwrap();
         let config = config_for_root(temp_dir.path());
@@ -387,6 +494,7 @@ mod tests {
                 next_action: "approve sync".to_owned(),
             })
             .unwrap();
+        store.approve_run("run_done", "test approval").unwrap();
 
         let result = sync_changeset(&config, "run_done").unwrap();
         let run = store.show_run("run_done").unwrap();
@@ -443,6 +551,7 @@ mod tests {
                 false,
             )
             .unwrap();
+        store.approve_run("run_heal", "test approval").unwrap();
 
         let result = sync_changeset(&config, "run_heal").unwrap();
         let run = store.show_run("run_heal").unwrap();
@@ -472,6 +581,7 @@ mod tests {
                 next_action: "approve sync".to_owned(),
             })
             .unwrap();
+        store.approve_run("run_docs_only", "test approval").unwrap();
 
         let result = sync_changeset(&config, "run_docs_only").unwrap();
         let run = store.show_run("run_docs_only").unwrap();

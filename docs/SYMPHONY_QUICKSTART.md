@@ -325,7 +325,14 @@ docs changes made by the agent.
 
 When `pull_request.create` is `disabled`, completed runs stay in Review as a
 local artifact-review step instead of becoming Needs Attention for missing PR
-creation.
+creation. Review the run artifacts, then record the approval explicitly:
+
+```bash
+harness-symphony runs approve <run_id> --note "reviewed local artifacts"
+```
+
+Approval is idempotent and is required before CLI or Web UI sync can apply a
+completed PR-less run. Request changes instead when the run is not acceptable.
 
 ## After Merge
 
@@ -337,7 +344,9 @@ harness-symphony sync
 ```
 
 `sync` is idempotent. Running it twice is safe; already applied changesets are
-skipped.
+skipped. Completed PR-less runs without explicit approval are reported as
+blocked and remain unapplied; merged-PR runs keep using the merge as their
+review gate.
 
 On a fresh clone, rebuild the local Harness database from committed changesets:
 

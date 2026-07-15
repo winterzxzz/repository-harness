@@ -159,6 +159,13 @@ enum RunsAction {
     },
     /// Stream subagent output lines from stdin into the run's live event log.
     Output { run_id: String },
+    /// Approve a completed run after reviewing its local artifacts.
+    Approve {
+        run_id: String,
+        /// Optional review note stored with the approval.
+        #[arg(long)]
+        note: Option<String>,
+    },
     /// Validate and finalize a running or stale external run.
     Complete { run_id: String },
     /// Compact old local run artifacts.
@@ -305,6 +312,14 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
             RunsAction::Output { run_id } => {
                 let stdin = std::io::stdin();
                 print_run_detail(&output_external(&resolved, &run_id, stdin.lock())?);
+            }
+            RunsAction::Approve { run_id, note } => {
+                let store = RunStateStore::new(resolved.state_db);
+                store.approve_run(
+                    &run_id,
+                    note.as_deref().unwrap_or("approved from Symphony CLI"),
+                )?;
+                print_run_detail(&store.show_run(&run_id)?);
             }
             RunsAction::Complete { run_id } => {
                 print_completed_run(&complete_external(&resolved, &run_id)?);
@@ -612,6 +627,16 @@ fn print_run_detail(run: &RunRecord) {
     println!("pr_url: {}", run.pr_url.clone().unwrap_or_default());
     println!("pr_status: {}", run.pr_status);
     println!("sync_status: {}", run.sync_status);
+    println!(
+        "reviewed_at: {}",
+        run.reviewed_at
+            .map(|value| value.to_string())
+            .unwrap_or_default()
+    );
+    println!(
+        "reviewer_note: {}",
+        run.reviewer_note.clone().unwrap_or_default()
+    );
     println!("next_action: {}", run.next_action);
 }
 
@@ -640,13 +665,28 @@ fn print_sync_result(result: &SyncResult) {
         .iter()
         .filter(|change| change.applied)
         .count();
-    let skipped = result.changes.len().saturating_sub(applied);
+    let blocked = result
+        .changes
+        .iter()
+        .filter(|change| change.blocked)
+        .count();
+    let skipped = result
+        .changes
+        .len()
+        .saturating_sub(applied)
+        .saturating_sub(blocked);
     println!(
-        "Sync complete: {applied} applied, {skipped} skipped, {} total.",
+        "Sync complete: {applied} applied, {blocked} blocked, {skipped} skipped, {} total.",
         result.changes.len()
     );
     for change in &result.changes {
-        let status = if change.applied { "applied" } else { "skipped" };
+        let status = if change.blocked {
+            "blocked (approve the run before sync)"
+        } else if change.applied {
+            "applied"
+        } else {
+            "skipped"
+        };
         println!(
             "{} {} ({} operation(s))",
             change.id, status, change.operations
@@ -873,6 +913,27 @@ mod tests {
     #[test]
     fn runs_output_cli_parses() {
         assert!(Cli::try_parse_from(["harness-symphony", "runs", "output", "run_1"]).is_ok());
+    }
+
+    #[test]
+    fn runs_approve_cli_parses_optional_note() {
+        let cli = Cli::try_parse_from([
+            "harness-symphony",
+            "runs",
+            "approve",
+            "run_1",
+            "--note",
+            "reviewed locally",
+        ])
+        .unwrap();
+        let Command::Runs(args) = cli.command else {
+            panic!("expected runs command");
+        };
+        assert!(matches!(
+            args.action,
+            RunsAction::Approve { run_id, note }
+                if run_id == "run_1" && note.as_deref() == Some("reviewed locally")
+        ));
     }
 
     #[test]

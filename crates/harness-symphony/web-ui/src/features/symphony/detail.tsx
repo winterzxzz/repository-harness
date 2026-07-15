@@ -19,6 +19,7 @@ import { ApiError, fetchEvents, fetchReview } from "./api";
 import { ContextViewer } from "./context-viewer";
 import { StatusBadge } from "./status-badge";
 import type {
+  ApproveResponse,
   BoardItem,
   FailureSummary,
   PrMergedResponse,
@@ -186,6 +187,7 @@ export function TaskDetail({
   deletingId,
   recoveringId,
   syncingRunId,
+  approvingRunId,
   markingMergedRunId,
   retryingPrRunId,
   requestingChangesRunId,
@@ -195,6 +197,7 @@ export function TaskDetail({
   onRetire,
   onRecover,
   onSync,
+  onApprove,
   onMarkPrMerged,
   onRetryPr,
   onRequestChanges,
@@ -205,6 +208,7 @@ export function TaskDetail({
   deletingId: string | null;
   recoveringId: string | null;
   syncingRunId: string | null;
+  approvingRunId: string | null;
   markingMergedRunId: string | null;
   retryingPrRunId: string | null;
   requestingChangesRunId: string | null;
@@ -214,6 +218,7 @@ export function TaskDetail({
   onRetire: (item: BoardItem) => Promise<void>;
   onRecover: (storyId: string, action: RecoveryAction) => Promise<void>;
   onSync: (runId: string) => Promise<void>;
+  onApprove: (runId: string) => Promise<ApproveResponse>;
   onMarkPrMerged: (runId: string) => Promise<PrMergedResponse>;
   onRetryPr: (runId: string, action: RecoveryAction) => Promise<PrRetryResponse>;
   onRequestChanges: (runId: string, reason: string, files: File[]) => Promise<RequestChangesResponse>;
@@ -368,6 +373,21 @@ export function TaskDetail({
     },
     [onRetryPr]
   );
+  const approveReview = React.useCallback(
+    async (runId: string) => {
+      try {
+        const result = await onApprove(runId);
+        setReviewState((current) =>
+          current.status === "ready" && current.data.run_id === result.run_id
+            ? { status: "ready", data: { ...current.data, reviewed_at: result.reviewed_at } }
+            : current
+        );
+      } catch {
+        // The parent action owns the visible error state.
+      }
+    },
+    [onApprove]
+  );
 
   return (
     <aside
@@ -483,11 +503,13 @@ export function TaskDetail({
           <ReviewPanel
             review={review}
             syncing={syncingRunId === review.run_id}
+            approving={approvingRunId === review.run_id}
             markingMerged={markingMergedRunId === review.run_id}
             retryingPr={retryingPrRunId === review.run_id}
             requestingChanges={requestingChangesRunId === review.run_id}
             allowRequestChanges={item.board_state === "Review"}
             onSync={onSync}
+            onApprove={approveReview}
             onMarkPrMerged={markReviewPrMerged}
             onRetryPr={retryReviewPr}
             onRequestChanges={onRequestChanges}
@@ -524,29 +546,35 @@ function HierarchyBlock({ item }: { item: BoardItem }) {
 function ReviewPanel({
   review,
   syncing,
+  approving,
   markingMerged,
   retryingPr,
   requestingChanges,
   allowRequestChanges,
   onSync,
+  onApprove,
   onMarkPrMerged,
   onRetryPr,
   onRequestChanges
 }: {
   review: ReviewResponse;
   syncing: boolean;
+  approving: boolean;
   markingMerged: boolean;
   retryingPr: boolean;
   requestingChanges: boolean;
   allowRequestChanges: boolean;
   onSync: (runId: string) => Promise<void>;
+  onApprove: (runId: string) => Promise<void>;
   onMarkPrMerged: (runId: string) => Promise<void>;
   onRetryPr: (runId: string, action: RecoveryAction) => Promise<void>;
   onRequestChanges: (runId: string, reason: string, files: File[]) => Promise<RequestChangesResponse>;
 }) {
   const canMarkMerged = review.pr_status === "created" && review.pr_url !== null;
+  const canApprove = review.status === "completed" && review.pr_status === "not_applicable" && review.reviewed_at === null;
   const canSync =
-    review.status === "completed" && (review.pr_status === "merged" || review.pr_status === "not_applicable");
+    review.status === "completed" &&
+    (review.pr_status === "merged" || (review.pr_status === "not_applicable" && review.reviewed_at !== null));
   const prRecovery = review.recovery_action?.kind === "pr_retry" ? review.recovery_action : null;
 
   return (
@@ -568,6 +596,7 @@ function ReviewPanel({
         <Field label="Outcome" value={review.outcome ?? "unknown"} />
         <Field label="Status" value={review.status} />
         <Field label="Executor" value={agentLabel(review.agent)} />
+        <Field label="Approval" value={review.reviewed_at === null ? "pending" : "approved"} />
       </div>
 
       {review.failure_summary ? <FailureSummaryPanel summary={review.failure_summary} /> : null}
@@ -610,10 +639,17 @@ function ReviewPanel({
           )}
           Mark Merged
         </Button>
-        <Button disabled={!canSync || syncing} onClick={() => void onSync(review.run_id)}>
-          {syncing ? <Loader2 data-icon="inline-start" className="motion-safe:animate-spin" /> : <CheckCircle2 data-icon="inline-start" />}
-          Approve Sync
-        </Button>
+        {canApprove ? (
+          <Button disabled={approving} onClick={() => void onApprove(review.run_id)}>
+            {approving ? <Loader2 data-icon="inline-start" className="motion-safe:animate-spin" /> : <CheckCircle2 data-icon="inline-start" />}
+            Approve
+          </Button>
+        ) : (
+          <Button disabled={!canSync || syncing} onClick={() => void onSync(review.run_id)}>
+            {syncing ? <Loader2 data-icon="inline-start" className="motion-safe:animate-spin" /> : <CheckCircle2 data-icon="inline-start" />}
+            Sync
+          </Button>
+        )}
       </div>
       {allowRequestChanges ? (
         <RequestChangesForm
