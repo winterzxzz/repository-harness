@@ -1,5 +1,7 @@
 # Changelog
 
+Releases are produced manually; follow `docs/RELEASE.md`.
+
 ## 2026-07-15 - Manual release harness-kit-v0.2.4
 
 - Publish the independent `e2e` run stage (US-101): Symphony executes each
