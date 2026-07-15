@@ -2,6 +2,7 @@ import React from "react";
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronRight,
   Clock3,
   GitPullRequestArrow,
   ImagePlus,
@@ -31,9 +32,11 @@ import type {
   RunEvent
 } from "./types";
 import { cn } from "../../lib/utils";
-import { agentLabel } from "./constants";
+import { agentLabel, agents } from "./constants";
+import { Markdown } from "./markdown";
 import { RunConsole } from "./run-console";
 import { retainRunEvents } from "./run-console-model";
+import { deriveRunAgentInfo } from "./run-info-model";
 
 type ConfettiBurst = {
   id: number;
@@ -420,9 +423,7 @@ export function TaskDetail({
         {item.failure_summary ? <FailureSummaryPanel summary={item.failure_summary} compact /> : null}
         <div className="mt-4 grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2">
           <Field label="Lane" value={item.lane} />
-          <Field label="Proof" value={item.verify} />
           <Field label="Run" value={item.run_id ?? item.active_run ?? "none"} />
-          <Field label="Children" value={item.children.length > 0 ? item.children.join(", ") : "none"} />
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
           {item.active_run ? (
@@ -489,14 +490,17 @@ export function TaskDetail({
         </div>
       </div>
 
-      <div className="flex flex-col gap-4 border-b border-border p-4">
-        <SectionTitle>Dependencies</SectionTitle>
-        <ListBlock title="Blocked by" values={item.blockers} empty="No blockers" />
-        <ListBlock title="Unblocks" values={item.unblocks} empty="No downstream work in this slice." />
-        <HierarchyBlock item={item} />
-      </div>
+      <CollapsibleSection title="Dependencies & hierarchy" testId="dependencies-section">
+        <div className="flex flex-col gap-4">
+          <ListBlock title="Blocked by" values={item.blockers} empty="No blockers" />
+          <ListBlock title="Unblocks" values={item.unblocks} empty="No downstream work in this slice." />
+          <HierarchyBlock item={item} />
+        </div>
+      </CollapsibleSection>
 
-      <ContextViewer storyId={item.id} />
+      <CollapsibleSection title="Context pack" testId="context-pack-section">
+        <ContextViewer storyId={item.id} embedded />
+      </CollapsibleSection>
 
       {review ? (
         <div className="border-b border-border p-4">
@@ -527,6 +531,39 @@ export function TaskDetail({
         <RunConsole events={review.events} agent={review.agent} />
       ) : null}
     </aside>
+  );
+}
+
+function CollapsibleSection({
+  title,
+  children,
+  testId,
+  bare = false
+}: {
+  title: string;
+  children: React.ReactNode;
+  testId?: string;
+  bare?: boolean;
+}) {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <details
+      className={bare ? "" : "border-b border-border"}
+      data-testid={testId}
+      open={open}
+      onToggle={(event) => setOpen((event.target as HTMLDetailsElement).open)}
+    >
+      <summary
+        className={cn(
+          "flex cursor-pointer select-none items-center gap-2 text-sm font-bold text-muted-foreground transition-colors hover:text-foreground",
+          bare ? "py-1" : "p-4"
+        )}
+      >
+        <ChevronRight aria-hidden="true" className={cn("size-4 shrink-0 transition-transform", open ? "rotate-90" : "")} />
+        {title}
+      </summary>
+      <div className={bare ? "pt-2" : "px-4 pb-4"}>{open ? children : null}</div>
+    </details>
   );
 }
 
@@ -570,6 +607,9 @@ function ReviewPanel({
   onRetryPr: (runId: string, action: RecoveryAction) => Promise<void>;
   onRequestChanges: (runId: string, reason: string, files: File[]) => Promise<RequestChangesResponse>;
 }) {
+  const agentInfo = deriveRunAgentInfo(review.events);
+  const knownAdapter = agents.some((entry) => entry.id === review.agent) ? review.agent : null;
+  const adapter = agentInfo.adapter ?? knownAdapter;
   const canMarkMerged = review.pr_status === "created" && review.pr_url !== null;
   const canApprove = review.status === "completed" && review.pr_status === "not_applicable" && review.reviewed_at === null;
   const canSync =
@@ -593,9 +633,10 @@ function ReviewPanel({
       </div>
 
       <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2">
+        <Field label="Agent" value={agentLabel(review.agent)} />
+        <Field label="Adapter" value={adapter ? agentLabel(adapter) : "unknown"} />
+        <Field label="Model" value={agentInfo.model ?? "default"} />
         <Field label="Outcome" value={review.outcome ?? "unknown"} />
-        <Field label="Status" value={review.status} />
-        <Field label="Executor" value={agentLabel(review.agent)} />
         <Field label="Approval" value={review.reviewed_at === null ? "pending" : "approved"} />
       </div>
 
@@ -612,11 +653,23 @@ function ReviewPanel({
         </a>
       ) : null}
 
-      {review.summary ? <TextBlock title="Summary" text={review.summary} /> : null}
-      {review.validation ? <TextBlock title="Validation" text={JSON.stringify(review.validation, null, 2)} /> : null}
-      <ListBlock title="Changed files" values={review.changed_files} empty="No changed files listed" />
-      {review.changeset_preview ? <TextBlock title="Changeset" text={review.changeset_preview} /> : null}
-      <ListBlock title="Artifacts" values={review.artifact_paths} empty="No artifacts found" />
+      {review.summary ? (
+        <div className="flex flex-col gap-2" data-testid="review-summary">
+          <SectionTitle>Result</SectionTitle>
+          <div className="max-h-[28rem] overflow-auto rounded-xl border border-border/80 bg-background/50 p-4 shadow-inner">
+            <Markdown text={review.summary} />
+          </div>
+        </div>
+      ) : null}
+
+      <CollapsibleSection title="More details" testId="review-details-section" bare>
+        <div className="flex flex-col gap-3">
+          {review.validation ? <TextBlock title="Validation" text={JSON.stringify(review.validation, null, 2)} /> : null}
+          <ListBlock title="Changed files" values={review.changed_files} empty="No changed files listed" />
+          {review.changeset_preview ? <TextBlock title="Changeset" text={review.changeset_preview} /> : null}
+          <ListBlock title="Artifacts" values={review.artifact_paths} empty="No artifacts found" />
+        </div>
+      </CollapsibleSection>
       {review.request_changes ? <RequestChangesHistory feedback={review.request_changes} /> : null}
 
       <Separator />

@@ -13,7 +13,7 @@ type MarkdownBlock =
   | { kind: "paragraph"; text: string }
   | { kind: "code"; language: string; code: string };
 
-export function ContextViewer({ storyId }: { storyId: string }) {
+export function ContextViewer({ storyId, embedded = false }: { storyId: string; embedded?: boolean }) {
   const [state, setState] = React.useState<ContextState>({ status: "loading" });
 
   React.useEffect(() => {
@@ -31,16 +31,18 @@ export function ContextViewer({ storyId }: { storyId: string }) {
   }, [storyId]);
 
   return (
-    <section className="border-b border-border p-4" aria-label="Context pack">
-      <div className="mb-3 flex min-w-0 items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-2">
-          <FileText className="size-4 shrink-0 text-primary" />
-          <h3 className="text-lg font-bold tracking-tight text-foreground">Context pack</h3>
+    <section className={embedded ? "" : "border-b border-border p-4"} aria-label="Context pack">
+      {embedded ? null : (
+        <div className="mb-3 flex min-w-0 items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <FileText className="size-4 shrink-0 text-primary" />
+            <h3 className="text-lg font-bold tracking-tight text-foreground">Context pack</h3>
+          </div>
+          <Badge tone="neutral" className="shrink-0">
+            {storyId}
+          </Badge>
         </div>
-        <Badge tone="neutral" className="shrink-0">
-          {storyId}
-        </Badge>
-      </div>
+      )}
 
       {state.status === "loading" ? (
         <div className="flex items-center gap-2 rounded-md border border-border bg-muted p-3 text-sm text-muted-foreground" role="status">

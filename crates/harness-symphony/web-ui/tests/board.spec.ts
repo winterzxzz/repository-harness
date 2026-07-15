@@ -21,7 +21,7 @@ function boardItem(id: string, title: string, board_state: string) {
   };
 }
 
-const flowStepIds = ["start", "agent", "validation", "pr", "review", "sync", "done"] as const;
+const flowStepIds = ["start", "agent", "e2e", "validation", "pr", "review", "sync", "done"] as const;
 
 function taskFlow(current: (typeof flowStepIds)[number] = "agent") {
   const currentIndex = flowStepIds.indexOf(current);
@@ -118,7 +118,7 @@ test("board renders task columns and detail controls", async ({ page }) => {
   const lifecycleLabels = await lifecycle.getByRole("listitem").evaluateAll((items) =>
     items.map((item) => item.textContent?.replace(/(complete|current|failed|pending)$/, ""))
   );
-  expect(lifecycleLabels).toEqual(["Start", "Agent", "Validation", "Pull request", "Review & merge", "Review", "Sync", "Done"]);
+  expect(lifecycleLabels).toEqual(["Start", "Agent", "E2E", "Validation", "Pull request", "Review & merge", "Review", "Sync", "Done"]);
   await page.getByRole("button", { name: /US-052/ }).click();
 
   const detail = page.getByRole("dialog", { name: "Selected work detail" });
@@ -126,9 +126,10 @@ test("board renders task columns and detail controls", async ({ page }) => {
   await expect(
     detail.getByRole("heading", { name: "Sync Approval And Done Transition" })
   ).toBeVisible();
+  await detail.getByText("Dependencies & hierarchy").click();
   await expect(page.getByText("Blocked by")).toBeVisible();
   await expect(page.getByText("Unblocks")).toBeVisible();
-  await expect(detail.getByText("Hierarchy")).toBeVisible();
+  await expect(detail.getByText("Hierarchy", { exact: true })).toBeVisible();
   await expect(detail.getByRole("button", { name: /Start/ })).toBeVisible();
 });
 
@@ -146,7 +147,7 @@ test("active task lifecycle is always visible above the command rail", async ({ 
   const rail = page.getByRole("region", { name: "Command status rail" });
   await expect(flow).toBeVisible();
   await expect(flow).toContainText("No task is currently running");
-  await expect(flow.getByRole("listitem")).toHaveCount(8);
+  await expect(flow.getByRole("listitem")).toHaveCount(9);
   expect(await flow.evaluate((node, other) => Boolean(node.compareDocumentPosition(other) & Node.DOCUMENT_POSITION_FOLLOWING), await rail.elementHandle())).toBe(true);
 });
 
@@ -234,11 +235,11 @@ test("PR-less task lifecycle keeps the full fork and marks local review current"
   await page.goto("/");
 
   const flow = page.getByRole("region", { name: "Active task lifecycle" });
-  await expect(flow.getByRole("listitem")).toHaveCount(8);
+  await expect(flow.getByRole("listitem")).toHaveCount(9);
   await expect(flow.getByText("Pull request", { exact: true })).toBeVisible();
   await expect(flow.getByText("Review", { exact: true })).toBeVisible();
   await expect(flow.getByText("Review & merge", { exact: true })).toBeVisible();
-  await expect(flow.getByRole("listitem").nth(5)).toHaveAttribute("aria-current", "step");
+  await expect(flow.getByRole("listitem").nth(6)).toHaveAttribute("aria-current", "step");
 });
 
 test("status rail bounds a long active run identifier", async ({ page }) => {
@@ -582,6 +583,12 @@ test("ready card runs codex from the board without opening detail", async ({ pag
     expect(dialog.message()).toContain("Run US-076 with Codex");
     await dialog.accept();
   });
+  await page.route("**/api/settings", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ default_agent: "codex" })
+    });
+  });
   await page.route("**/api/board", async (route) => {
     const item = boardItem("US-076", "Run Ready Story From Board Card", started ? "In Progress" : "Ready");
     item.active_run = started ? "run_us_076" : null;
@@ -721,7 +728,7 @@ test("task detail renders context pack with fenced code", async ({ page }) => {
   await page.getByRole("button", { name: /US-080/ }).click();
 
   const detail = page.getByRole("dialog", { name: "Selected work detail" });
-  await expect(detail.getByRole("heading", { name: "Context pack" })).toBeVisible();
+  await detail.getByText("Context pack").click();
   await expect(detail.getByText("Read this first.")).toBeVisible();
   await expect(detail.getByText("bash")).toBeVisible();
   await expect(detail.getByText("cargo test -p harness-symphony")).toBeVisible();
@@ -1157,6 +1164,7 @@ test("sidebar renders dependency graph edges and selects tasks", async ({ page }
   await graph.getByRole("button", { name: /US-057 Ready Dependency Graph Sidebar View/ }).click();
   const detail = page.getByRole("dialog", { name: "Selected work detail" });
   await expect(detail.getByRole("heading", { name: "Dependency Graph Sidebar View" })).toBeVisible();
+  await detail.getByText("Dependencies & hierarchy").click();
   await expect(detail.getByText("US-056")).toBeVisible();
   await expect(detail.getByText("US-059")).toBeVisible();
 });
@@ -1872,9 +1880,10 @@ test("review logs render readable chat and progress entries while preserving raw
   const detail = page.getByRole("dialog", { name: "Selected work detail" });
 
   await expect(detail.getByRole("region", { name: "Run console" }).getByRole("heading", { name: "Run console" })).toBeVisible();
-  await expect(detail.getByText("Executor").first()).toBeVisible();
+  await expect(detail.getByText("Agent", { exact: true }).first()).toBeVisible();
   await expect(detail.getByText("Claude Subagent", { exact: true }).first()).toBeVisible();
   await expect(detail.getByRole("region", { name: "Run console" }).getByText("Tests passing")).toBeVisible();
+  await detail.getByText("More details").click();
   await expect(detail.getByText(".harness/runs/run_chat/APP_SERVER_EVENTS.jsonl")).toBeVisible();
 });
 

@@ -70,7 +70,13 @@ impl AgentRuntime {
             )
             .map_err(|error| AgentError::State(error.to_string()))?;
         let events = RunEventWriter::new(run_events_path(prepared), &config.agent_adapter)?;
-        events.append("lifecycle", "agent", "agent process started")?;
+        let command = resolved_agent_command(config);
+        let started = if command.is_empty() {
+            "agent process started".to_owned()
+        } else {
+            format!("agent process started: {}", command.join(" "))
+        };
+        events.append("lifecycle", "agent", started)?;
         Ok(Some(Self {
             store,
             run_id: prepared.run_id.clone(),
