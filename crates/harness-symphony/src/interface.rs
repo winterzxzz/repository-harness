@@ -9,8 +9,8 @@ use crate::cleanup::{cleanup_runtime, CleanupError, CleanupResult};
 use crate::config::{ConfigError, ResolvedConfig, SymphonyConfig};
 use crate::doctor::{print_report, run_doctor, DoctorError};
 use crate::external::{
-    complete as complete_external, heartbeat as heartbeat_external, reconcile_external_runs,
-    start as start_external, ExternalError,
+    complete as complete_external, heartbeat as heartbeat_external, output as output_external,
+    reconcile_external_runs, start as start_external, ExternalError,
 };
 use crate::pr::{create_pr, PrCreateResult, PrError};
 use crate::retention::{compact_runs, CompactResult, RetentionError};
@@ -146,8 +146,10 @@ enum RunsAction {
     /// Start a prepared run under a main-agent-owned external executor lease.
     Start {
         run_id: String,
+        /// Executor name. Omit to auto-assign the next name in the
+        /// Winter1-Winter5 rotation.
         #[arg(long)]
-        executor: String,
+        executor: Option<String>,
     },
     /// Refresh an external executor lease and optionally record a milestone.
     Heartbeat {
@@ -155,6 +157,8 @@ enum RunsAction {
         #[arg(long)]
         step: Option<String>,
     },
+    /// Stream subagent output lines from stdin into the run's live event log.
+    Output { run_id: String },
     /// Validate and finalize a running or stale external run.
     Complete { run_id: String },
     /// Compact old local run artifacts.
@@ -293,10 +297,14 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                 print_run_detail(&RunStateStore::new(resolved.state_db).show_run(&run_id)?);
             }
             RunsAction::Start { run_id, executor } => {
-                print_run_detail(&start_external(&resolved, &run_id, &executor)?);
+                print_run_detail(&start_external(&resolved, &run_id, executor.as_deref())?);
             }
             RunsAction::Heartbeat { run_id, step } => {
                 print_run_detail(&heartbeat_external(&resolved, &run_id, step.as_deref())?);
+            }
+            RunsAction::Output { run_id } => {
+                let stdin = std::io::stdin();
+                print_run_detail(&output_external(&resolved, &run_id, stdin.lock())?);
             }
             RunsAction::Complete { run_id } => {
                 print_completed_run(&complete_external(&resolved, &run_id)?);
@@ -848,6 +856,23 @@ mod tests {
         ])
         .is_ok());
         assert!(Cli::try_parse_from(["harness-symphony", "runs", "complete", "run_1"]).is_ok());
+    }
+
+    #[test]
+    fn runs_start_cli_allows_omitting_executor() {
+        let cli = Cli::try_parse_from(["harness-symphony", "runs", "start", "run_1"]).unwrap();
+        let Command::Runs(args) = cli.command else {
+            panic!("expected runs command");
+        };
+        assert!(matches!(
+            args.action,
+            RunsAction::Start { executor: None, .. }
+        ));
+    }
+
+    #[test]
+    fn runs_output_cli_parses() {
+        assert!(Cli::try_parse_from(["harness-symphony", "runs", "output", "run_1"]).is_ok());
     }
 
     #[test]

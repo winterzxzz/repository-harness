@@ -416,9 +416,9 @@ commands from the source repository, or pass `--repo-root <source-repo>`.
 
 ```bash
 harness-symphony run <story-id> --prepare-only
-harness-symphony runs start <run_id> --executor claude-subagent
+harness-symphony runs start <run_id>
 harness-symphony runs heartbeat <run_id> --step "implementation started"
-harness-symphony runs heartbeat <run_id>
+<subagent command> | harness-symphony runs output <run_id>
 harness-symphony runs complete <run_id>
 ```
 
@@ -428,11 +428,21 @@ for Harness CLI writes so semantic changes produce the matching changeset. It
 must not invoke lifecycle commands or access the source repository's Symphony
 state.
 
-Send a heartbeat at least every 30 seconds. The default lease TTL is 120
-seconds and `runs.external_heartbeat_ttl_seconds` can set another positive
-value; keep the heartbeat interval at or below one quarter of that TTL.
-Heartbeat without `--step` refreshes the lease without adding a duplicate
-progress event. Use `--step` only for a changed, bounded milestone.
+`runs start` without `--executor` assigns the subagent the next name in the
+`Winter1`–`Winter5` rotation; the Web UI displays that name as the executor.
+Pass `--executor <name>` to keep an explicit name instead.
+
+Pipe the subagent's stdout into `runs output <run_id>` to stream its work into
+the run's live event log; the Web UI In Progress console renders each line as
+it arrives. While the stream is active, `runs output` refreshes the executor
+lease itself, so no parallel heartbeat loop is needed.
+
+Without an active output stream, send a heartbeat at least every 30 seconds.
+The default lease TTL is 120 seconds and `runs.external_heartbeat_ttl_seconds`
+can set another positive value; keep the heartbeat interval at or below one
+quarter of that TTL. Heartbeat without `--step` refreshes the lease without
+adding a duplicate progress event. Use `--step` only for a changed, bounded
+milestone.
 
 When the lease expires, Symphony marks the run `stale`, releases the active
 lock, and keeps its worktree as evidence. A later `runs complete <run_id>` may
@@ -458,8 +468,9 @@ drop-in implementation of OpenAI Symphony.
 | Run a tiny story in the current checkout | `harness-symphony run <story-id> --here` |
 | See what happened locally | `harness-symphony status` |
 | Inspect a run | `harness-symphony runs show <run_id>` |
-| Start a prepared external run | `harness-symphony runs start <run_id> --executor <name>` |
+| Start a prepared external run | `harness-symphony runs start <run_id> [--executor <name>]` |
 | Refresh an external lease | `harness-symphony runs heartbeat <run_id> [--step <text>]` |
+| Stream subagent output live | `<subagent> \| harness-symphony runs output <run_id>` |
 | Complete an external run | `harness-symphony runs complete <run_id>` |
 | Create a PR for a finished run | `harness-symphony pr create <run_id>` |
 | Apply merged changesets | `harness-symphony sync` |
