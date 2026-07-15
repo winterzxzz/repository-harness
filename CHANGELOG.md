@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-07-15 - Manual release harness-kit-v0.2.3
+
+- Publish Symphony branched and forked task-flow views with PR and local-review
+  paths, including pathless reviewed-run backfill and lane state updates.
+- Keep the Symphony board polling while idle at a slower interval and retain
+  fast polling during active runs.
+- Keep the bundled Harness CLI at `harness-cli-v0.1.11`; no CLI source or schema
+  changes require a new CLI release.
+
 ## 2026-07-14 - Manual release harness-kit-v0.2.2
 
 - Publish Symphony runtime observability, external executor lifecycle, and live
