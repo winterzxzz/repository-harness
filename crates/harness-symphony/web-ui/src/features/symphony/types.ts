@@ -14,7 +14,7 @@ export type BoardState =
 
 export type BoardBucket = "Drafts" | "Active" | "Ready" | "Done";
 
-export type TaskFlowStepId = "start" | "agent" | "validation" | "pr" | "review" | "sync" | "done";
+export type TaskFlowStepId = "start" | "agent" | "e2e" | "validation" | "pr" | "review" | "sync" | "done";
 export type TaskFlowStepState = "pending" | "current" | "complete" | "failed";
 export type TaskFlowState = "active" | "waiting" | "failed" | "done";
 

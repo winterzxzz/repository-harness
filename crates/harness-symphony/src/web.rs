@@ -2981,17 +2981,25 @@ fn content_type(path: &Path) -> &'static str {
     }
 }
 
-const PR_TASK_FLOW_STEPS: [&str; 7] = [
+const PR_TASK_FLOW_STEPS: [&str; 8] = [
     "start",
     "agent",
+    "e2e",
     "validation",
     "pr",
     "review",
     "sync",
     "done",
 ];
-const LOCAL_REVIEW_TASK_FLOW_STEPS: [&str; 6] =
-    ["start", "agent", "validation", "review", "sync", "done"];
+const LOCAL_REVIEW_TASK_FLOW_STEPS: [&str; 7] = [
+    "start",
+    "agent",
+    "e2e",
+    "validation",
+    "review",
+    "sync",
+    "done",
+];
 
 fn derive_task_flow(items: &[BoardItemResponse], runs: &[RunRecord]) -> Option<TaskFlowResponse> {
     let active = items.iter().find(|item| item.active_run.is_some());
@@ -3490,7 +3498,8 @@ mod tests {
                     title TEXT NOT NULL,
                     status TEXT NOT NULL,
                     risk_lane TEXT NOT NULL,
-                    verify_command TEXT
+                    verify_command TEXT,
+                    e2e_command TEXT
                 );",
             )
             .unwrap();
@@ -3512,7 +3521,8 @@ mod tests {
                     title TEXT NOT NULL,
                     status TEXT NOT NULL,
                     risk_lane TEXT NOT NULL,
-                    verify_command TEXT
+                    verify_command TEXT,
+                    e2e_command TEXT
                 );",
             )
             .unwrap();
@@ -4187,6 +4197,7 @@ exit 1
                     risk_lane TEXT NOT NULL,
                     contract_doc TEXT,
                     verify_command TEXT,
+                    e2e_command TEXT,
                     notes TEXT
                 );",
             )

@@ -11,7 +11,7 @@ export type ForkedTaskFlow = {
   tail: ForkStep[];
 };
 
-const headIds: TaskFlowStepId[] = ["start", "agent", "validation"];
+const headIds: TaskFlowStepId[] = ["start", "agent", "e2e", "validation"];
 const tailIds: TaskFlowStepId[] = ["sync", "done"];
 
 export function deriveForkedTaskFlow(flow: TaskFlow): ForkedTaskFlow {

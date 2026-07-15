@@ -8,6 +8,7 @@ import type { RecoveryAction, TaskFlow, TaskFlowStepId, TaskFlowStepState } from
 const labels: Record<TaskFlowStepId, string> = {
   start: "Start",
   agent: "Agent",
+  e2e: "E2E",
   validation: "Validation",
   pr: "Pull request",
   review: "Review",
@@ -22,7 +23,7 @@ const idleFlow: TaskFlow = {
   current_step: null,
   message: "Symphony is idle. The next task will appear here.",
   pr_status: "missing",
-  steps: ["start", "agent", "validation", "pr", "review", "sync", "done"].map((id) => ({
+  steps: ["start", "agent", "e2e", "validation", "pr", "review", "sync", "done"].map((id) => ({
     id: id as TaskFlowStepId,
     state: "pending" as const
   })),

@@ -259,6 +259,35 @@ If the run writes durable Harness records, it must also produce:
 
 Symphony validates the result before accepting the run.
 
+### Independent E2E Stage
+
+A run flows through durable stages
+`start → agent → e2e → validation → review → sync → done`. After the agent
+finishes, Symphony itself executes the story's declared E2E command inside the
+run worktree — it does not trust agent-reported E2E evidence. Declare the
+command per story:
+
+```bash
+scripts/bin/harness-cli story add --id US-123 --title "..." --lane normal \
+  --e2e-command "npm run e2e"
+scripts/bin/harness-cli story update --id US-123 --e2e-command "npm run e2e"
+```
+
+The command's output streams into `RUN_EVENTS.jsonl` with stage `e2e`, so the
+Web UI In Progress console shows it live. Exit 0 records `e2e passed` and the
+run proceeds to validation. A non-zero exit or a timeout fails the run with
+next action `inspect e2e failure`. Stories without an `e2e_command` skip the
+stage cleanly with an explanatory `e2e skipped` event.
+
+The stage is bounded by `e2e.timeout_minutes` (default 15) in
+`.harness/symphony.yml`:
+
+```yaml
+version: 1
+e2e:
+  timeout_minutes: 15
+```
+
 ## Tiny Story Shortcut
 
 Tiny-lane stories can use a lighter path:

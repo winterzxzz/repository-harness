@@ -679,7 +679,8 @@ mod tests {
                     title TEXT NOT NULL,
                     status TEXT NOT NULL,
                     risk_lane TEXT NOT NULL,
-                    verify_command TEXT
+                    verify_command TEXT,
+                    e2e_command TEXT
                 );
                 CREATE TABLE story_hierarchy (
                     parent_story_id TEXT NOT NULL,
@@ -806,7 +807,8 @@ mod tests {
                     id TEXT PRIMARY KEY,
                     status TEXT NOT NULL,
                     risk_lane TEXT NOT NULL,
-                    verify_command TEXT
+                    verify_command TEXT,
+                    e2e_command TEXT
                 );
                 INSERT INTO story (id, status, risk_lane, verify_command)
                 VALUES
@@ -839,7 +841,8 @@ mod tests {
                     id TEXT PRIMARY KEY,
                     status TEXT NOT NULL,
                     risk_lane TEXT NOT NULL,
-                    verify_command TEXT
+                    verify_command TEXT,
+                    e2e_command TEXT
                 );
                 INSERT INTO story (id, status, risk_lane, verify_command)
                 VALUES

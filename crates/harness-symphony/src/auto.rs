@@ -419,6 +419,7 @@ mod tests {
             auto_poll_interval_seconds: 0,
             auto_max_attempts: 2,
             auto_allow_stale_base: true,
+            e2e_timeout_minutes: 15,
         }
     }
 
@@ -431,14 +432,15 @@ mod tests {
                     title TEXT NOT NULL DEFAULT '',
                     status TEXT NOT NULL,
                     risk_lane TEXT NOT NULL,
-                    verify_command TEXT
+                    verify_command TEXT,
+                    e2e_command TEXT
                 );",
             )
             .unwrap();
         connection
             .execute(
-                "INSERT INTO story (id, title, status, risk_lane, verify_command)
-                 VALUES (?1, 'fixture', 'planned', 'normal', 'cargo test');",
+                "INSERT INTO story (id, title, status, risk_lane, verify_command, e2e_command)
+                 VALUES (?1, 'fixture', 'planned', 'normal', 'cargo test', NULL);",
                 params![id],
             )
             .unwrap();

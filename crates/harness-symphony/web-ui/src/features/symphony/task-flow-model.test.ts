@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { deriveForkedTaskFlow } from "./task-flow-model";
 import type { TaskFlow, TaskFlowStepId } from "./types";
 
-const prStepIds: TaskFlowStepId[] = ["start", "agent", "validation", "pr", "review", "sync", "done"];
+const prStepIds: TaskFlowStepId[] = ["start", "agent", "e2e", "validation", "pr", "review", "sync", "done"];
 
 function flow(prStatus: string, current: TaskFlowStepId = "review"): TaskFlow {
   const stepIds = prStatus === "not_applicable"

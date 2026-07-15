@@ -203,8 +203,8 @@ function parseBoardResponse(value: unknown): BoardResponse {
   };
 }
 
-const prTaskFlowStepIds: TaskFlowStepId[] = ["start", "agent", "validation", "pr", "review", "sync", "done"];
-const localReviewTaskFlowStepIds: TaskFlowStepId[] = ["start", "agent", "validation", "review", "sync", "done"];
+const prTaskFlowStepIds: TaskFlowStepId[] = ["start", "agent", "e2e", "validation", "pr", "review", "sync", "done"];
+const localReviewTaskFlowStepIds: TaskFlowStepId[] = ["start", "agent", "e2e", "validation", "review", "sync", "done"];
 const taskFlowStepIds = [prTaskFlowStepIds, localReviewTaskFlowStepIds];
 const taskFlowStepStates: TaskFlowStepState[] = ["pending", "current", "complete", "failed"];
 const taskFlowStates: TaskFlowState[] = ["active", "waiting", "failed", "done"];

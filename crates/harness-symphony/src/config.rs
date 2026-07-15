@@ -47,6 +47,7 @@ pub struct ResolvedConfig {
     pub auto_poll_interval_seconds: u64,
     pub auto_max_attempts: u32,
     pub auto_allow_stale_base: bool,
+    pub e2e_timeout_minutes: u32,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -69,6 +70,8 @@ pub struct SymphonyConfig {
     pub cleanup: CleanupConfig,
     #[serde(default)]
     pub auto: AutoConfig,
+    #[serde(default)]
+    pub e2e: E2eConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -146,6 +149,23 @@ pub struct CleanupConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct E2eConfig {
+    #[serde(
+        default = "default_e2e_timeout_minutes",
+        deserialize_with = "deserialize_e2e_timeout_minutes"
+    )]
+    pub timeout_minutes: u32,
+}
+
+impl Default for E2eConfig {
+    fn default() -> Self {
+        Self {
+            timeout_minutes: default_e2e_timeout_minutes(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct AutoConfig {
     #[serde(default = "default_auto_source")]
     pub source: String,
@@ -169,6 +189,7 @@ impl Default for SymphonyConfig {
             runs: RunsConfig::default(),
             cleanup: CleanupConfig::default(),
             auto: AutoConfig::default(),
+            e2e: E2eConfig::default(),
         }
     }
 }
@@ -293,6 +314,7 @@ impl SymphonyConfig {
             keep_failed_worktrees: self.cleanup.keep_failed_worktrees,
             cleanup_after_sync: self.cleanup.cleanup_after_sync,
             failed_worktree_retention_days: self.cleanup.failed_worktree_retention_days,
+            e2e_timeout_minutes: self.e2e.timeout_minutes,
             auto_source: self.auto.source.clone(),
             auto_poll_interval_seconds: self.auto.poll_interval_seconds,
             auto_max_attempts: self.auto.max_attempts,
@@ -433,6 +455,23 @@ fn default_auto_max_attempts() -> u32 {
     3
 }
 
+fn default_e2e_timeout_minutes() -> u32 {
+    15
+}
+
+fn deserialize_e2e_timeout_minutes<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = u32::deserialize(deserializer)?;
+    if value == 0 {
+        return Err(serde::de::Error::custom(
+            "e2e.timeout_minutes must be greater than zero",
+        ));
+    }
+    Ok(value)
+}
+
 pub const AUTO_RETRY_INITIAL_SECONDS: u64 = 10;
 pub const AUTO_RETRY_MULTIPLIER: u32 = 2;
 pub const AUTO_RETRY_MAX_SECONDS: u64 = 300;
@@ -475,6 +514,7 @@ mod tests {
         assert_eq!(resolved.auto_poll_interval_seconds, 30);
         assert_eq!(resolved.auto_max_attempts, 3);
         assert!(!resolved.auto_allow_stale_base);
+        assert_eq!(resolved.e2e_timeout_minutes, 15);
         assert_eq!(AUTO_RETRY_INITIAL_SECONDS, 10);
         assert_eq!(AUTO_RETRY_MULTIPLIER, 2);
         assert_eq!(AUTO_RETRY_MAX_SECONDS, 300);
@@ -521,6 +561,7 @@ auto:
         assert_eq!(resolved.auto_poll_interval_seconds, 5);
         assert_eq!(resolved.auto_max_attempts, 2);
         assert!(resolved.auto_allow_stale_base);
+        assert_eq!(resolved.e2e_timeout_minutes, 15);
         assert_eq!(
             resolved.worktrees_dir,
             PathBuf::from("/repo/workspace/.symphony/worktrees")
@@ -537,6 +578,15 @@ auto:
         let error = SymphonyConfig::load(temp_dir.path()).unwrap_err();
         assert!(error.to_string().contains("config parse failed"));
         assert!(error.to_string().contains(".harness/symphony.yml"));
+    }
+
+    #[test]
+    fn e2e_rejects_zero_timeout() {
+        let error =
+            serde_yaml::from_str::<SymphonyConfig>("e2e:\n  timeout_minutes: 0\n").unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("e2e.timeout_minutes must be greater than zero"));
     }
 
     #[test]

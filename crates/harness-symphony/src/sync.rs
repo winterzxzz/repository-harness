@@ -915,6 +915,7 @@ mod tests {
             auto_poll_interval_seconds: 30,
             auto_max_attempts: 3,
             auto_allow_stale_base: false,
+            e2e_timeout_minutes: 15,
         }
     }
 }

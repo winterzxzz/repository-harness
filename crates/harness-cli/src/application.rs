@@ -32,6 +32,7 @@ pub struct StoryAddInput {
     pub risk_lane: RiskLane,
     pub contract_doc: Option<String>,
     pub verify_command: Option<String>,
+    pub e2e_command: Option<String>,
     pub notes: Option<String>,
 }
 
@@ -45,6 +46,7 @@ pub struct StoryUpdateInput {
     pub e2e: Option<BoolFlag>,
     pub platform: Option<BoolFlag>,
     pub verify_command: Option<String>,
+    pub e2e_command: Option<String>,
 }
 
 #[derive(Debug)]

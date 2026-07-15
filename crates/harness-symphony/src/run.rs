@@ -1,8 +1,9 @@
 use std::fs;
+use std::io::{BufRead, Read};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -13,6 +14,7 @@ use crate::agent::{run_agent, AgentError};
 use crate::changeset::{append_rendered_section, validate_run_changeset, ChangesetError};
 use crate::config::ResolvedConfig;
 use crate::harness_digest::logical_digest;
+use crate::run_events::RunEventWriter;
 use crate::state::{NewRunRecord, RunStateStore, StateError};
 use crate::sync::SyncError;
 
@@ -42,6 +44,10 @@ pub enum RunError {
     Sqlite(#[from] rusqlite::Error),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("e2e stage timed out after {0} seconds")]
+    E2eTimeout(u64),
+    #[error("e2e command failed (exit code {1}): {0}")]
+    ProcessFailed(String, i32),
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
     #[error("{0}")]
@@ -96,6 +102,8 @@ pub struct RunContract {
     pub refresh_warning: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_changes: Option<RequestChangesContract>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub e2e_command: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -203,6 +211,7 @@ fn prepare_run_with_post_resource_hook(
             &worktree,
             &harness_db_path,
             provenance.as_ref(),
+            story.e2e_command.clone(),
         );
         write_contract(&contract_path, &contract)?;
         // Also place the contract inside the worktree so the agent never has to
@@ -292,6 +301,7 @@ fn prepare_replacement_files(
     let contract_path = run_dir.join("RUN_CONTRACT.json");
     let harness_db_path = worktree.join("harness.db");
     let request_changes = request_changes_contract(&run_id, &feedback);
+    let story_e2e_command = story.e2e_command.clone();
     let prepared = PreparedRun {
         run_id: run_id.clone(),
         story_id: story.id,
@@ -322,6 +332,7 @@ fn prepare_replacement_files(
             &worktree,
             &harness_db_path,
             None,
+            story_e2e_command,
         );
         contract.request_changes = Some(request_changes);
         write_contract(&contract_path, &contract)?;
@@ -533,6 +544,7 @@ fn prepare_here_run_with_post_resource_hook(
             &config.repo_root,
             &harness_db_path,
             None,
+            story.e2e_command.clone(),
         );
         write_contract(&contract_path, &contract)?;
 
@@ -624,6 +636,43 @@ pub(crate) fn finalize_prepared_run(
 ) -> Result<CompletedRun, RunError> {
     let store = RunStateStore::new(config.state_db.clone());
     let run_id = prepared.run_id.clone();
+
+    let run_dir = config.runs_dir.join(&run_id);
+    let contract_file = run_dir.join("RUN_CONTRACT.json");
+    let e2e_command = if contract_file.exists() {
+        let contract_content = std::fs::read_to_string(&contract_file)?;
+        let contract: RunContract = serde_json::from_str(&contract_content)?;
+        contract.e2e_command
+    } else {
+        None
+    };
+    store.set_stage(&run_id, "e2e")?;
+    let events = RunEventWriter::new(run_dir.join("RUN_EVENTS.jsonl"), "symphony")?;
+    match e2e_command {
+        None => {
+            events.append(
+                "lifecycle",
+                "e2e",
+                "e2e skipped: story declares no e2e command",
+            )?;
+        }
+        Some(ref cmd) => {
+            events.append("lifecycle", "e2e", format!("e2e running: {cmd}"))?;
+            let timeout = Duration::from_secs(u64::from(config.e2e_timeout_minutes) * 60);
+            match execute_e2e(cmd, &prepared.worktree, &events, timeout) {
+                Ok(()) => {
+                    events.append("lifecycle", "e2e", "e2e passed")?;
+                }
+                Err(error) => {
+                    let _ = events.append("lifecycle", "e2e", error.to_string());
+                    let finish_result =
+                        store.finish_execution(&run_id, "failed", "inspect e2e failure");
+                    return Err(preserve_primary_error(error, finish_result, "e2e failure"));
+                }
+            }
+        }
+    }
+
     store.set_stage(&run_id, "validation")?;
     let record = store.show_run(&run_id)?;
     if let Some(baseline) = record.harness_db_digest.as_deref() {
@@ -673,6 +722,86 @@ pub(crate) fn finalize_prepared_run(
     Ok(completed)
 }
 
+fn e2e_shell_command(command: &str) -> Command {
+    #[cfg(windows)]
+    {
+        let mut shell = Command::new("powershell");
+        shell.args(["-NoProfile", "-Command", command]);
+        shell
+    }
+    #[cfg(not(windows))]
+    {
+        let mut shell = Command::new("sh");
+        shell.args(["-c", command]);
+        shell
+    }
+}
+
+fn execute_e2e(
+    command: &str,
+    worktree: &Path,
+    events: &RunEventWriter,
+    timeout: Duration,
+) -> Result<(), RunError> {
+    let start = Instant::now();
+
+    let mut child = e2e_shell_command(command)
+        .current_dir(worktree)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    let drain = |stream: Box<dyn Read + Send>, writer: RunEventWriter| {
+        std::thread::spawn(move || {
+            for line in std::io::BufReader::new(stream).lines() {
+                let Ok(text) = line else { break };
+                if !text.is_empty() {
+                    let _ = writer.append("output", "e2e", &text);
+                }
+            }
+        })
+    };
+    let stdout_drain = child
+        .stdout
+        .take()
+        .map(|stream| drain(Box::new(stream), events.clone()));
+    let stderr_drain = child
+        .stderr
+        .take()
+        .map(|stream| drain(Box::new(stream), events.clone()));
+
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if start.elapsed() > timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            if let Some(handle) = stdout_drain {
+                let _ = handle.join();
+            }
+            if let Some(handle) = stderr_drain {
+                let _ = handle.join();
+            }
+            return Err(RunError::E2eTimeout(timeout.as_secs()));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    if let Some(handle) = stdout_drain {
+        let _ = handle.join();
+    }
+    if let Some(handle) = stderr_drain {
+        let _ = handle.join();
+    }
+
+    if !status.success() {
+        let code = status.code().unwrap_or(-1);
+        return Err(RunError::ProcessFailed(command.to_owned(), code));
+    }
+    Ok(())
+}
+
 fn validation_failure(
     store: &RunStateStore,
     run_id: &str,
@@ -717,13 +846,14 @@ fn load_story(db_path: &Path, story_id: &str) -> Result<Story, RunError> {
     let connection = Connection::open(db_path)?;
     connection
         .query_row(
-            "SELECT id, status, risk_lane FROM story WHERE id=?1;",
+            "SELECT id, status, risk_lane, e2e_command FROM story WHERE id=?1;",
             params![story_id],
             |row| {
                 Ok(Story {
                     id: row.get(0)?,
                     status: row.get(1)?,
                     lane: row.get(2)?,
+                    e2e_command: row.get(3)?,
                 })
             },
         )
@@ -747,6 +877,7 @@ fn create_worktree(repo_root: &Path, branch: &str, worktree: &Path) -> Result<()
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_contract(
     config: &ResolvedConfig,
     run_id: &str,
@@ -755,6 +886,7 @@ fn build_contract(
     worktree: &Path,
     harness_db_path: &Path,
     provenance: Option<&AutoRunProvenance>,
+    e2e_command: Option<String>,
 ) -> RunContract {
     let required_outputs = vec![
         format!(".harness/runs/{run_id}/SUMMARY.md"),
@@ -808,6 +940,7 @@ fn build_contract(
         base_sha: provenance.map(|value| value.base_sha.clone()),
         refresh_warning: provenance.and_then(|value| value.refresh_warning.clone()),
         request_changes: None,
+        e2e_command,
     }
 }
 
@@ -1126,6 +1259,7 @@ struct Story {
     id: String,
     status: String,
     lane: String,
+    e2e_command: Option<String>,
 }
 
 #[cfg(test)]
@@ -1292,6 +1426,7 @@ mod tests {
             auto_poll_interval_seconds: 30,
             auto_max_attempts: 3,
             auto_allow_stale_base: false,
+            e2e_timeout_minutes: 15,
         }
     }
 
@@ -1315,7 +1450,8 @@ mod tests {
                     title TEXT NOT NULL DEFAULT '',
                     status TEXT NOT NULL,
                     risk_lane TEXT NOT NULL,
-                    verify_command TEXT
+                    verify_command TEXT,
+                    e2e_command TEXT
                 );",
             )
             .unwrap();
@@ -1392,6 +1528,7 @@ mod tests {
             false,
             Path::new("/repo/.symphony/worktrees/run_1"),
             Path::new("/repo/.symphony/worktrees/run_1/harness.db"),
+            None,
             None,
         );
 
@@ -1525,6 +1662,7 @@ mod tests {
             Path::new("/repo"),
             Path::new("/repo/.symphony/runs/run_1/harness.db"),
             None,
+            None,
         );
 
         assert!(contract.lightweight);
@@ -1545,6 +1683,7 @@ mod tests {
             false,
             Path::new("/repo/.symphony/worktrees/run_1"),
             Path::new("/repo/.symphony/worktrees/run_1/harness.db"),
+            None,
             None,
         );
         let shim = render_agents_shim(
@@ -2026,5 +2165,123 @@ mod tests {
         assert!(error.to_string().contains("RESULT.json story_id mismatch"));
         assert!(config.runs_dir.join("run_invalid/SUMMARY.md").exists());
         assert!(config.runs_dir.join("run_invalid/RESULT.json").exists());
+    }
+
+    fn e2e_run_fixture(
+        config: &ResolvedConfig,
+        run_id: &str,
+        e2e_command: Option<&str>,
+    ) -> (RunStateStore, PreparedRun) {
+        let worktree = config.worktrees_dir.join(run_id);
+        fs::create_dir_all(&worktree).unwrap();
+        let store = RunStateStore::new(config.state_db.clone());
+        store
+            .add_run(NewRunRecord {
+                run_id: run_id.to_owned(),
+                story_id: "US-101".to_owned(),
+                branch: Some(format!("symphony/{run_id}")),
+                worktree: worktree.clone(),
+                lightweight: false,
+                status: "running".to_owned(),
+                result_path: None,
+                sync_status: "not_applied".to_owned(),
+                next_action: "running".to_owned(),
+            })
+            .unwrap();
+        let contract = build_contract(
+            config,
+            run_id,
+            "US-101",
+            false,
+            &worktree,
+            &worktree.join("harness.db"),
+            None,
+            e2e_command.map(str::to_owned),
+        );
+        let run_dir = config.runs_dir.join(run_id);
+        fs::create_dir_all(&run_dir).unwrap();
+        let contract_path = run_dir.join("RUN_CONTRACT.json");
+        write_contract(&contract_path, &contract).unwrap();
+        let prepared = PreparedRun {
+            run_id: run_id.to_owned(),
+            story_id: "US-101".to_owned(),
+            branch: Some(format!("symphony/{run_id}")),
+            worktree,
+            contract_path,
+            harness_db_path: config.worktrees_dir.join(run_id).join("harness.db"),
+            lightweight: false,
+            request_changes: None,
+        };
+        (store, prepared)
+    }
+
+    fn run_events(config: &ResolvedConfig, run_id: &str) -> String {
+        fs::read_to_string(config.runs_dir.join(run_id).join("RUN_EVENTS.jsonl")).unwrap()
+    }
+
+    #[test]
+    fn e2e_stage_skips_cleanly_without_command() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = config_for_root(temp_dir.path());
+        let (_store, prepared) = e2e_run_fixture(&config, "run_e2e_skip", None);
+
+        let error = finalize_prepared_run(&config, prepared).unwrap_err();
+
+        // Fails later in validation (no artifacts), not in the e2e stage.
+        assert!(error.to_string().contains("SUMMARY.md missing"));
+        let events = run_events(&config, "run_e2e_skip");
+        assert!(events.contains("e2e skipped: story declares no e2e command"));
+    }
+
+    #[test]
+    fn e2e_stage_passes_and_streams_output() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = config_for_root(temp_dir.path());
+        let (_store, prepared) = e2e_run_fixture(
+            &config,
+            "run_e2e_pass",
+            Some("printf 'e2e fixture line\\n'"),
+        );
+
+        let error = finalize_prepared_run(&config, prepared).unwrap_err();
+
+        assert!(error.to_string().contains("SUMMARY.md missing"));
+        let events = run_events(&config, "run_e2e_pass");
+        assert!(events.contains("e2e fixture line"));
+        assert!(events.contains("e2e passed"));
+        assert!(events.contains("\"stage\":\"e2e\""));
+    }
+
+    #[test]
+    fn e2e_stage_failure_fails_run_with_exit_status() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = config_for_root(temp_dir.path());
+        let (store, prepared) = e2e_run_fixture(&config, "run_e2e_fail", Some("exit 7"));
+
+        let error = finalize_prepared_run(&config, prepared).unwrap_err();
+
+        assert!(error.to_string().contains("exit code 7"));
+        let record = store.show_run("run_e2e_fail").unwrap();
+        assert_eq!(record.status, "failed");
+        assert_eq!(record.next_action, "inspect e2e failure");
+        let events = run_events(&config, "run_e2e_fail");
+        assert!(events.contains("exit code 7"));
+    }
+
+    #[test]
+    fn execute_e2e_times_out_on_silent_hang() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let events =
+            RunEventWriter::new(temp_dir.path().join("RUN_EVENTS.jsonl"), "symphony").unwrap();
+
+        let error = execute_e2e(
+            "sleep 30",
+            temp_dir.path(),
+            &events,
+            Duration::from_millis(300),
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, RunError::E2eTimeout(_)));
     }
 }

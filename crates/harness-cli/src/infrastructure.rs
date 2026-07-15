@@ -573,14 +573,15 @@ impl HarnessRepository for SqliteHarnessRepository {
         self.with_logged_write(&mut connection, |transaction| {
             let risk_lane = input.risk_lane.as_db_value().to_owned();
             transaction.execute(
-                "INSERT INTO story (id, title, risk_lane, contract_doc, verify_command, notes)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6);",
+                "INSERT INTO story (id, title, risk_lane, contract_doc, verify_command, e2e_command, notes)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);",
                 params![
                     input.id,
                     input.title,
                     risk_lane,
                     input.contract_doc,
                     input.verify_command,
+                    input.e2e_command,
                     input.notes,
                 ],
             )?;
@@ -595,6 +596,7 @@ impl HarnessRepository for SqliteHarnessRepository {
                         "risk_lane": risk_lane,
                         "contract_doc": input.contract_doc,
                         "verify_command": input.verify_command,
+                        "e2e_command": input.e2e_command,
                         "notes": input.notes,
                     },
                 })],
@@ -610,6 +612,7 @@ impl HarnessRepository for SqliteHarnessRepository {
             && input.e2e.is_none()
             && input.platform.is_none()
             && input.verify_command.is_none()
+            && input.e2e_command.is_none()
         {
             return Err(HarnessInfraError::EmptyStoryUpdate);
         }
@@ -628,8 +631,9 @@ impl HarnessRepository for SqliteHarnessRepository {
                     integration_proof=COALESCE(?4, integration_proof),
                     e2e_proof=COALESCE(?5, e2e_proof),
                     platform_proof=COALESCE(?6, platform_proof),
-                    verify_command=COALESCE(?7, verify_command)
-                 WHERE id=?8;",
+                    verify_command=COALESCE(?7, verify_command),
+                    e2e_command=COALESCE(?8, e2e_command)
+                 WHERE id=?9;",
                 params![
                     input.status,
                     input.evidence,
@@ -638,6 +642,7 @@ impl HarnessRepository for SqliteHarnessRepository {
                     e2e,
                     platform,
                     input.verify_command,
+                    input.e2e_command,
                     input.id,
                 ],
             )?;
@@ -659,6 +664,7 @@ impl HarnessRepository for SqliteHarnessRepository {
                         "e2e_proof": e2e,
                         "platform_proof": platform,
                         "verify_command": input.verify_command,
+                        "e2e_command": input.e2e_command,
                     },
                 })],
             ))
@@ -3047,14 +3053,15 @@ fn apply_changeset_operation(
             1
         }
         "story.add" => transaction.execute(
-            "INSERT INTO story (id, title, risk_lane, contract_doc, verify_command, notes)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6);",
+            "INSERT INTO story (id, title, risk_lane, contract_doc, verify_command, e2e_command, notes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);",
             params![
                 required_string(operation, "id")?,
                 required_string(payload, "title")?,
                 required_string(payload, "risk_lane")?,
                 optional_string(payload, "contract_doc"),
                 optional_string(payload, "verify_command"),
+                optional_string(payload, "e2e_command"),
                 optional_string(payload, "notes"),
             ],
         )?,
@@ -3066,8 +3073,9 @@ fn apply_changeset_operation(
                 integration_proof=COALESCE(?4, integration_proof),
                 e2e_proof=COALESCE(?5, e2e_proof),
                 platform_proof=COALESCE(?6, platform_proof),
-                verify_command=COALESCE(?7, verify_command)
-             WHERE id=?8;",
+                verify_command=COALESCE(?7, verify_command),
+                e2e_command=COALESCE(?8, e2e_command)
+             WHERE id=?9;",
             params![
                 optional_string(payload, "status"),
                 optional_string(payload, "evidence"),
@@ -3076,6 +3084,7 @@ fn apply_changeset_operation(
                 optional_i64(payload, "e2e_proof"),
                 optional_i64(payload, "platform_proof"),
                 optional_string(payload, "verify_command"),
+                optional_string(payload, "e2e_command"),
                 required_string(operation, "id")?,
             ],
         )?,
@@ -3302,7 +3311,7 @@ mod tests {
         assert_eq!(repository.query_stats().unwrap().intakes, 0);
         let connection = repository.open_existing().unwrap();
         let schema_version = SqliteHarnessRepository::schema_version(&connection).unwrap();
-        assert_eq!(schema_version, 8);
+        assert_eq!(schema_version, 9);
         let story_columns = story_columns(&connection);
         assert!(story_columns.contains(&"verify_command".to_owned()));
         assert!(story_columns.contains(&"last_verified_at".to_owned()));
@@ -3361,7 +3370,7 @@ mod tests {
         let header: Value = serde_json::from_str(lines[0]).unwrap();
         assert_eq!(header["op"], "changeset.header");
         assert_eq!(header["run_id"], "run_test");
-        assert_eq!(header["base_schema_version"], 8);
+        assert_eq!(header["base_schema_version"], 9);
         let operation: Value = serde_json::from_str(lines[1]).unwrap();
         assert_eq!(operation["op"], "intake.add");
         assert_eq!(operation["payload"]["summary"], "Logged write test");
@@ -3481,7 +3490,7 @@ mod tests {
         let connection = repository.open_existing().unwrap();
         assert_eq!(
             SqliteHarnessRepository::schema_version(&connection).unwrap(),
-            8
+            9
         );
         let applied = connection
             .query_row(
@@ -3592,11 +3601,11 @@ mod tests {
         let result = repository.migrate().unwrap();
 
         assert_eq!(result.current_version, 1);
-        assert_eq!(result.applied, vec![2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(result.applied, vec![2, 3, 4, 5, 6, 7, 8, 9]);
         let connection = repository.open_existing().unwrap();
         assert_eq!(
             SqliteHarnessRepository::schema_version(&connection).unwrap(),
-            8
+            9
         );
         let story_columns = story_columns(&connection);
         assert!(story_columns.contains(&"verify_command".to_owned()));
@@ -3646,7 +3655,7 @@ mod tests {
         drop(connection);
 
         // Upgrade: migration 005 must infer kind from the command prefix.
-        assert_eq!(repository.migrate().unwrap().applied, vec![5, 6, 7, 8]);
+        assert_eq!(repository.migrate().unwrap().applied, vec![5, 6, 7, 8, 9]);
         let connection = repository.open_existing().unwrap();
         let kind_of = |name: &str| -> String {
             connection
@@ -3753,6 +3762,7 @@ mod tests {
                 risk_lane: RiskLane::Normal,
                 contract_doc: None,
                 verify_command: Some("echo ok".to_owned()),
+                e2e_command: None,
                 notes: None,
             })
             .unwrap();
@@ -3775,6 +3785,7 @@ mod tests {
                 e2e: None,
                 platform: None,
                 verify_command: Some("npm test".to_owned()),
+                e2e_command: None,
             })
             .unwrap();
 
@@ -3819,6 +3830,7 @@ mod tests {
                 risk_lane: RiskLane::Normal,
                 contract_doc: None,
                 verify_command: Some(verify_command),
+                e2e_command: None,
                 notes: None,
             })
             .unwrap();
@@ -3844,6 +3856,7 @@ mod tests {
                 risk_lane: RiskLane::Normal,
                 contract_doc: None,
                 verify_command: Some("exit 1".to_owned()),
+                e2e_command: None,
                 notes: None,
             })
             .unwrap();
@@ -3865,6 +3878,7 @@ mod tests {
                 risk_lane: RiskLane::Normal,
                 contract_doc: None,
                 verify_command: None,
+                e2e_command: None,
                 notes: None,
             })
             .unwrap();
@@ -3890,6 +3904,7 @@ mod tests {
                     risk_lane: RiskLane::Normal,
                     contract_doc: None,
                     verify_command: command.map(str::to_owned),
+                    e2e_command: None,
                     notes: None,
                 })
                 .unwrap();
@@ -4049,6 +4064,7 @@ mod tests {
                 risk_lane: RiskLane::Normal,
                 contract_doc: None,
                 verify_command: None,
+                e2e_command: None,
                 notes: None,
             })
             .unwrap();
@@ -4116,6 +4132,7 @@ mod tests {
                 risk_lane: RiskLane::Normal,
                 contract_doc: None,
                 verify_command: Some("exit 0".to_owned()),
+                e2e_command: None,
                 notes: None,
             })
             .unwrap();
@@ -4129,6 +4146,7 @@ mod tests {
                 e2e: None,
                 platform: None,
                 verify_command: None,
+                e2e_command: None,
             })
             .unwrap();
         repository
@@ -4138,6 +4156,7 @@ mod tests {
                 risk_lane: RiskLane::Normal,
                 contract_doc: None,
                 verify_command: Some("exit 0".to_owned()),
+                e2e_command: None,
                 notes: None,
             })
             .unwrap();
@@ -4151,6 +4170,7 @@ mod tests {
                 e2e: None,
                 platform: None,
                 verify_command: None,
+                e2e_command: None,
             })
             .unwrap();
         repository
@@ -4352,6 +4372,7 @@ mod tests {
                 risk_lane: RiskLane::Normal,
                 contract_doc: None,
                 verify_command: None,
+                e2e_command: None,
                 notes: None,
             })
             .unwrap();
@@ -4365,6 +4386,7 @@ mod tests {
                 e2e: None,
                 platform: None,
                 verify_command: None,
+                e2e_command: None,
             })
             .unwrap();
         assert_eq!(repository.query_matrix().unwrap()[0].unit, 1);
@@ -4646,6 +4668,7 @@ implemented
                 risk_lane: RiskLane::Normal,
                 contract_doc: Some("docs/product/cli.md".to_owned()),
                 verify_command: Some("cargo test -p harness-cli context_pack".to_owned()),
+                e2e_command: None,
                 notes: Some("Generate paste-ready context".to_owned()),
             })
             .unwrap();
@@ -4659,6 +4682,7 @@ implemented
                 e2e: Some(crate::domain::BoolFlag(0)),
                 platform: Some(crate::domain::BoolFlag(0)),
                 verify_command: None,
+                e2e_command: None,
             })
             .unwrap();
         repository

@@ -64,6 +64,7 @@ pub fn run_doctor(config: &ResolvedConfig) -> Result<DoctorReport, DoctorError> 
         check_unapplied_changesets(config),
         check_gitignore(config),
         check_agent_adapter(config),
+        check_e2e_stage(config),
         check_pr_adapter(config),
     ];
     Ok(DoctorReport { checks })
@@ -335,6 +336,18 @@ fn check_gitignore(config: &ResolvedConfig) -> DoctorCheck {
     }
 }
 
+fn check_e2e_stage(config: &ResolvedConfig) -> DoctorCheck {
+    DoctorCheck {
+        name: "e2e stage",
+        status: CheckStatus::Pass,
+        detail: format!(
+            "independent e2e stage runs story e2e_command; timeout: {} minute(s)",
+            config.e2e_timeout_minutes
+        ),
+        next: None,
+    }
+}
+
 fn check_agent_adapter(config: &ResolvedConfig) -> DoctorCheck {
     match agent_adapter_status(config) {
         Ok(detail) => DoctorCheck {
@@ -446,6 +459,7 @@ mod tests {
             auto_poll_interval_seconds: 30,
             auto_max_attempts: 3,
             auto_allow_stale_base: false,
+            e2e_timeout_minutes: 15,
         }
     }
 

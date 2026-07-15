@@ -135,6 +135,8 @@ struct StoryAddArgs {
     contract: Option<String>,
     #[arg(long)]
     verify: Option<String>,
+    #[arg(long = "e2e-command")]
+    e2e_command: Option<String>,
     #[arg(long)]
     notes: Option<String>,
 }
@@ -157,6 +159,8 @@ struct StoryUpdateArgs {
     platform: Option<String>,
     #[arg(long)]
     verify: Option<String>,
+    #[arg(long = "e2e-command")]
+    e2e_command: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -525,6 +529,7 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                     risk_lane: RiskLane::from_str(&args.lane)?,
                     contract_doc: args.contract,
                     verify_command: args.verify,
+                    e2e_command: args.e2e_command,
                     notes: args.notes,
                 })?;
                 println!("Story {} added.", args.id);
@@ -542,6 +547,7 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                     e2e: parse_optional_bool("story update: --e2e", args.e2e)?,
                     platform: parse_optional_bool("story update: --platform", args.platform)?,
                     verify_command: args.verify,
+                    e2e_command: args.e2e_command,
                 })?;
                 println!("Story {} updated.", args.id);
             }

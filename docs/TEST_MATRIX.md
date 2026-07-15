@@ -26,7 +26,11 @@ implemented until tests or validation evidence exist.
 - Unit proof covers pure domain and application rules.
 - Integration proof covers backend enforcement, data integrity, provider
   behavior, jobs, or service contracts.
-- E2E proof covers user-visible browser flows.
+- E2E proof covers user-visible browser flows. A story may declare its exact
+  E2E command with `harness-cli story add|update --e2e-command`; Symphony then
+  executes that command independently in the run worktree as the durable `e2e`
+  stage between `agent` and `validation`, instead of trusting agent-reported
+  evidence.
 - Platform proof covers only shell, deployment, mobile, desktop, or runtime
   behavior that cannot be proven in lower layers.
 - A story can be implemented without every proof column if the story packet

@@ -492,6 +492,7 @@ fn print_config(config: &ResolvedConfig) {
         config.auto_poll_interval_seconds
     );
     println!("auto_max_attempts: {}", config.auto_max_attempts);
+    println!("e2e_timeout_minutes: {}", config.e2e_timeout_minutes);
 }
 
 fn default_web_options() -> WebServerOptions {
