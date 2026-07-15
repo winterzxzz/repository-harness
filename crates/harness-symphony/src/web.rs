@@ -2132,11 +2132,17 @@ fn run_artifact_paths(config: &ResolvedConfig, run_id: &str) -> RunArtifactPaths
     } else {
         committed_changeset_path
     };
+    let normalized_event_path = run_dir.join("RUN_EVENTS.jsonl");
+    let events = if normalized_event_path.exists() {
+        normalized_event_path
+    } else {
+        run_dir.join("APP_SERVER_EVENTS.jsonl")
+    };
     RunArtifactPaths {
         summary: run_dir.join("SUMMARY.md"),
         result: run_dir.join("RESULT.json"),
         changeset,
-        events: run_dir.join("APP_SERVER_EVENTS.jsonl"),
+        events,
     }
 }
 
@@ -2185,17 +2191,23 @@ fn failure_summary_for_run(
         let lower = message.to_lowercase();
         if lower.contains("timeout") || lower.contains("timed out") {
             (
-                "Codex app-server timeout".to_owned(),
+                "Agent timeout".to_owned(),
                 compact_sentence(&message),
                 Some(message),
-                "Inspect APP_SERVER_EVENTS.jsonl and retry when safe; older timeout runs may need manual handling.".to_owned(),
+                format!(
+                    "Inspect {} and retry when safe; older timeout runs may need manual handling.",
+                    artifact_name(&paths.events)
+                ),
             )
         } else {
             (
-                "Codex run failure".to_owned(),
+                "Agent run failure".to_owned(),
                 compact_sentence(&message),
                 Some(message),
-                "Inspect APP_SERVER_EVENTS.jsonl and retry when safe.".to_owned(),
+                format!(
+                    "Inspect {} and retry when safe.",
+                    artifact_name(&paths.events)
+                ),
             )
         }
     } else if !paths.result.exists() {
@@ -2231,8 +2243,10 @@ fn failure_summary_for_run(
             },
             compact_sentence(&message),
             Some(message),
-            "Inspect APP_SERVER_EVENTS.jsonl and handle missing or malformed event output manually."
-                .to_owned(),
+            format!(
+                "Inspect {} and handle missing or malformed event output manually.",
+                artifact_name(&paths.events)
+            ),
         )
     } else {
         (
@@ -4574,6 +4588,30 @@ exit 1
     }
 
     #[test]
+    fn failure_summary_reads_normalized_run_events_without_app_server_log() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = test_config(&temp_dir);
+        add_test_run(&config, "run_normalized_fail", "failed");
+        write_summary(&config, "run_normalized_fail");
+        let run_dir = config.runs_dir.join("run_normalized_fail");
+        fs::create_dir_all(&run_dir).unwrap();
+        fs::write(
+            run_dir.join("RUN_EVENTS.jsonl"),
+            r#"{"sequence":1,"timestamp":"2026-07-15T00:00:00Z","agent":"opencode","kind":"lifecycle","stage":"agent","message":"agent process started"}"#,
+        )
+        .unwrap();
+
+        let response = handle_request(
+            &config,
+            "GET /api/runs/run_normalized_fail/review HTTP/1.1\r\n\r\n",
+        )
+        .unwrap();
+
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
+        assert!(!response.contains("APP_SERVER_EVENTS.jsonl is missing"));
+    }
+
+    #[test]
     fn review_request_summarizes_codex_timeout_failure() {
         let temp_dir = tempfile::tempdir().unwrap();
         let config = test_config(&temp_dir);
@@ -4589,7 +4627,7 @@ exit 1
             handle_request(&config, "GET /api/runs/run_timeout/review HTTP/1.1\r\n\r\n").unwrap();
 
         assert!(response.starts_with("HTTP/1.1 200 OK"));
-        assert!(response.contains("Codex app-server timeout"));
+        assert!(response.contains("Agent timeout"));
         assert!(response.contains("turn-state query timed out while waiting for Codex"));
         assert!(response.contains("APP_SERVER_EVENTS.jsonl"));
     }
