@@ -1,6 +1,7 @@
 import type { NormalizedRunEvent, RunEvent } from "./types";
 
 export type RunAgentInfo = {
+  executor: string | null;
   adapter: string | null;
   model: string | null;
   command: string | null;
@@ -22,6 +23,11 @@ function isNormalized(event: RunEvent): event is NormalizedRunEvent {
 // lifecycle event of the agent stage; the adapter binary and its -m/--model
 // (or codex -c model=...) flag are the per-run source of truth.
 export function deriveRunAgentInfo(events: RunEvent[]): RunAgentInfo {
+  const executor =
+    events
+      .filter(isNormalized)
+      .map((event) => event.agent)
+      .find((agent) => typeof agent === "string" && agent.length > 0) ?? null;
   const started = events.find(
     (event): event is NormalizedRunEvent =>
       isNormalized(event) &&
@@ -30,7 +36,7 @@ export function deriveRunAgentInfo(events: RunEvent[]): RunAgentInfo {
       event.message.startsWith(STARTED_PREFIX)
   );
   if (!started) {
-    return { adapter: null, model: null, command: null };
+    return { executor, adapter: null, model: null, command: null };
   }
   const command = started.message.slice(STARTED_PREFIX.length).trim();
   const tokens = command.split(/\s+/).filter(Boolean);
@@ -48,5 +54,5 @@ export function deriveRunAgentInfo(events: RunEvent[]): RunAgentInfo {
       break;
     }
   }
-  return { adapter, model, command: command.length > 0 ? command : null };
+  return { executor, adapter, model, command: command.length > 0 ? command : null };
 }

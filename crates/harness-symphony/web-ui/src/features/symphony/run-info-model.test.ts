@@ -26,11 +26,17 @@ describe("deriveRunAgentInfo", () => {
 
   it("returns nulls when no start event with a command exists", () => {
     expect(deriveRunAgentInfo([event("agent process started")])).toEqual({
+      executor: "opencode",
       adapter: null,
       model: null,
       command: null
     });
-    expect(deriveRunAgentInfo([])).toEqual({ adapter: null, model: null, command: null });
+    expect(deriveRunAgentInfo([])).toEqual({ executor: null, adapter: null, model: null, command: null });
+  });
+
+  it("reports the executor name from event attribution", () => {
+    const winterEvent = { ...event("streamed line", "output"), agent: "Winter2" };
+    expect(deriveRunAgentInfo([winterEvent]).executor).toBe("Winter2");
   });
 
   it("ignores output events that merely mention the prefix", () => {

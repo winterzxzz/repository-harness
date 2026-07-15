@@ -8,6 +8,7 @@ import {
   type ConsoleBlock,
   type ConsoleCommand
 } from "./run-console-model";
+import { deriveRunAgentInfo } from "./run-info-model";
 import type { RunEvent } from "./types";
 
 export function RunConsole({
@@ -21,9 +22,11 @@ export function RunConsole({
 }) {
   const scrollRef = React.useRef<HTMLDivElement>(null);
   const [following, setFollowing] = React.useState(true);
+  const info = React.useMemo(() => deriveRunAgentInfo(events), [events]);
+  const executor = agent ?? info.executor ?? undefined;
   const transcript = React.useMemo(
-    () => buildConsoleTranscript(events, { agentName: agentLabel(agent ?? "codex") }),
-    [agent, events]
+    () => buildConsoleTranscript(events, { agentName: agentLabel(executor ?? "codex") }),
+    [executor, events]
   );
 
   const scrollToTail = React.useCallback((behavior: ScrollBehavior = "smooth") => {
@@ -54,6 +57,16 @@ export function RunConsole({
           <Terminal aria-hidden="true" className="size-4 text-primary" />
           <h3 className="text-lg font-bold tracking-tight text-foreground">Run console</h3>
           <Badge tone={live ? "info" : "neutral"}>{live ? "Live" : "Recorded"}</Badge>
+          {executor ? (
+            <Badge tone="accent" data-testid="console-agent">
+              {agentLabel(executor)}
+            </Badge>
+          ) : null}
+          {info.model ? (
+            <Badge tone="neutral" className="max-w-56 truncate font-mono" data-testid="console-model" title={info.command ?? info.model}>
+              {info.model}
+            </Badge>
+          ) : null}
         </div>
         {live && !following ? (
           <Button type="button" variant="outline" onClick={resumeFollowing} aria-label="Jump to latest output">
