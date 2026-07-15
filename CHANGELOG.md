@@ -2,6 +2,14 @@
 
 Releases are produced manually; follow `docs/RELEASE.md`.
 
+## 2026-07-15 - Manual release harness-kit-v0.2.6
+
+- Failure summaries read the run's actual event log: normalized runs
+  (opencode, custom, external) no longer report "APP_SERVER_EVENTS.jsonl is
+  missing" instead of their real failure reason; categories are now
+  adapter-neutral (Agent timeout / Agent run failure).
+- Keep the bundled Harness CLI at `harness-cli-v0.1.12`.
+
 ## 2026-07-15 - Manual release harness-kit-v0.2.5
 
 - Show the executor name and model as run console header badges during live
