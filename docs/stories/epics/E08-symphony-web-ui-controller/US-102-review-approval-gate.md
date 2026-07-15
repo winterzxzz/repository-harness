@@ -2,7 +2,7 @@
 
 ## Status
 
-planned
+implemented
 
 ## Lane
 
@@ -71,4 +71,10 @@ before the operator ever saw the review column.
 
 ## Evidence
 
-Add commands, reports, screenshots, or links after validation exists.
+- `cargo test -p harness-symphony`: 274 passed.
+- `cargo clippy -p harness-symphony -- -D warnings`: passed.
+- `cargo fmt --all -- --check`: passed.
+- `npm --prefix crates/harness-symphony/web-ui test`: 12 passed.
+- `npm --prefix crates/harness-symphony/web-ui run build`: passed.
+- `npm --prefix crates/harness-symphony/web-ui run e2e`: 47 passed.
+- `scripts/bin/harness-cli story verify US-102`: passed in the run-scoped DB.

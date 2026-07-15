@@ -1744,7 +1744,8 @@ test("artifact control is explicitly unavailable and long review values stay bou
   await expectNoHorizontalOverflow(detail, "mobile detail dialog");
 });
 
-test("pr-less completed review enables sync approval", async ({ page }) => {
+test("pr-less completed review requires approval before sync", async ({ page }) => {
+  let approved = false;
   let synced = false;
   await page.route("**/api/board", async (route) => {
     const item = boardItem("US-096", "Demo Story", "Review");
@@ -1767,10 +1768,19 @@ test("pr-less completed review enables sync approval", async ({ page }) => {
         changeset_preview: null,
         pr_url: null,
         pr_status: "not_applicable",
+        reviewed_at: null,
+        reviewer_note: null,
         artifact_paths: [],
-        suggested_next_action: "Review local run artifacts and approve sync when ready.",
+        suggested_next_action: "Approve or request changes after reviewing local run artifacts.",
         events: []
       })
+    });
+  });
+  await page.route("**/api/runs/run_no_pr/approve", async (route) => {
+    approved = true;
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ run_id: "run_no_pr", reviewed_at: 1_784_104_800 })
     });
   });
   await page.route("**/api/runs/run_no_pr/sync", async (route) => {
@@ -1785,10 +1795,17 @@ test("pr-less completed review enables sync approval", async ({ page }) => {
   await page.getByRole("button", { name: /US-096/ }).click();
   const detail = page.getByRole("dialog", { name: "Selected work detail" });
 
-  const approve = detail.getByRole("button", { name: "Approve Sync" });
+  const approve = detail.getByRole("button", { name: "Approve", exact: true });
   await expect(approve).toBeEnabled();
+  await expect(detail.getByRole("button", { name: "Sync", exact: true })).toHaveCount(0);
   await expect(detail.getByRole("button", { name: "Mark Merged" })).toBeDisabled();
   await approve.click();
+  await expect.poll(async () => approved).toBe(true);
+  expect(synced).toBe(false);
+
+  const sync = detail.getByRole("button", { name: "Sync", exact: true });
+  await expect(sync).toBeEnabled();
+  await sync.click();
   await expect.poll(async () => synced).toBe(true);
 });
 

@@ -481,6 +481,8 @@ struct ReviewResponse {
     changeset_preview: Option<String>,
     pr_url: Option<String>,
     pr_status: String,
+    reviewed_at: Option<i64>,
+    reviewer_note: Option<String>,
     artifact_paths: Vec<String>,
     events: Vec<Value>,
     suggested_next_action: String,
@@ -531,6 +533,12 @@ struct SyncRunResponse {
 }
 
 #[derive(Debug, Serialize)]
+struct ApproveRunResponse {
+    run_id: String,
+    reviewed_at: i64,
+}
+
+#[derive(Debug, Serialize)]
 struct PrMergedResponse {
     run_id: String,
     pr_status: String,
@@ -541,6 +549,7 @@ struct SyncChangeResponse {
     id: String,
     path: String,
     applied: bool,
+    blocked: bool,
     operations: usize,
 }
 
@@ -954,6 +963,10 @@ fn handle_http_request(
             let run_id = review_path_run_id(path).unwrap_or_default();
             review_response(config, &run_id)
         }
+        ("POST", path) if approve_path_run_id(path).is_some() => {
+            let run_id = approve_path_run_id(path).unwrap_or_default();
+            approve_run_response(config, &run_id)
+        }
         ("POST", path) if sync_path_run_id(path).is_some() => {
             let run_id = sync_path_run_id(path).unwrap_or_default();
             sync_run_response(config, &run_id)
@@ -990,6 +1003,7 @@ fn handle_http_request(
                 || events_path_run_id(path).is_some()
                 || cancel_path_run_id(path).is_some()
                 || review_path_run_id(path).is_some()
+                || approve_path_run_id(path).is_some()
                 || sync_path_run_id(path).is_some()
                 || pr_merged_path_run_id(path).is_some()
                 || pr_retry_path_run_id(path).is_some()
@@ -1183,6 +1197,17 @@ fn sync_run_response(config: &ResolvedConfig, run_id: &str) -> Result<HttpRespon
         }
         Err(error) => return Err(error.into()),
     };
+    if run.pr_status != "merged"
+        && local_review_without_pr(config, &run)
+        && run.reviewed_at.is_none()
+    {
+        return json_response(
+            409,
+            &ErrorResponse {
+                error: "approve the run before sync".to_owned(),
+            },
+        );
+    }
     if run.pr_status != "merged" && !local_review_without_pr(config, &run) {
         return json_response(
             409,
@@ -1210,6 +1235,43 @@ fn sync_run_response(config: &ResolvedConfig, run_id: &str) -> Result<HttpRespon
             changes,
         },
     )
+}
+
+fn approve_run_response(config: &ResolvedConfig, run_id: &str) -> Result<HttpResponse, WebError> {
+    if !safe_identifier(run_id) {
+        return json_response(
+            400,
+            &ErrorResponse {
+                error: "invalid run id".to_owned(),
+            },
+        );
+    }
+    let store = RunStateStore::new(config.state_db.clone());
+    match store.approve_run(run_id, "approved from Symphony Web UI") {
+        Ok(()) => {
+            let run = store.show_run(run_id)?;
+            json_response(
+                200,
+                &ApproveRunResponse {
+                    run_id: run.run_id,
+                    reviewed_at: run.reviewed_at.unwrap_or_default(),
+                },
+            )
+        }
+        Err(StateError::RunNotFound(_)) => json_response(
+            404,
+            &ErrorResponse {
+                error: "run not found".to_owned(),
+            },
+        ),
+        Err(StateError::InvalidApprovalTransition { .. }) => json_response(
+            409,
+            &ErrorResponse {
+                error: "only completed runs can be approved".to_owned(),
+            },
+        ),
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn cleanup_best_effort(config: &ResolvedConfig) {
@@ -1891,6 +1953,8 @@ fn review_response(config: &ResolvedConfig, run_id: &str) -> Result<HttpResponse
             changeset_preview,
             pr_url: run.pr_url,
             pr_status,
+            reviewed_at: run.reviewed_at,
+            reviewer_note: run.reviewer_note,
             artifact_paths,
             events,
             suggested_next_action,
@@ -2431,8 +2495,10 @@ fn review_next_action(
         || !has_result
     {
         "Inspect run artifacts and retry when safe.".to_owned()
+    } else if local_review_without_pr(config, run) && run.reviewed_at.is_none() {
+        "Approve or request changes after reviewing local run artifacts.".to_owned()
     } else if local_review_without_pr(config, run) {
-        "Review local run artifacts and approve sync when ready.".to_owned()
+        "Approval recorded. Sync the run when ready.".to_owned()
     } else if run.pr_url.is_none() {
         "Create or retry the pull request for this run.".to_owned()
     } else {
@@ -2502,6 +2568,12 @@ fn cancel_path_run_id(path: &str) -> Option<String> {
 fn review_path_run_id(path: &str) -> Option<String> {
     let path = path.trim_end_matches('/');
     let run_id = path.strip_prefix("/api/runs/")?.strip_suffix("/review")?;
+    safe_identifier(run_id).then(|| run_id.to_owned())
+}
+
+fn approve_path_run_id(path: &str) -> Option<String> {
+    let path = path.trim_end_matches('/');
+    let run_id = path.strip_prefix("/api/runs/")?.strip_suffix("/approve")?;
     safe_identifier(run_id).then(|| run_id.to_owned())
 }
 
@@ -2808,6 +2880,13 @@ fn binary_response(
 
 fn static_response(config: &ResolvedConfig, request_path: &str) -> Result<HttpResponse, WebError> {
     let dist_dir = web_dist_dir(config);
+    static_response_from_dist(&dist_dir, request_path)
+}
+
+fn static_response_from_dist(
+    dist_dir: &Path,
+    request_path: &str,
+) -> Result<HttpResponse, WebError> {
     if !dist_dir.exists() {
         if request_path != "/" {
             return json_response(
@@ -2825,7 +2904,7 @@ fn static_response(config: &ResolvedConfig, request_path: &str) -> Result<HttpRe
         );
     }
 
-    let asset_path = resolve_asset_path(&dist_dir, request_path)?;
+    let asset_path = resolve_asset_path(dist_dir, request_path)?;
     if !asset_path.exists() || !asset_path.is_file() {
         return json_response(
             404,
@@ -3045,7 +3124,11 @@ impl BoardItemResponse {
             .map(|summary| summary.reason.clone())
             .unwrap_or_else(|| {
                 if local_review {
-                    "review local run artifacts".to_owned()
+                    if run.as_ref().is_some_and(|run| run.reviewed_at.is_some()) {
+                        "sync approved run".to_owned()
+                    } else {
+                        "approve or request changes".to_owned()
+                    }
                 } else {
                     item.reason.clone()
                 }
@@ -3077,6 +3160,7 @@ impl From<SyncChange> for SyncChangeResponse {
             id: change.id,
             path: change.path.display().to_string(),
             applied: change.applied,
+            blocked: change.blocked,
             operations: change.operations,
         }
     }
@@ -3558,6 +3642,8 @@ mod tests {
             terminal_reason: None,
             execution_mode: "managed".to_owned(),
             harness_db_digest: None,
+            reviewed_at: None,
+            reviewer_note: None,
         }
     }
 
@@ -4919,12 +5005,12 @@ exit 1
         assert!(!run_needs_attention(&config, &run));
         assert_eq!(
             review_next_action(&config, &run, true, true),
-            "Review local run artifacts and approve sync when ready."
+            "Approve or request changes after reviewing local run artifacts."
         );
     }
 
     #[test]
-    fn sync_request_allows_completed_local_run_when_pr_creation_is_disabled() {
+    fn completed_local_run_requires_approval_before_sync() {
         let temp_dir = tempfile::tempdir().unwrap();
         let mut config = test_config(&temp_dir);
         config.pull_request_create = "disabled".to_owned();
@@ -4962,6 +5048,27 @@ exit 1
             })
             .unwrap();
 
+        let blocked = handle_request(
+            &config,
+            "POST /api/runs/run_local_sync/sync HTTP/1.1\r\n\r\n",
+        )
+        .unwrap();
+
+        assert!(blocked.starts_with("HTTP/1.1 409 Conflict"));
+        assert!(blocked.contains("approve the run before sync"));
+
+        let approved = handle_request(
+            &config,
+            "POST /api/runs/run_local_sync/approve HTTP/1.1\r\n\r\n",
+        )
+        .unwrap();
+        assert!(approved.starts_with("HTTP/1.1 200 OK"));
+        assert!(store
+            .show_run("run_local_sync")
+            .unwrap()
+            .reviewed_at
+            .is_some());
+
         let response = handle_request(
             &config,
             "POST /api/runs/run_local_sync/sync HTTP/1.1\r\n\r\n",
@@ -4970,6 +5077,35 @@ exit 1
 
         assert!(response.starts_with("HTTP/1.1 200 OK"));
         assert!(response.contains(r#""id":"run_local_sync""#));
+    }
+
+    #[test]
+    fn approve_endpoint_rejects_non_completed_run() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = test_config(&temp_dir);
+        let store = RunStateStore::new(config.state_db.clone());
+        store
+            .add_run(crate::state::NewRunRecord {
+                run_id: "run_early_approval".to_owned(),
+                story_id: "US-EARLY".to_owned(),
+                branch: Some("symphony/run_early_approval".to_owned()),
+                worktree: temp_dir.path().join("worktree"),
+                lightweight: false,
+                status: "running".to_owned(),
+                result_path: None,
+                sync_status: "not_applied".to_owned(),
+                next_action: "wait for agent".to_owned(),
+            })
+            .unwrap();
+
+        let response = handle_request(
+            &config,
+            "POST /api/runs/run_early_approval/approve HTTP/1.1\r\n\r\n",
+        )
+        .unwrap();
+
+        assert!(response.starts_with("HTTP/1.1 409 Conflict"));
+        assert!(response.contains("only completed runs can be approved"));
     }
 
     #[test]
@@ -5042,7 +5178,7 @@ exit 1
         assert!(response.starts_with("HTTP/1.1 200 OK"));
         assert!(response.contains(r#""id":"US-LOCAL-BOARD""#));
         assert!(response.contains(r#""board_state":"Review""#));
-        assert!(response.contains("review local run artifacts"));
+        assert!(response.contains("approve or request changes"));
         assert!(response.contains(r#""current_step":"review""#));
         assert!(response.contains(r#""id":"review","state":"current""#));
         assert!(!response.contains(r#""id":"pr""#));
@@ -5081,7 +5217,9 @@ exit 1
         assert!(response.contains(r#""pr_status":"not_applicable""#));
         assert!(response.contains(r#""failure_summary":null"#));
         assert!(response.contains(r#""recovery_action":null"#));
-        assert!(response.contains("Review local run artifacts and approve sync when ready."));
+        assert!(
+            response.contains("Approve or request changes after reviewing local run artifacts.")
+        );
         assert!(!response.contains("Retry PR creation"));
     }
 
@@ -5500,9 +5638,8 @@ exit 1
     #[test]
     fn root_reports_missing_built_assets() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let config = test_config(&temp_dir);
 
-        let response = handle_request(&config, "GET / HTTP/1.1\r\n\r\n").unwrap();
+        let response = static_response_from_dist(&temp_dir.path().join("missing"), "/").unwrap();
 
         assert!(response.starts_with("HTTP/1.1 503 Service Unavailable"));
         assert!(response.contains("web UI assets are not built"));

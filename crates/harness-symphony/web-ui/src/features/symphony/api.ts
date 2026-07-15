@@ -1,5 +1,6 @@
 import type {
   AgentId,
+  ApproveResponse,
   BoardItem,
   BoardResponse,
   BoardState,
@@ -128,6 +129,11 @@ export async function postRecoverTask(action: RecoveryAction): Promise<void> {
 export async function postSyncRun(runId: string): Promise<SyncResponse> {
   const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/sync`, { method: "POST" });
   return readJson(response, parseSyncResponse, "Sync failed");
+}
+
+export async function postApproveRun(runId: string): Promise<ApproveResponse> {
+  const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/approve`, { method: "POST" });
+  return readJson(response, parseApproveResponse, "Approval failed");
 }
 
 export async function postMarkPrMerged(runId: string): Promise<PrMergedResponse> {
@@ -312,6 +318,8 @@ function parseReviewResponse(value: unknown): ReviewResponse {
     changeset_preview: parseNullableString(record.changeset_preview, "changeset_preview"),
     pr_url: parseNullableString(record.pr_url, "pr_url"),
     pr_status: expectString(record.pr_status, "pr_status"),
+    reviewed_at: typeof record.reviewed_at === "number" ? record.reviewed_at : null,
+    reviewer_note: parseNullableString(record.reviewer_note, "reviewer_note"),
     artifact_paths: parseStringArray(record.artifact_paths, "artifact_paths"),
     events: expectArray(record.events, "events"),
     suggested_next_action: expectString(record.suggested_next_action, "suggested_next_action"),
@@ -400,6 +408,12 @@ function parseToolItem(value: unknown): ToolItem {
 function parseSyncResponse(value: unknown): SyncResponse {
   const record = expectRecord(value, "sync response");
   return { run_id: expectString(record.run_id, "run_id"), applied: Boolean(record.applied) };
+}
+
+function parseApproveResponse(value: unknown): ApproveResponse {
+  const record = expectRecord(value, "approve response");
+  if (typeof record.reviewed_at !== "number") throw new Error("reviewed_at must be a number");
+  return { run_id: expectString(record.run_id, "run_id"), reviewed_at: record.reviewed_at };
 }
 
 function parsePrMergedResponse(value: unknown): PrMergedResponse {

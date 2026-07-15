@@ -107,6 +107,8 @@ export type ReviewResponse = {
   changeset_preview: string | null;
   pr_url: string | null;
   pr_status: string;
+  reviewed_at: number | null;
+  reviewer_note: string | null;
   artifact_paths: string[];
   events: RunEvent[];
   suggested_next_action: string;
@@ -170,6 +172,11 @@ export type ToolsResponse = {
 export type SyncResponse = {
   run_id: string;
   applied: boolean;
+};
+
+export type ApproveResponse = {
+  run_id: string;
+  reviewed_at: number;
 };
 
 export type PrMergedResponse = {

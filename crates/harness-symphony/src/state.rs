@@ -14,6 +14,8 @@ pub enum StateError {
     RunNotFound(String),
     #[error("run {id} cannot perform external lifecycle transition from {status}")]
     InvalidExternalTransition { id: String, status: String },
+    #[error("run {id} cannot be approved from {status}; only completed runs can be approved")]
+    InvalidApprovalTransition { id: String, status: String },
     #[error("auto queue ownership lost for story {0}")]
     QueueOwnershipLost(String),
     #[error("run {id} cannot be replaced because status is {status}; only completed runs can request changes")]
@@ -55,6 +57,8 @@ pub struct RunRecord {
     pub terminal_reason: Option<String>,
     pub execution_mode: String,
     pub harness_db_digest: Option<String>,
+    pub reviewed_at: Option<i64>,
+    pub reviewer_note: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -243,6 +247,14 @@ impl RunStateStore {
             (
                 "harness_db_digest",
                 "ALTER TABLE run_state ADD COLUMN harness_db_digest TEXT;",
+            ),
+            (
+                "reviewed_at",
+                "ALTER TABLE run_state ADD COLUMN reviewed_at INTEGER;",
+            ),
+            (
+                "reviewer_note",
+                "ALTER TABLE run_state ADD COLUMN reviewer_note TEXT;",
             ),
         ] {
             ensure_column(&connection, "run_state", name, sql)?;
@@ -543,6 +555,38 @@ impl RunStateStore {
         Ok(())
     }
 
+    pub fn approve_run(&self, run_id: &str, reviewer_note: &str) -> Result<(), StateError> {
+        self.init()?;
+        let mut connection = Connection::open(&self.path)?;
+        let transaction =
+            connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let (status, reviewed_at) = transaction
+            .query_row(
+                "SELECT status, reviewed_at FROM run_state WHERE run_id=?1",
+                params![run_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?)),
+            )
+            .optional()?
+            .ok_or_else(|| StateError::RunNotFound(run_id.to_owned()))?;
+        if status != "completed" {
+            return Err(StateError::InvalidApprovalTransition {
+                id: run_id.to_owned(),
+                status,
+            });
+        }
+        if reviewed_at.is_none() {
+            transaction.execute(
+                "UPDATE run_state
+                 SET reviewed_at=?2, reviewer_note=?3,
+                     next_action='sync approved run', updated_at=datetime('now')
+                 WHERE run_id=?1 AND status='completed' AND reviewed_at IS NULL",
+                params![run_id, unix_timestamp(), reviewer_note.trim()],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub fn request_cancel(&self, run_id: &str) -> Result<(), StateError> {
         self.init()?;
         let connection = Connection::open(&self.path)?;
@@ -584,7 +628,7 @@ impl RunStateStore {
             "SELECT run_id, story_id, branch, worktree, lightweight, status, result_path,
                     pr_url, pr_status, sync_status, next_action, agent, owner_pid, agent_pid,
                     agent_start_identity, heartbeat_at, current_stage, cancel_requested, terminal_reason,
-                    execution_mode, harness_db_digest
+                    execution_mode, harness_db_digest, reviewed_at, reviewer_note
              FROM run_state
              ORDER BY created_at DESC, run_id DESC;",
         )?;
@@ -623,7 +667,7 @@ impl RunStateStore {
                 "SELECT run_id, story_id, branch, worktree, lightweight, status, result_path,
                         pr_url, pr_status, sync_status, next_action, agent, owner_pid, agent_pid,
                         agent_start_identity, heartbeat_at, current_stage, cancel_requested, terminal_reason,
-                        execution_mode, harness_db_digest
+                        execution_mode, harness_db_digest, reviewed_at, reviewer_note
                  FROM run_state
                  WHERE run_id=?1;",
                 params![run_id],
@@ -641,7 +685,7 @@ impl RunStateStore {
                 "SELECT run_id, story_id, branch, worktree, lightweight, status, result_path,
                         pr_url, pr_status, sync_status, next_action, agent, owner_pid, agent_pid,
                         agent_start_identity, heartbeat_at, current_stage, cancel_requested, terminal_reason,
-                        execution_mode, harness_db_digest
+                        execution_mode, harness_db_digest, reviewed_at, reviewer_note
                  FROM run_state
                  WHERE status IN ('prepared', 'running')
                  ORDER BY created_at ASC
@@ -1242,6 +1286,8 @@ fn run_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunRecord> {
         terminal_reason: row.get(18)?,
         execution_mode: row.get(19)?,
         harness_db_digest: row.get(20)?,
+        reviewed_at: row.get(21)?,
+        reviewer_note: row.get(22)?,
     })
 }
 
@@ -1778,6 +1824,100 @@ mod tests {
             store.get_setting("default_agent").unwrap(),
             Some("codex".to_owned())
         );
+    }
+
+    #[test]
+    fn approval_migration_preserves_existing_runs() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("state.db");
+        let store = RunStateStore::new(path.clone());
+        store
+            .add_run(new_record("run_existing", "completed"))
+            .unwrap();
+
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "ALTER TABLE run_state DROP COLUMN reviewed_at;
+                 ALTER TABLE run_state DROP COLUMN reviewer_note;",
+            )
+            .unwrap();
+        drop(connection);
+
+        store.init().unwrap();
+
+        let run = store.show_run("run_existing").unwrap();
+        assert_eq!(run.reviewed_at, None);
+        assert_eq!(run.reviewer_note, None);
+    }
+
+    #[test]
+    fn completed_run_approval_is_idempotent_and_records_note() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = RunStateStore::new(temp_dir.path().join("state.db"));
+        store
+            .add_run(new_record("run_review", "completed"))
+            .unwrap();
+
+        store.approve_run("run_review", "reviewed in CLI").unwrap();
+        let first = store.show_run("run_review").unwrap();
+        store
+            .approve_run("run_review", "ignored second note")
+            .unwrap();
+        let second = store.show_run("run_review").unwrap();
+
+        assert!(first.reviewed_at.is_some());
+        assert_eq!(first.reviewer_note.as_deref(), Some("reviewed in CLI"));
+        assert_eq!(second.reviewed_at, first.reviewed_at);
+        assert_eq!(second.reviewer_note, first.reviewer_note);
+    }
+
+    #[test]
+    fn approval_rejects_non_completed_run() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = RunStateStore::new(temp_dir.path().join("state.db"));
+        store.add_run(new_record("run_running", "running")).unwrap();
+
+        assert!(matches!(
+            store.approve_run("run_running", "too soon"),
+            Err(StateError::InvalidApprovalTransition { id, status })
+                if id == "run_running" && status == "running"
+        ));
+    }
+
+    #[test]
+    fn approval_and_request_changes_race_preserves_rejection() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("state.db");
+        let store = RunStateStore::new(path.clone());
+        store
+            .add_run(new_record("run_review", "completed"))
+            .unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+
+        let approve_barrier = barrier.clone();
+        let approve_path = path.clone();
+        let approve = std::thread::spawn(move || {
+            approve_barrier.wait();
+            RunStateStore::new(approve_path).approve_run("run_review", "approved")
+        });
+        let replace_barrier = barrier.clone();
+        let replace = std::thread::spawn(move || {
+            replace_barrier.wait();
+            RunStateStore::new(path).replace_run(
+                "run_review",
+                "needs revision",
+                new_record("run_replacement", "prepared"),
+            )
+        });
+
+        barrier.wait();
+        let _ = approve.join().unwrap();
+        replace.join().unwrap().unwrap();
+        let source = store.show_run("run_review").unwrap();
+
+        assert_eq!(source.status, "rejected");
+        assert_eq!(source.next_action, "changes requested: needs revision");
     }
 
     #[test]
