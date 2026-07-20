@@ -49,6 +49,9 @@ HARNESS_CLI="$cli" HARNESS_CORE_STATE_ROOT="$state" HARNESS_DB_PATH="$temp/mater
 [[ $(sqlite3 "$temp/materialized.db" "SELECT count(*) FROM story WHERE id='CORE-BASE';") == 1 ]]
 [[ $(sqlite3 "$temp/materialized.db" "SELECT count(*) FROM story WHERE id='CORE-LATER';") == 1 ]]
 [[ $(sqlite3 "$temp/materialized.db" "SELECT count(*) FROM changeset_applied WHERE id='run_fixture_later';") == 1 ]]
+[[ $(sqlite3 "$temp/materialized.db" "SELECT path FROM changeset_applied WHERE id='run_fixture_later';") == \
+  '.harness/changesets/later.changeset.jsonl' ]]
+! sqlite3 "$temp/materialized.db" .dump | grep -Fq "$state"
 
 cp "$state/.harness/core-state/harness.db" "$temp/tampered.db"
 printf x >>"$temp/tampered.db"
@@ -76,6 +79,7 @@ grep -Fq 'included changeset identity changed' "$temp/changed.out"
 grep -Fq 'Get-FileHash' "$root/scripts/materialize-core-state.ps1"
 grep -Fq 'source_logical_sha256' "$root/scripts/materialize-core-state.ps1"
 grep -Fq 'compacted changeset id or bytes changed' "$root/scripts/materialize-core-state.ps1"
+grep -Fq 'db changeset apply $relative' "$root/scripts/materialize-core-state.ps1"
 grep -Fq 'Move-Item' "$root/scripts/materialize-core-state.ps1"
 
 echo "verified snapshot materialization, later replay, tamper refusal, and PowerShell contract passed"

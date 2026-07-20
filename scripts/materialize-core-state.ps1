@@ -64,17 +64,22 @@ try {
 
     if (Test-Path $Changesets) {
         foreach ($file in Get-ChildItem -LiteralPath $Changesets -Filter "*.changeset.jsonl" | Sort-Object FullName) {
+            $relative = [System.IO.Path]::GetRelativePath($StateRoot, $file.FullName).Replace('\', '/')
             $status = (& $Cli db changeset status $file.FullName --json | ConvertFrom-Json).result
             if ($LASTEXITCODE -ne 0) { throw "Core-state materialization failed: invalid changeset: $($file.FullName)" }
             if ($includedById.ContainsKey($status.id)) {
                 $entry = $includedById[$status.id]
-                $relative = [System.IO.Path]::GetRelativePath($StateRoot, $file.FullName).Replace('\', '/')
                 if ($entry.path -ne $relative -or $entry.content_sha256 -ne $status.content_sha256) {
                     throw "Core-state materialization failed: compacted changeset id or bytes changed: $relative"
                 }
             } else {
-                & $Cli db changeset apply $file.FullName --json | Out-Null
-                if ($LASTEXITCODE -ne 0) { throw "Core-state materialization failed: changeset replay failed: $($file.FullName)" }
+                Push-Location $StateRoot
+                try {
+                    & $Cli db changeset apply $relative --json | Out-Null
+                    if ($LASTEXITCODE -ne 0) { throw "Core-state materialization failed: changeset replay failed: $relative" }
+                } finally {
+                    Pop-Location
+                }
             }
         }
     }

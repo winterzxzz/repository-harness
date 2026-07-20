@@ -97,9 +97,11 @@ if [[ -d "$changesets" ]]; then
     case "$included" in
       yes) ;;
       no)
-        HARNESS_REPO_ROOT="$root" HARNESS_DB_PATH="$candidate" \
-          "$cli" db changeset apply "$changeset" --json >/dev/null ||
-          fail "changeset replay failed: $relative"
+        (
+          cd "$state_root"
+          HARNESS_REPO_ROOT="$root" HARNESS_DB_PATH="$candidate" \
+            "$cli" db changeset apply "$relative" --json >/dev/null
+        ) || fail "changeset replay failed: $relative"
         ;;
       *) fail "compacted changeset id or bytes changed: $relative" ;;
     esac

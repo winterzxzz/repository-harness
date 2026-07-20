@@ -15,7 +15,8 @@ git diff --check
 - `tests/bootstrap/test-fresh-source-checkout.sh` copies the working source
   without `.git`, `target`, the writable database, or a prebuilt CLI; bootstrap
   builds the CLI and reconstructs the completed `US-119` solely from the tracked
-  snapshot and JSONL.
+  snapshot and JSONL. Post-baseline replay records repository-relative
+  changeset paths so later compaction cannot capture a machine checkout path.
 - `.github/workflows/premerge.yml` asserts the writable database is absent and
   bootstraps tracked state before Linux and Windows validation;
   `tests/ci/test-core-state-rebuild-gate.sh` locks in that ordering and proves
