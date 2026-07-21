@@ -20,7 +20,8 @@ grep -Fq 'Harness profile: core' "$temp/install.out"
 # legacy evaluation surface may appear in an ordinary repository.
 for path in \
   docs/contracts \
-  scripts/bin \
+  scripts/bin/harness-cli \
+  scripts/bin/harness-cli.exe \
   scripts/schema \
   scripts/bootstrap-harness.sh \
   docs/TRACE_SPEC.md \
@@ -34,6 +35,11 @@ for path in \
     exit 1
   }
 done
+
+[[ -x "$installed/scripts/bin/harness" ]] || {
+  echo 'Phase 5 core is missing the Harness maintenance CLI' >&2
+  exit 1
+}
 
 if find "$installed" -type f -print | \
   rg -i '/[^/]*(symphony|orchestrat|evaluation|benchmark|trace-score)[^/]*$' \

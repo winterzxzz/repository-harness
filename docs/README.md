@@ -15,7 +15,8 @@ upstream-maintenance material only when the task explicitly needs it.
 
 These files are generic Harness structure. They do not select an application
 stack, replace a consumer README or architecture, fabricate validation
-commands, or require a CLI/database lifecycle.
+commands, or require the optional SQLite control-plane lifecycle. The installed
+`harness` binary only maintains this core structure.
 
 ## Consumer-Owned Truth
 

@@ -12,7 +12,8 @@ full="$temp/full"
 platform=fixture-platform
 mkdir -p "$assets"
 
-# Both platform installers consume the same two profile declarations.
+# The compatibility installers retain both declarations; the Rust core embeds
+# and is checked against the core declaration below.
 [[ "$(grep -Fc 'PAYLOAD_MANIFEST="scripts/harness-install-files.txt"' "$root/scripts/install-harness.sh")" == 1 ]]
 [[ "$(grep -Fc 'CLI_PAYLOAD_MANIFEST="scripts/harness-cli-install-files.txt"' "$root/scripts/install-harness.sh")" == 1 ]]
 [[ "$(grep -Fc '$script:PayloadManifest = "scripts/harness-install-files.txt"' "$root/scripts/install-harness.ps1")" == 1 ]]
@@ -62,20 +63,26 @@ def entries(path):
     }
 
 core_expected = entries(core_manifest)
+core_runtime = {
+    ".gitignore",
+    ".harness-core/lock",
+    ".harness-core/manifest.json",
+    "scripts/bin/harness",
+} | {f".harness-core/base/{path}" for path in core_expected}
 core_actual = {
     str(path.relative_to(core))
     for path in core.rglob("*")
     if path.is_file()
 }
-if core_actual != core_expected:
+if core_actual != core_expected | core_runtime:
     raise SystemExit(
-        f"core payload mismatch: missing={sorted(core_expected-core_actual)} "
-        f"extra={sorted(core_actual-core_expected)}"
+        f"core payload mismatch: missing={sorted((core_expected | core_runtime)-core_actual)} "
+        f"extra={sorted(core_actual-(core_expected | core_runtime))}"
     )
 
-full_required = core_expected | entries(cli_manifest) | {
+full_required = core_expected | core_runtime | entries(cli_manifest) | {
     f"scripts/schema/{path.name}" for path in schema_root.glob("*.sql")
-} | {".gitignore", "scripts/bin/harness-cli"}
+} | {"scripts/bin/harness-cli"}
 full_actual = {
     str(path.relative_to(full))
     for path in full.rglob("*")

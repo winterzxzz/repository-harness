@@ -38,10 +38,13 @@ tests/protocol/smoke-native-artifact.sh target/debug/harness-cli
 tests/installer/test-install-harness-modes.sh
 tests/installer/assert-consumer-changeset-trackable.sh
 tests/maintenance/test-harness-cli-release-classification.sh
+tests/maintenance/test-harness-release-classification.sh
 tests/maintenance/test-render-changelog-files.sh
 tests/docs/test-doc-contracts.sh
 tests/workflow/test-repository-workflow.sh
 tests/workflow/test-task-authority.sh
+tests/release/test-harness-release-workflow-contract.sh
+tests/release/test-harness-release-identity-guard.sh
 tests/release/test-post-merge-release-recovery.sh
 
 git diff --check

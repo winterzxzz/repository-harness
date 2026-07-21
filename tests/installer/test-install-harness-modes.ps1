@@ -17,6 +17,9 @@ $CandidateHash = (Get-FileHash -Algorithm SHA256 $CandidateArtifact).Hash.ToLowe
 "$CandidateHash  $AssetName" | Set-Content -Encoding ascii (Join-Path $Assets "$AssetName.sha256")
 $env:HARNESS_CLI_BASE_URL = ([uri](Resolve-Path $Assets).Path).AbsoluteUri.TrimEnd("/")
 $env:HARNESS_CLI_PLATFORM = "windows-x64"
+& cargo build --quiet --manifest-path (Join-Path $Root "Cargo.toml") -p harness --locked
+if (!$?) { throw "failed to build the core maintenance CLI" }
+$env:HARNESS_CORE_BINARY = Join-Path $Root "target/debug/harness.exe"
 
 function Invoke-Install([string]$Directory, [string[]]$Mode = @()) {
     $Arguments = @{ Directory = $Directory; Yes = $true }
@@ -29,13 +32,17 @@ try {
     $Fresh = Join-Path $Temp "fresh"
     Invoke-Install $Fresh
     if (Test-Path (Join-Path $Fresh "scripts/bin/harness-cli.exe")) { throw "default core installed CLI" }
+    if (!(Test-Path (Join-Path $Fresh "scripts/bin/harness.exe"))) { throw "default core maintenance CLI missing" }
     if (Test-Path (Join-Path $Fresh "scripts/schema")) { throw "default core installed schemas" }
-    if (Test-Path (Join-Path $Fresh ".gitignore")) { throw "default core wrote CLI ignore rules" }
+    if (!(Get-Content -Raw (Join-Path $Fresh ".gitignore")).Contains("scripts/bin/harness.exe")) { throw "default core binary ignore rule missing" }
+    if ((Get-Content -Raw (Join-Path $Fresh ".gitignore")).Contains("harness.db")) { throw "default core wrote control-plane ignore rules" }
     if (Test-Path (Join-Path $Fresh "harness.db")) { throw "fresh install initialized local DB" }
+    if (!(Test-Path (Join-Path $Fresh ".harness-core/manifest.json"))) { throw "fresh core provenance missing" }
     if (!(Test-Path (Join-Path $Fresh "docs/WORKFLOW.md"))) { throw "fresh workflow missing" }
     if (!(Test-Path (Join-Path $Fresh "docs/plans/active/README.md"))) { throw "fresh active-plan path missing" }
     if (!(Test-Path (Join-Path $Fresh "docs/templates/exec-plan.md"))) { throw "fresh execution-plan template missing" }
-    if (!(Get-Content -Raw (Join-Path $Fresh "AGENTS.md")).Contains("No Harness CLI operation is required.")) { throw "fresh default still requires control-plane commands" }
+    if (!(Get-Content -Raw (Join-Path $Fresh "AGENTS.md")).Contains("No control-plane operation is required.")) { throw "fresh default still requires control-plane commands" }
+    if ((Get-Content -Raw (Join-Path $Fresh "AGENTS.md")).Contains("Current Upstream Goal")) { throw "fresh default contains upstream repository goal" }
 
     $Full = Join-Path $Temp "full"
     Invoke-Install $Full @("WithCli")
@@ -60,7 +67,8 @@ try {
     if (Test-Path (Join-Path $Merge "docs/ARCHITECTURE.md")) { throw "core merge installed upstream architecture" }
     if ((Get-Content -Raw (Join-Path $Merge "scripts/bin/harness-cli.exe")).Trim() -ne "existing cli") { throw "core merge changed existing CLI" }
     if ((Get-Content -Raw (Join-Path $Merge "harness.db")).Trim() -ne "existing database") { throw "core merge changed existing database" }
-    if (Test-Path (Join-Path $Merge ".gitignore")) { throw "core merge wrote CLI ignore rules" }
+    if (!(Get-Content -Raw (Join-Path $Merge ".gitignore")).Contains("scripts/bin/harness.exe")) { throw "core merge binary ignore rule missing" }
+    if ((Get-Content -Raw (Join-Path $Merge ".gitignore")).Contains("harness.db")) { throw "core merge wrote control-plane ignore rules" }
 
     $Override = Join-Path $Temp "override"
     New-Item -ItemType Directory -Force (Join-Path $Override "docs"), (Join-Path $Override "scripts") | Out-Null
@@ -78,7 +86,7 @@ try {
     "local rule`n`n<!-- HARNESS:BEGIN -->`nstale`n<!-- HARNESS:END -->" | Set-Content (Join-Path $Shim "AGENTS.md")
     Invoke-Install $Shim @("Merge", "RefreshAgentShim")
     $ShimText = Get-Content -Raw (Join-Path $Shim "AGENTS.md")
-    if (!$ShimText.Contains("local rule") -or !$ShimText.Contains("No Harness CLI operation is required.") -or $ShimText.Contains("stale")) { throw "shim refresh failed" }
+    if (!$ShimText.Contains("local rule") -or !$ShimText.Contains("No control-plane operation is required.") -or $ShimText.Contains("stale")) { throw "shim refresh failed" }
 
     $Dry = Join-Path $Temp "dry"
     & $Installer -Directory $Dry -Yes -DryRun | Out-Null
@@ -104,9 +112,11 @@ try {
         $env:HARNESS_CLI_BASE_URL = $GoodBaseUrl
     }
     if (!(Test-Path (Join-Path $Failed "AGENTS.md"))) { throw "failed CLI removed usable core" }
+    if (!(Test-Path (Join-Path $Failed "scripts/bin/harness.exe"))) { throw "failed optional CLI removed core maintenance CLI" }
     if (Test-Path (Join-Path $Failed "docs/FEATURE_INTAKE.md")) { throw "failed CLI left compatibility docs" }
     if (Test-Path (Join-Path $Failed "scripts/bootstrap-harness.ps1")) { throw "failed CLI left bootstrap" }
-    if (Test-Path (Join-Path $Failed ".gitignore")) { throw "failed CLI left ignore rules" }
+    if (!(Get-Content -Raw (Join-Path $Failed ".gitignore")).Contains("scripts/bin/harness.exe")) { throw "failed optional CLI removed core binary ignore rule" }
+    if ((Get-Content -Raw (Join-Path $Failed ".gitignore")).Contains("harness.db")) { throw "failed CLI left control-plane ignore rules" }
 
     if ($InitialArtifact) {
         $InitialArtifact = (Resolve-Path $InitialArtifact).Path
@@ -122,7 +132,7 @@ try {
         if ((Get-FileHash -Algorithm SHA256 (Join-Path $Upgrade "scripts/bin/harness-cli.exe")).Hash.ToLowerInvariant() -ne $CandidateHash) { throw "candidate upgrade hash differs" }
         if ((Get-Content -Raw (Join-Path $Upgrade "KEEP.txt")).Trim() -ne "consumer-owned") { throw "upgrade changed consumer file" }
         $UpgradeAgents = Get-Content -Raw (Join-Path $Upgrade "AGENTS.md")
-        if (!$UpgradeAgents.Contains("local rule") -or $UpgradeAgents.Contains("stale authority") -or !$UpgradeAgents.Contains("No Harness CLI operation is required.")) { throw "upgrade did not refresh marked AGENTS authority" }
+        if (!$UpgradeAgents.Contains("local rule") -or $UpgradeAgents.Contains("stale authority") -or !$UpgradeAgents.Contains("No control-plane operation is required.")) { throw "upgrade did not refresh marked AGENTS authority" }
         if (!(Get-ChildItem (Join-Path $Upgrade ".harness-backup") -Recurse -Filter "AGENTS.md" -File | Select-Object -First 1)) { throw "upgrade AGENTS backup missing" }
         & (Join-Path $Upgrade "scripts/bin/harness-cli.exe") --version | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "upgraded candidate does not execute" }
@@ -140,6 +150,7 @@ try {
 finally {
     Remove-Item Env:HARNESS_CLI_BASE_URL -ErrorAction SilentlyContinue
     Remove-Item Env:HARNESS_CLI_PLATFORM -ErrorAction SilentlyContinue
+    Remove-Item Env:HARNESS_CORE_BINARY -ErrorAction SilentlyContinue
     Remove-Item Env:HARNESS_SOURCE_BASE_URL -ErrorAction SilentlyContinue
     Remove-Item -Recurse -Force $Temp -ErrorAction SilentlyContinue
 }

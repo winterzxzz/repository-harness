@@ -28,6 +28,9 @@ instead of creating permanent plan documents.
 - `phase-5-optional-consumer-split.md`: made Symphony the explicit owner of
   orchestration policy and runtime evidence, kept generic atomic primitives in
   compatibility, and proved the core installs neither optional consumer.
+- `rust-harness-core-maintenance-cli.md`: introduced the independent Rust
+  `harness` binary for recoverable core installation, provenance, three-way
+  updates, diagnostics, and immutable cross-platform release bootstrap.
 
 The Phase 3 entries are completed evidence checkpoints, not a claim that the
 full application runtime/interface loop is complete. Decision 0021 keeps the

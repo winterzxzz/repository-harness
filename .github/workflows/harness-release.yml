@@ -1,0 +1,171 @@
+name: Harness Core Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "New Harness core release tag"
+        required: true
+        type: string
+      checkout_ref:
+        description: "Exact main commit or ref to prove"
+        required: true
+        default: main
+        type: string
+  workflow_call:
+    inputs:
+      release_tag:
+        required: true
+        type: string
+      checkout_ref:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-24.04
+    outputs:
+      source_sha: ${{ steps.source.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.checkout_ref }}
+          fetch-depth: 0
+      - id: source
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Verify unpublished candidate identity
+        run: scripts/verify-harness-release-identity.sh pretag "${{ inputs.release_tag }}" "$(git rev-parse HEAD)" "${{ github.run_id }}"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install validation dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes jq ripgrep sqlite3
+      - name: Run repository contract
+        run: scripts/validate-premerge.sh
+
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: verify
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-arm64
+            target: aarch64-apple-darwin
+            runner: macos-15
+            binary: harness-macos-arm64
+          - platform: macos-x64
+            target: x86_64-apple-darwin
+            runner: macos-15-intel
+            binary: harness-macos-x64
+          - platform: linux-x64
+            target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+            binary: harness-linux-x64
+          - platform: linux-arm64
+            target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            binary: harness-linux-arm64
+          - platform: windows-x64
+            target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            binary: harness-windows-x64.exe
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verify.outputs.source_sha }}
+          fetch-depth: 0
+      - name: Verify unpublished candidate identity
+        shell: bash
+        run: scripts/verify-harness-release-identity.sh pretag "${{ inputs.release_tag }}" "${{ needs.verify.outputs.source_sha }}" "${{ github.run_id }}"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Build release artifact
+        shell: bash
+        run: scripts/build-harness-release.sh --target "${{ matrix.target }}"
+      - name: Verify checksum
+        shell: bash
+        run: |
+          cd dist
+          if command -v shasum >/dev/null 2>&1; then
+            shasum -a 256 -c "${{ matrix.binary }}.sha256"
+          else
+            sha256sum -c "${{ matrix.binary }}.sha256"
+          fi
+      - name: Smoke core lifecycle
+        if: ${{ matrix.platform != 'windows-x64' }}
+        shell: bash
+        run: |
+          root=$(mktemp -d)
+          dist/${{ matrix.binary }} install --directory "$root"
+          dist/${{ matrix.binary }} status --directory "$root"
+          dist/${{ matrix.binary }} doctor --directory "$root"
+      - name: Smoke core lifecycle on Windows
+        if: ${{ matrix.platform == 'windows-x64' }}
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP ("harness-smoke-" + [guid]::NewGuid())
+          dist/${{ matrix.binary }} install --directory $root
+          dist/${{ matrix.binary }} status --directory $root
+          dist/${{ matrix.binary }} doctor --directory $root
+      - uses: actions/upload-artifact@v4
+        with:
+          name: harness-${{ matrix.platform }}
+          path: |
+            dist/${{ matrix.binary }}
+            dist/${{ matrix.binary }}.sha256
+          if-no-files-found: error
+
+  publish:
+    name: Promote tag and publish GitHub Release
+    needs: [verify, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
+      PROOF_RUN: ${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verify.outputs.source_sha }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: harness-*
+          merge-multiple: true
+          path: dist
+      - name: Reverify every checksum
+        shell: bash
+        run: |
+          cd dist
+          for checksum in *.sha256; do
+            if command -v shasum >/dev/null 2>&1; then shasum -a 256 -c "$checksum"; else sha256sum -c "$checksum"; fi
+          done
+      - name: Configure Git author
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - name: Promote proven source to immutable tag
+        run: scripts/promote-harness-release-tag.sh "$RELEASE_TAG" "$SOURCE_SHA" "$PROOF_RUN"
+      - name: Publish immutable GitHub Release
+        run: |
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release already exists and will not be mutated: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" dist/harness-* \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --title "$RELEASE_TAG" \
+            --notes "Harness core $RELEASE_TAG from $SOURCE_SHA; proof run $PROOF_RUN."
+          test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | length')" -eq 10

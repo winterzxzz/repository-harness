@@ -99,10 +99,24 @@ Use `--merge` / `-Merge` to add missing Harness files without replacing
 existing project files. Use `--override` / `-Override` only when replacement is
 intentional. Use `--dry-run` / `-DryRun` to preview writes.
 
-The default installation is the small repository-centered core. It does not
-download a CLI, discover schemas, install bootstrap scripts, or add database
-ignore rules. It also does not copy this upstream repository's README or
-architecture over consumer-owned product truth.
+The default installation downloads a checksum-verified Rust binary named
+`harness`, then uses it to install the small repository-centered core. It does
+not install the optional SQLite compatibility CLI, discover schemas, install
+database bootstrap scripts, or add database ignore rules. It also does not copy
+this upstream repository's README or architecture over consumer-owned truth.
+
+After installation, preview and apply future core upgrades with:
+
+```bash
+scripts/bin/harness update --dry-run
+scripts/bin/harness update
+scripts/bin/harness status
+scripts/bin/harness doctor
+```
+
+The updater keeps the installed upstream base under `.harness-core/`, performs
+a three-way merge, stops without writes on conflicts, and backs up changed
+files before activation. On Windows, use `scripts\bin\harness.exe`.
 
 For an older installation with a generated, long `AGENTS.md`, refresh it to the
 small marked block:

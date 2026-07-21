@@ -1,5 +1,5 @@
-# Default Harness core payload.
-# Keep this profile generic, repository-centered, and free of CLI/SQLite files.
+# Default Harness core payload embedded in the Rust `harness` binary.
+# Keep this profile generic, repository-centered, and free of SQLite files.
 AGENTS.md
 docs/WORKFLOW.md
 docs/README.md

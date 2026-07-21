@@ -33,7 +33,7 @@ or validation requirements. Keep local implementation choices in the plan.
 
 ## Active Plans
 
-No active execution plans are currently indexed.
+None.
 
 ## Completed Plans
 
@@ -44,3 +44,5 @@ boundary, write freeze, and decision to preserve the still-used compatibility
 implementation.
 Phase 5 is retained because it records the final optional-consumer ownership
 boundary and why generic atomic protocol primitives remain in compatibility.
+The Rust core-maintenance plan is retained because it records the provenance,
+three-way merge, transaction, bootstrap, and release boundaries of `harness`.

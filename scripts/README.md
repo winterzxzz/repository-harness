@@ -9,9 +9,26 @@ story row, matrix query, trace, score, audit, or proposal. Use the CLI described
 below only when a user or external orchestrator explicitly selects the legacy
 SQLite contract.
 
-## Harness CLI
+## Core Maintenance CLI
 
-The Rust Harness CLI is the primary interface for the optional SQLite durable
+The default installer places `harness` at `scripts/bin/harness` on macOS/Linux
+or `scripts/bin/harness.exe` on Windows. It owns only core installation,
+three-way updates, provenance, status, and diagnostics:
+
+```bash
+scripts/bin/harness update --dry-run
+scripts/bin/harness update
+scripts/bin/harness status
+scripts/bin/harness doctor
+```
+
+The platform installers bootstrap a checksum-verified immutable artifact and
+delegate core semantics to this binary. They do not independently merge core
+content.
+
+## Compatibility Harness CLI
+
+The Rust `harness-cli` is the primary interface for the optional SQLite durable
 layer. Installed projects receive the prebuilt binary at
 `scripts/bin/harness-cli` on macOS/Linux or `scripts/bin/harness-cli.exe` on
 Windows so compatibility consumers retain a stable command path.
@@ -263,10 +280,11 @@ manifests; do not duplicate file lists in installer code. Schema migrations are
 members of the CLI profile and are discovered from `scripts/schema/*.sql`, so a
 new migration requires only the SQL file.
 
-By default the installer copies only the repository-centered core. It performs
-no CLI download, schema discovery, bootstrap installation, or database ignore
-write. Select `--with-cli` (PowerShell: `-WithCli`) to stage the complete CLI
-compatibility bundle and download the prebuilt Rust executable into
+By default the installer downloads the checksum-verified `harness` maintenance
+binary and delegates installation of the repository-centered core. It performs
+no compatibility-CLI download, schema discovery, database bootstrap, or
+database ignore write. Select `--with-cli` (PowerShell: `-WithCli`) to stage the
+complete compatibility bundle and download the prebuilt Rust executable into
 `scripts/bin/harness-cli` on macOS/Linux or `scripts/bin/harness-cli.exe` on
 Windows after verifying its `.sha256` checksum.
 
@@ -337,6 +355,18 @@ history without changing the repository changesets.
 
 ## Release Packaging
 
+Build the current-platform core-maintenance artifact with:
+
+```bash
+scripts/build-harness-release.sh
+```
+
+It writes `dist/harness-<platform>` plus a checksum. The reusable
+`.github/workflows/harness-release.yml` proves all five native platforms,
+promotes an annotated immutable `harness-v*` tag, and publishes ten assets.
+Changes that affect the crate, embedded core files, installers, or release proof
+automatically bump and publish the next patch after merge.
+
 Build the current-platform Rust CLI release artifact from the source repo:
 
 ```bash
@@ -378,11 +408,10 @@ these release assets without overwriting an existing release:
 - `harness-cli-windows-x64.exe.sha256`
 
 Merged PRs are handled by `.github/workflows/post-merge-maintenance.yml`. The
-workflow always prepends a PR summary to `CHANGELOG.md`. If the merged PR
-changed CLI source, schema, Cargo metadata, or release proof/promotion
-packaging, it also increments the CLI patch version, updates
-`scripts/harness-cli-release-tag`, and calls the reusable workflow with the
-exact maintenance commit. The old `v0.1.14` upgrade source is checked against a
-frozen historical contract; the built and installed candidate are checked
-against the current strict contract. A failed tag is consumed and immutable,
-so recovery advances to a later patch version.
+workflow always prepends a PR summary to `CHANGELOG.md`. It independently
+classifies changes for `harness` and `harness-cli`, increments the affected
+patch versions, updates their release pins, and calls each reusable workflow
+with the exact maintenance commit. The old `harness-cli-v0.1.14` upgrade source
+is checked against a frozen historical contract; built candidates are checked
+against current contracts. A failed tag is consumed and immutable, so recovery
+advances to a later patch version.

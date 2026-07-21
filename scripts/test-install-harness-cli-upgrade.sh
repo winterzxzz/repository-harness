@@ -10,6 +10,8 @@ SOURCE="$TMP/$REF"
 ASSETS="$TMP/assets/$REF"
 TARGET="$TMP/target"
 PLATFORM="test-platform"
+cargo build --quiet --manifest-path "$ROOT/Cargo.toml" -p harness --locked
+HARNESS_CORE_BINARY_PATH="$ROOT/target/debug/harness"
 mkdir -p "$SOURCE/scripts/schema" "$SOURCE/docs" "$ASSETS" "$TARGET/scripts/bin"
 
 printf '%s\n' 'docs/HARNESS.md' > "$SOURCE/scripts/harness-install-files.txt"
@@ -23,12 +25,14 @@ printf '%s\n' 'new-cli' > "$ASSETS/harness-cli-$PLATFORM"
 shasum -a 256 "$ASSETS/harness-cli-$PLATFORM" > "$ASSETS/harness-cli-$PLATFORM.sha256"
 
 HARNESS_SOURCE_BASE_URL="file://$SOURCE" \
+HARNESS_CORE_BINARY="$HARNESS_CORE_BINARY_PATH" \
 HARNESS_CLI_BASE_URL="file://$ASSETS" \
 HARNESS_CLI_PLATFORM="$PLATFORM" \
   "$ROOT/scripts/install-harness.sh" --directory "$TARGET" --merge --yes >/dev/null
 grep -Fxq 'old-cli' "$TARGET/scripts/bin/harness-cli"
 
 HARNESS_SOURCE_BASE_URL="file://$SOURCE" \
+HARNESS_CORE_BINARY="$HARNESS_CORE_BINARY_PATH" \
 HARNESS_CLI_BASE_URL="file://$ASSETS" \
 HARNESS_CLI_PLATFORM="$PLATFORM" \
   "$ROOT/scripts/install-harness.sh" --directory "$TARGET" --merge \
@@ -40,6 +44,7 @@ test -f "$TARGET/scripts/schema/001-fixture.sql"
 printf '%s\n' 'old-cli-again' > "$TARGET/scripts/bin/harness-cli"
 printf '%s\n' '0  harness-cli-test-platform' > "$ASSETS/harness-cli-$PLATFORM.sha256"
 if HARNESS_SOURCE_BASE_URL="file://$SOURCE" \
+   HARNESS_CORE_BINARY="$HARNESS_CORE_BINARY_PATH" \
    HARNESS_CLI_BASE_URL="file://$ASSETS" \
    HARNESS_CLI_PLATFORM="$PLATFORM" \
      "$ROOT/scripts/install-harness.sh" --directory "$TARGET" --merge \

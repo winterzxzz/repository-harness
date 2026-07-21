@@ -1,10 +1,31 @@
 # Architecture
 
-The upstream Harness product is implemented as a Rust workspace with a CLI and
-SQLite durable layer. Its primary source is `crates/harness-cli/`, organized
-into domain, application, infrastructure, and interface modules. Schema
-migrations live in `scripts/schema/`, while installers and validation scripts
-form the distribution boundary.
+The upstream Harness product is a Rust workspace with two independent binaries.
+`crates/harness/` is the default core-maintenance CLI. `crates/harness-cli/` is
+the optional SQLite compatibility control plane. Schema migrations live in
+`scripts/schema/`, while installers and release workflows form the distribution
+boundary.
+
+The core-maintenance crate enforces this dependency direction:
+
+```text
+domain <- application <- infrastructure
+                    <- interface
+main.rs composes interface and infrastructure
+```
+
+Domain types contain paths, provenance, merge results, and reports without
+filesystem, process, serialization, or CLI dependencies. Application use cases
+depend on ports. Infrastructure implements embedded release content, hashing,
+locking, filesystem transactions, and Git-backed three-way merge. The interface
+only parses commands and renders results. Architecture tests reject outward
+imports from inner layers.
+
+Consumer provenance lives in `.harness-core/manifest.json` plus the exact
+upstream bytes under `.harness-core/base/`. An update stages its full result,
+writes a durable transaction journal, backs up prior bytes, activates workspace
+files, and commits provenance last. A later mutating command rolls back an
+interrupted apply before starting new work.
 
 The reusable template does not select an application stack for a consumer
 project. The discovery guidance below is for that consumer application after a

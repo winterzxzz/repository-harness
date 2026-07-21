@@ -96,7 +96,7 @@ or mutate Harness state.
 
 Restate the observable outcome, read the relevant repository truth, inspect the
 affected implementation and proof, make the change, run behavior-appropriate
-validation, and report the result. No Harness CLI operation is required.
+validation, and report the result. No control-plane operation is required.
 
 ### Durable Planned Change
 

@@ -10,6 +10,8 @@ initial=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 candidate=$(cd "$(dirname "$2")" && pwd)/$(basename "$2")
 asset_name=$3
 candidate_ref=$4
+cargo build --quiet --manifest-path "$root/Cargo.toml" -p harness --locked
+harness_core_binary="$root/target/debug/harness"
 [[ "$candidate_ref" =~ ^harness-cli-v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9]+)*$ ]]
 temp=$(mktemp -d)
 trap 'rm -rf "$temp"' EXIT
@@ -42,6 +44,7 @@ cp "$candidate" "$assets/$asset_name"
 (cd "$assets" && shasum -a 256 "$asset_name" >"$asset_name.sha256")
 
 HARNESS_SOURCE_BASE_URL="file://$root" \
+HARNESS_CORE_BINARY="$harness_core_binary" \
 HARNESS_CLI_BASE_URL="file://$assets" \
 HARNESS_CLI_PLATFORM="${asset_name#harness-cli-}" \
   "$root/scripts/install-harness.sh" --directory "$target" --merge \
@@ -50,7 +53,7 @@ HARNESS_CLI_PLATFORM="${asset_name#harness-cli-}" \
 [[ "$(shasum -a 256 "$target/scripts/bin/harness-cli" | awk '{print $1}')" == "$candidate_hash" ]]
 [[ "$(shasum -a 256 "$target/KEEP.txt" | awk '{print $1}')" == "$before_keep" ]]
 grep -Fq 'Keep this consumer-owned instruction.' "$target/AGENTS.md"
-grep -Fq 'No Harness CLI operation is required.' "$target/AGENTS.md"
+grep -Fq 'No control-plane operation is required.' "$target/AGENTS.md"
 ! grep -Fq 'stale authority from the initial CLI release' "$target/AGENTS.md"
 agent_backup=$(find "$target/.harness-backup" -name AGENTS.md -type f | head -n 1)
 [[ "$(shasum -a 256 "$agent_backup" | awk '{print $1}')" == "$before_agents" ]]

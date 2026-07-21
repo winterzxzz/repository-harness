@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+classifier="$root/scripts/harness-release-changed.sh"
+workflow="$root/.github/workflows/post-merge-maintenance.yml"
+
+printf '%s\n' \
+  crates/harness/src/main.rs \
+  crates/harness/assets/docs/plans/README.md \
+  docs/WORKFLOW.md \
+  scripts/agent-harness-block.md \
+  scripts/install-harness.sh \
+  scripts/install-harness.ps1 \
+  scripts/build-harness-release.sh \
+  scripts/harness-release-changed.sh \
+  scripts/promote-harness-release-tag.sh \
+  scripts/verify-harness-release-identity.sh \
+  .github/workflows/harness-release.yml \
+  .github/workflows/post-merge-maintenance.yml \
+  Cargo.toml Cargo.lock | "$classifier"
+
+for unrelated in crates/harness-cli/src/main.rs docs/HARNESS.md README.md; do
+  if printf '%s\n' "$unrelated" | "$classifier"; then
+    echo "unrelated path triggered Harness core publication: $unrelated" >&2
+    exit 1
+  fi
+done
+
+grep -Fq 'scripts/harness-release-changed.sh <<<"$changed_files"' "$workflow"
+echo "Harness core post-merge release classification tests passed"

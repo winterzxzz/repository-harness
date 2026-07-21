@@ -56,6 +56,12 @@ function Read-RemoteText([string]$Url) {
 }
 
 function Write-SourceFile([string]$Relative, [string]$Target) {
+    if ($Relative -eq "AGENTS.md") {
+        $block = (Read-SourceText "scripts/agent-harness-block.md").TrimEnd("`r", "`n")
+        Set-Content -LiteralPath $Target -Value ("# Agent Instructions`n`n" + $block + "`n") -NoNewline
+        return
+    }
+
     if ($script:Source.Mode -eq "local") {
         $source = Join-Path $script:Source.Root $Relative
         if (!(Test-Path $source)) {
@@ -309,6 +315,98 @@ function Get-DefaultCliBaseUrl {
     return "https://github.com/hoangnb24/repository-harness/releases/latest/download"
 }
 
+function Get-HarnessReleaseTag {
+    if ($env:HARNESS_CORE_RELEASE_TAG) { return $env:HARNESS_CORE_RELEASE_TAG.Trim() }
+    if ($script:Source.Mode -eq "local") {
+        $path = Join-Path $script:Source.Root "scripts/harness-release-tag"
+        if (!(Test-Path $path)) { Fail "Harness core release tag is missing: $path" }
+        return ((Get-Content -LiteralPath $path | Where-Object { $_ -match "\S" -and $_ -notmatch "^\s*#" } | Select-Object -First 1) -as [string]).Trim()
+    }
+    try {
+        $text = Read-RemoteText "$script:CoreSourceBaseUrl/scripts/harness-release-tag"
+        return (($text -split "`n" | Where-Object { $_ -match "\S" -and $_ -notmatch "^\s*#" } | Select-Object -First 1) -as [string]).Trim()
+    } catch {
+        Fail "Harness core release tag is missing"
+    }
+}
+
+function Merge-CoreGitignore([string]$Target) {
+    $rules = @("# Harness core maintenance binary", "scripts/bin/harness", "scripts/bin/harness.exe")
+    $existing = if (Test-Path $Target) { Get-Content -LiteralPath $Target } else { @() }
+    $missing = @($rules | Where-Object { $existing -notcontains $_ })
+    if ($missing.Count -eq 0) {
+        Write-Step "skip     .gitignore (Harness core binary rules already present)"
+        return
+    }
+    if ($DryRun) {
+        Write-Step "update   .gitignore (append Harness core binary rules)"
+        return
+    }
+    $prefix = if ((Test-Path $Target) -and ((Get-Item $Target).Length -gt 0)) { "`n" } else { "" }
+    Add-Content -LiteralPath $Target -Value ($prefix + (($missing -join "`n") + "`n")) -NoNewline
+    Write-Step "updated  .gitignore (appended Harness core binary rules)"
+}
+
+function Install-HarnessCore {
+    $platform = if ($env:HARNESS_CORE_CLI_PLATFORM) { $env:HARNESS_CORE_CLI_PLATFORM } else { "windows-x64" }
+    if ($platform -ne "windows-x64") { Fail "Unsupported Windows Harness core platform: $platform" }
+    $stageRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("harness-core-" + [guid]::NewGuid().ToString("N"))
+    $staged = Join-Path $stageRoot "harness.exe"
+    New-Item -ItemType Directory -Force -Path $stageRoot | Out-Null
+    try {
+        if ($env:HARNESS_CORE_BINARY) {
+            if (!(Test-Path $env:HARNESS_CORE_BINARY)) { Fail "HARNESS_CORE_BINARY does not exist: $env:HARNESS_CORE_BINARY" }
+            Copy-Item -LiteralPath $env:HARNESS_CORE_BINARY -Destination $staged
+        } elseif ($script:Source.Mode -eq "local") {
+            & cargo build --quiet --manifest-path (Join-Path $script:Source.Root "Cargo.toml") -p harness --locked
+            if ($LASTEXITCODE -ne 0) { Fail "could not build the local Rust harness CLI" }
+            Copy-Item -LiteralPath (Join-Path $script:Source.Root "target/debug/harness.exe") -Destination $staged
+        } else {
+            $releaseTag = Get-HarnessReleaseTag
+            if ($releaseTag -notmatch '^harness-v[0-9]+\.[0-9]+\.[0-9]+(?:[-.][A-Za-z0-9]+)*$') { Fail "invalid Harness core release tag: $releaseTag" }
+            $baseUrl = if ($env:HARNESS_CORE_CLI_BASE_URL) { $env:HARNESS_CORE_CLI_BASE_URL.TrimEnd("/") } else { "https://github.com/hoangnb24/repository-harness/releases/download/$releaseTag" }
+            $binaryUrl = "$baseUrl/harness-windows-x64.exe"
+            $checksumUrl = "$binaryUrl.sha256"
+            $checksum = "$staged.sha256"
+            if ($binaryUrl.StartsWith("file://")) {
+                Copy-Item -LiteralPath ([uri]$binaryUrl).LocalPath -Destination $staged
+                Copy-Item -LiteralPath ([uri]$checksumUrl).LocalPath -Destination $checksum
+            } else {
+                Invoke-WebRequest -UseBasicParsing -Uri $binaryUrl -OutFile $staged
+                Invoke-WebRequest -UseBasicParsing -Uri $checksumUrl -OutFile $checksum
+            }
+            $expected = ((Get-Content -LiteralPath $checksum -Raw) -split "\s+")[0].ToLowerInvariant()
+            $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $staged).Hash.ToLowerInvariant()
+            if ([string]::IsNullOrWhiteSpace($expected) -or $expected -ne $actual) { Fail "Checksum mismatch for harness-windows-x64.exe: expected $expected, got $actual" }
+        }
+
+        $runner = $staged
+        if (!$DryRun) {
+            $target = Join-Path $script:TargetDir "scripts/bin/harness.exe"
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
+            $targetTemp = Join-Path (Split-Path -Parent $target) (".harness." + [guid]::NewGuid().ToString("N") + ".tmp")
+            Copy-Item -LiteralPath $staged -Destination $targetTemp
+            if (Test-Path $target) {
+                $backup = Join-Path $script:BackupDir "scripts/bin/harness.exe"
+                New-Item -ItemType Directory -Force -Path (Split-Path -Parent $backup) | Out-Null
+                [System.IO.File]::Replace($targetTemp, $target, $backup)
+            } else {
+                Move-Item -LiteralPath $targetTemp -Destination $target
+            }
+            $runner = $target
+            Merge-CoreGitignore (Join-Path $script:TargetDir ".gitignore")
+            Write-Step "installed scripts/bin/harness.exe ($platform)"
+        }
+        $command = if (Test-Path (Join-Path $script:TargetDir ".harness-core/manifest.json")) { "update" } else { "install" }
+        $arguments = @($command, "--directory", $script:TargetDir)
+        if ($DryRun) { $arguments += "--dry-run" }
+        & $runner @arguments
+        if ($LASTEXITCODE -ne 0) { Fail "harness $command failed with exit code $LASTEXITCODE" }
+    } finally {
+        Remove-Item -LiteralPath $stageRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Initialize-CliIdentity {
     $script:CliPlatform = if ($env:HARNESS_CLI_PLATFORM) { $env:HARNESS_CLI_PLATFORM } else { "windows-x64" }
     if ($script:CliPlatform -ne "windows-x64") {
@@ -478,6 +576,7 @@ $script:Updated = 0
 $script:Skipped = 0
 $script:Source = Get-SourceMode
 $script:SourceBaseUrl = if ($env:HARNESS_SOURCE_BASE_URL) { $env:HARNESS_SOURCE_BASE_URL.TrimEnd("/") } else { "https://raw.githubusercontent.com/hoangnb24/repository-harness/main" }
+$script:CoreSourceBaseUrl = if ($env:HARNESS_CORE_SOURCE_BASE_URL) { $env:HARNESS_CORE_SOURCE_BASE_URL.TrimEnd("/") } else { "https://raw.githubusercontent.com/hoangnb24/repository-harness/main" }
 $script:PayloadManifest = "scripts/harness-install-files.txt"
 $script:CliPayloadManifest = "scripts/harness-cli-install-files.txt"
 $script:SchemaDir = "scripts/schema"
@@ -571,9 +670,7 @@ if ($script:InstallCli) {
 }
 Write-Step "Target project: $script:TargetDir"
 
-foreach ($file in (Get-PayloadFiles $script:PayloadManifest)) {
-    Copy-HarnessFile $file
-}
+Install-HarnessCore
 
 Refresh-AgentShimFile
 Install-CliBundle

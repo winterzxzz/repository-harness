@@ -18,6 +18,8 @@ jobs:
     outputs:
       cli_changed: ${{ steps.maintenance.outputs.cli_changed }}
       release_tag: ${{ steps.maintenance.outputs.release_tag }}
+      harness_changed: ${{ steps.maintenance.outputs.harness_changed }}
+      harness_release_tag: ${{ steps.maintenance.outputs.harness_release_tag }}
       maintenance_ref: ${{ steps.maintenance.outputs.maintenance_ref }}
     steps:
       - name: Checkout main
@@ -53,6 +55,10 @@ jobs:
           if scripts/harness-cli-release-changed.sh <<<"$changed_files"; then
             cli_changed=true
           fi
+          harness_changed=false
+          if scripts/harness-release-changed.sh <<<"$changed_files"; then
+            harness_changed=true
+          fi
 
           release_tag=""
           if [ "$cli_changed" = true ]; then
@@ -64,6 +70,18 @@ jobs:
             NEW_VERSION="$new_version" perl -0pi -e 's/(\[package\]\s+name = "harness-cli"\s+version = ")[^"]+(")/$1$ENV{NEW_VERSION}$2/s' crates/harness-cli/Cargo.toml
             NEW_VERSION="$new_version" perl -0pi -e 's/(name = "harness-cli"\nversion = ")[^"]+(")/$1$ENV{NEW_VERSION}$2/' Cargo.lock
             printf '%s\n' "$release_tag" > scripts/harness-cli-release-tag
+          fi
+
+          harness_release_tag=""
+          if [ "$harness_changed" = true ]; then
+            old_harness_version="$(awk -F'"' '/^version = / { print $2; exit }' crates/harness/Cargo.toml)"
+            IFS=. read -r harness_major harness_minor harness_patch <<<"$old_harness_version"
+            new_harness_version="$harness_major.$harness_minor.$((harness_patch + 1))"
+            harness_release_tag="harness-v$new_harness_version"
+
+            NEW_VERSION="$new_harness_version" perl -0pi -e 's/(\[package\]\s+name = "harness"\s+version = ")[^"]+(")/$1$ENV{NEW_VERSION}$2/s' crates/harness/Cargo.toml
+            NEW_VERSION="$new_harness_version" perl -0pi -e 's/(name = "harness"\nversion = ")[^"]+(")/$1$ENV{NEW_VERSION}$2/' Cargo.lock
+            printf '%s\n' "$harness_release_tag" > scripts/harness-release-tag
           fi
 
           date_utc="$(date -u +%Y-%m-%d)"
@@ -86,6 +104,11 @@ jobs:
             else
               printf -- '- Harness CLI release: not required\n'
             fi
+            if [ "$harness_changed" = true ]; then
+              printf -- '- Harness core candidate: `%s` (publication requires platform proof)\n' "$harness_release_tag"
+            else
+              printf -- '- Harness core release: not required\n'
+            fi
             python3 scripts/render-changelog-files.py --limit 20 \
               <<<"$changed_files_json"
             printf '\n'
@@ -101,12 +124,18 @@ jobs:
           if git diff --quiet; then
             maintenance_ref="$(git rev-parse HEAD)"
           else
-            if [ "$cli_changed" = true ]; then
+            if [ "$cli_changed" = true ] && [ "$harness_changed" = true ]; then
+              commit_message="chore(release): prepare $release_tag and $harness_release_tag"
+            elif [ "$cli_changed" = true ]; then
               commit_message="chore(release): prepare $release_tag"
+            elif [ "$harness_changed" = true ]; then
+              commit_message="chore(release): prepare $harness_release_tag"
             else
               commit_message="docs(changelog): record PR #$PR_NUMBER"
             fi
-            git add CHANGELOG.md Cargo.lock crates/harness-cli/Cargo.toml scripts/harness-cli-release-tag
+            git add CHANGELOG.md Cargo.lock \
+              crates/harness-cli/Cargo.toml scripts/harness-cli-release-tag \
+              crates/harness/Cargo.toml scripts/harness-release-tag
             git commit -m "$commit_message"
             git push origin HEAD:main
             maintenance_ref="$(git rev-parse HEAD)"
@@ -115,6 +144,8 @@ jobs:
           {
             echo "cli_changed=$cli_changed"
             echo "release_tag=$release_tag"
+            echo "harness_changed=$harness_changed"
+            echo "harness_release_tag=$harness_release_tag"
             echo "maintenance_ref=$maintenance_ref"
           } >> "$GITHUB_OUTPUT"
 
@@ -127,4 +158,15 @@ jobs:
       contents: write
     with:
       release_tag: ${{ needs.prepare.outputs.release_tag }}
+      checkout_ref: ${{ needs.prepare.outputs.maintenance_ref }}
+
+  release-harness:
+    name: Build and publish Harness core
+    needs: prepare
+    if: ${{ needs.prepare.outputs.harness_changed == 'true' }}
+    uses: ./.github/workflows/harness-release.yml
+    permissions:
+      contents: write
+    with:
+      release_tag: ${{ needs.prepare.outputs.harness_release_tag }}
       checkout_ref: ${{ needs.prepare.outputs.maintenance_ref }}

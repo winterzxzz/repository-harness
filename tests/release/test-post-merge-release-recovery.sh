@@ -13,7 +13,9 @@ for script in \
   "$frozen_sh" \
   "$download" \
   "$root/scripts/promote-harness-cli-release-tag.sh" \
-  "$root/scripts/verify-harness-cli-release-identity.sh"; do
+  "$root/scripts/verify-harness-cli-release-identity.sh" \
+  "$root/scripts/promote-harness-release-tag.sh" \
+  "$root/scripts/verify-harness-release-identity.sh"; do
   bash -n "$script"
 done
 
@@ -39,6 +41,9 @@ grep -Fq 'smoke-native-artifact.ps1' "$windows_upgrade"
 "$root/tests/release/test-release-identity-guard.sh"
 "$root/tests/release/test-release-promotion-guard.sh"
 "$root/tests/release/test-release-workflow-contract.sh"
+"$root/tests/release/test-harness-release-workflow-contract.sh"
+"$root/tests/release/test-harness-release-identity-guard.sh"
 "$root/tests/maintenance/test-harness-cli-release-classification.sh"
+"$root/tests/maintenance/test-harness-release-classification.sh"
 
 echo "post-merge release recovery contract passed"

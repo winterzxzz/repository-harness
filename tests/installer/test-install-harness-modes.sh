@@ -7,12 +7,21 @@ temp=$(mktemp -d)
 trap 'rm -rf "$temp"' EXIT
 platform=fixture-platform
 assets="$temp/assets"
+cargo build --quiet --manifest-path "$root/Cargo.toml" -p harness --locked
+harness_core_binary="$root/target/debug/harness"
 mkdir -p "$assets"
 printf '%s\n' '#!/usr/bin/env sh' 'exit 0' >"$assets/harness-cli-$platform"
 chmod 755 "$assets/harness-cli-$platform"
 (cd "$assets" && shasum -a 256 "harness-cli-$platform" >"harness-cli-$platform.sha256")
+core_source="$temp/core-source"
+core_assets="$temp/core-assets"
+mkdir -p "$core_source/scripts" "$core_assets"
+printf 'harness-v0.1.0\n' >"$core_source/scripts/harness-release-tag"
+cp "$harness_core_binary" "$core_assets/harness-fixture-core"
+(cd "$core_assets" && shasum -a 256 harness-fixture-core >harness-fixture-core.sha256)
 
 install() {
+  HARNESS_CORE_BINARY="$harness_core_binary" \
   HARNESS_CLI_BASE_URL="file://$assets" \
   HARNESS_CLI_PLATFORM="$platform" \
   HARNESS_CLI_RELEASE_TAG=harness-cli-v0.1.14 \
@@ -27,27 +36,31 @@ extract_block() {
   ' "$1"
 }
 
-# Fresh default mode produces exactly the small core. It performs no CLI,
-# schema, bootstrap, or database-ignore work.
+# Fresh default mode produces the small core plus its maintenance CLI. It
+# performs no compatibility-CLI, schema, bootstrap, or database-ignore work.
 fresh="$temp/fresh"
 install --directory "$fresh" --yes >"$temp/fresh.out"
 ! grep -Fq 'download harness-cli-' "$temp/fresh.out"
 grep -Fq 'Harness profile: core' "$temp/fresh.out"
 [[ ! -e "$fresh/scripts/bin/harness-cli" ]]
+[[ -x "$fresh/scripts/bin/harness" ]]
 [[ ! -e "$fresh/scripts/bootstrap-harness.sh" ]]
 [[ ! -e "$fresh/scripts/schema" ]]
-[[ ! -e "$fresh/.gitignore" ]]
+grep -Fxq 'scripts/bin/harness' "$fresh/.gitignore"
+! grep -Fxq 'harness.db' "$fresh/.gitignore"
 [[ ! -e "$fresh/harness.db" ]]
+[[ -f "$fresh/.harness-core/manifest.json" ]]
 cmp -s <(extract_block "$fresh/AGENTS.md") "$root/scripts/agent-harness-block.md"
 [[ -f "$fresh/docs/WORKFLOW.md" ]]
 [[ -f "$fresh/docs/plans/active/README.md" ]]
 [[ -f "$fresh/docs/plans/completed/README.md" ]]
 [[ -f "$fresh/docs/templates/exec-plan.md" ]]
-grep -Fq 'No Harness CLI operation is required.' "$fresh/AGENTS.md"
+grep -Fq 'No control-plane operation is required.' "$fresh/AGENTS.md"
+! grep -Fq 'Current Upstream Goal' "$fresh/AGENTS.md"
 ! grep -Fq 'query matrix --active --summary' "$fresh/AGENTS.md"
-find "$fresh" -type f | sed "s#^$fresh/##" | sort >"$temp/fresh-files"
-sed -e '/^\s*#/d' -e '/^\s*$/d' "$root/scripts/harness-install-files.txt" | sort >"$temp/core-files"
-cmp -s "$temp/fresh-files" "$temp/core-files"
+for core_file in $(sed -e '/^\s*#/d' -e '/^\s*$/d' "$root/scripts/harness-install-files.txt"); do
+  [[ -f "$fresh/$core_file" ]]
+done
 
 # Explicit CLI selection adds the complete compatibility bundle, migrations,
 # ignore rules, and verified binary without initializing a database.
@@ -75,7 +88,7 @@ grep -Fq 'Keep this Claude-only rule.' "$claude/CLAUDE.md"
 cmp -s <(extract_block "$claude/CLAUDE.md") "$root/scripts/claude-harness-block.md"
 [[ "$(grep -Fc '@AGENTS.md' "$claude/CLAUDE.md")" == 1 ]]
 ! grep -Fq '@docs/FEATURE_INTAKE.md' "$claude/CLAUDE.md"
-grep -Fq 'No Harness CLI operation is required.' "$claude/AGENTS.md"
+grep -Fq 'No control-plane operation is required.' "$claude/AGENTS.md"
 
 # Merge preserves existing project material byte-for-byte while filling gaps.
 merge="$temp/merge"
@@ -95,7 +108,8 @@ install --directory "$merge" --merge --yes >"$temp/merge.out"
 grep -Fxq 'custom script' "$merge/scripts/custom/keep.txt"
 [[ "$(shasum -a 256 "$merge/scripts/bin/harness-cli" | awk '{print $1}')" == "$before_cli" ]]
 [[ "$(shasum -a 256 "$merge/harness.db" | awk '{print $1}')" == "$before_db" ]]
-[[ ! -e "$merge/.gitignore" ]]
+grep -Fxq 'scripts/bin/harness' "$merge/.gitignore"
+! grep -Fxq 'harness.db' "$merge/.gitignore"
 [[ -f "$merge/docs/WORKFLOW.md" ]]
 [[ ! -e "$merge/docs/ARCHITECTURE.md" ]]
 
@@ -153,6 +167,9 @@ stale mutation authority
 EOF
 upgrade_before=$(shasum -a 256 "$upgrade/AGENTS.md" | awk '{print $1}')
 HARNESS_SOURCE_BASE_URL="file://$root" \
+HARNESS_CORE_SOURCE_BASE_URL="file://$core_source" \
+HARNESS_CORE_CLI_BASE_URL="file://$core_assets" \
+HARNESS_CORE_CLI_PLATFORM=fixture-core \
 HARNESS_CLI_BASE_URL="file://$assets" \
 HARNESS_CLI_PLATFORM="$platform" \
   "$installer" --directory "$upgrade" --merge --upgrade-cli \
@@ -199,15 +216,18 @@ mkdir -p "$bad_assets"
 cp "$assets/harness-cli-$platform" "$bad_assets/harness-cli-$platform"
 printf 'bad-checksum\n' >"$bad_assets/harness-cli-$platform.sha256"
 failed="$temp/failed-cli"
-if HARNESS_CLI_BASE_URL="file://$bad_assets" HARNESS_CLI_PLATFORM="$platform" \
+if HARNESS_CORE_BINARY="$harness_core_binary" \
+  HARNESS_CLI_BASE_URL="file://$bad_assets" HARNESS_CLI_PLATFORM="$platform" \
   "$installer" --directory "$failed" --with-cli --yes >"$temp/failed-cli.out" 2>&1; then
   echo "installer unexpectedly accepted a bad CLI checksum" >&2
   exit 1
 fi
 [[ -f "$failed/AGENTS.md" && -f "$failed/docs/WORKFLOW.md" ]]
+[[ -x "$failed/scripts/bin/harness" ]]
 [[ ! -e "$failed/docs/FEATURE_INTAKE.md" ]]
 [[ ! -e "$failed/scripts/bootstrap-harness.sh" ]]
 [[ ! -e "$failed/scripts/bin/harness-cli" ]]
-[[ ! -e "$failed/.gitignore" ]]
+grep -Fxq 'scripts/bin/harness' "$failed/.gitignore"
+! grep -Fxq 'harness.db' "$failed/.gitignore"
 
 echo "Bash core/CLI profiles, merge, override, shims, upgrade, rollback, and dry-run modes passed"

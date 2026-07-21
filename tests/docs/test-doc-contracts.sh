@@ -25,7 +25,7 @@ reject() {
 # Current default authority is repository-centered and explicitly keeps
 # workflow-database operations off the bounded path.
 require AGENTS.md 'Start with the requested outcome'
-require AGENTS.md 'No Harness CLI operation is required.'
+require AGENTS.md 'No control-plane operation is required.'
 require docs/WORKFLOW.md '### Bounded Change'
 require docs/WORKFLOW.md '### Durable Planned Change'
 require docs/WORKFLOW.md '### Does The Work Need Human Judgment?'
@@ -63,6 +63,7 @@ for file in \
   docs/decisions/0021-consumer-first-application-legibility-phase.md \
   docs/decisions/0022-control-plane-freeze-and-compatibility-runway.md \
   docs/decisions/0023-optional-consumer-ownership.md \
+  docs/decisions/0024-rust-harness-core-maintenance-cli.md \
   docs/compatibility/README.md \
   docs/provenance/README.md; do
   [[ -f "$root/$file" ]] || fail "missing source-only artifact: $file"
@@ -92,10 +93,11 @@ done
 
 require scripts/README.md 'Normal'
 require scripts/README.md 'story row, matrix query, trace, score, audit, or proposal'
-require docs/ARCHITECTURE.md 'The upstream Harness product is implemented as a Rust workspace'
+require docs/ARCHITECTURE.md 'The upstream Harness product is a Rust workspace with two independent binaries.'
+require docs/ARCHITECTURE.md '`crates/harness/` is the default core-maintenance CLI.'
 require docs/ARCHITECTURE.md 'The reusable template does not select an application stack'
 require scripts/README.md 'Installed consumer projects keep their own stack-specific validation commands'
-require scripts/README.md 'By default the installer copies only the repository-centered core.'
+require scripts/README.md 'By default the installer downloads the checksum-verified `harness` maintenance'
 require docs/README.md '## Installed Core'
 require docs/README.md '## Optional Source Indexes'
 require docs/compatibility/README.md '## Install Boundary'
@@ -110,7 +112,11 @@ require PHASE4.md '## Evidence Matrix'
 require PHASE4.md 'warning runway'
 require PHASE4.md 'Complete on 2026-07-21.'
 require PHASE4.md '| P4-08 Deletion boundary'
-require docs/plans/README.md 'No active execution plans are currently indexed.'
+require docs/plans/README.md 'None.'
+require docs/plans/completed/README.md 'rust-harness-core-maintenance-cli.md'
+require docs/plans/completed/rust-harness-core-maintenance-cli.md 'A Rust executable named `harness`.'
+require docs/plans/completed/rust-harness-core-maintenance-cli.md 'optional SQLite control plane remains outside the CLI'
+require docs/plans/completed/rust-harness-core-maintenance-cli.md 'PR #56'
 require docs/plans/completed/README.md 'phase-4-control-plane-freeze.md'
 require docs/plans/completed/phase-4-control-plane-freeze.md 'Complete. New upstream work has one Git-native authority path.'
 require docs/decisions/README.md '0022-control-plane-freeze-and-compatibility-runway.md'
@@ -128,6 +134,8 @@ require PHASE5.md '## Ownership Matrix'
 require PHASE5.md 'tests/boundary/test-phase5-optional-consumer-split.sh'
 require docs/decisions/README.md '0023-optional-consumer-ownership.md'
 require docs/decisions/0023-optional-consumer-ownership.md '`hoangnb24/symphony` owns orchestration policy'
+require docs/decisions/README.md '0024-rust-harness-core-maintenance-cli.md'
+require docs/decisions/0024-rust-harness-core-maintenance-cli.md 'The next upstream product goal is a Rust CLI named `harness`.'
 require README.md 'Symphony owns work selection, agent runs, worktrees'
 require docs/compatibility/README.md 'Phase 5 ownership boundary'
 require docs/compatibility/README.md 'phase-5-evolution-infrastructure-legacy.md'
@@ -154,6 +162,9 @@ for required_gate in \
   'tests/docs/test-doc-contracts.sh' \
   'tests/workflow/test-repository-workflow.sh' \
   'tests/workflow/test-task-authority.sh' \
+  'tests/maintenance/test-harness-release-classification.sh' \
+  'tests/release/test-harness-release-workflow-contract.sh' \
+  'tests/release/test-harness-release-identity-guard.sh' \
   'tests/release/test-post-merge-release-recovery.sh'; do
   require scripts/validate-premerge.sh "$required_gate"
 done
@@ -167,5 +178,6 @@ rg -Fq 'tests/installer/test-install-harness-modes.ps1' "$root/.github/workflows
     "$root/.github/workflows/premerge.yml" ||
   fail 'pull-request workflow does not exercise the PowerShell installer contract'
 require .github/workflows/harness-cli-release.yml 'run: scripts/validate-premerge.sh'
+require .github/workflows/harness-release.yml 'run: scripts/validate-premerge.sh'
 
 echo "repository workflow, compatibility boundary, links, authority, and validation references passed"

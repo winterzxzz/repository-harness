@@ -5,7 +5,7 @@ usage() {
   cat <<'EOF'
 Usage: install-harness.sh [options] [path]
 
-Apply the Harness v0 files and folders to a target project directory.
+Bootstrap the Rust `harness` CLI and install the Harness core into a target.
 
 Options:
   -d, --directory <path>  Target directory. Defaults to the current directory.
@@ -37,8 +37,9 @@ Options:
   -h, --help             Show this help.
 
 Safety:
-  The default profile installs only the repository-centered core and performs
-  no CLI download or database-specific write. If AGENTS.md, docs/, or scripts/
+  The default profile installs the repository-centered core plus the Rust
+  maintenance CLI. It performs no SQLite/control-plane download or database
+  write. If AGENTS.md, docs/, or scripts/
   already exist, interactive installs ask
   whether to merge missing files, override after backup, or stop. Merge is the
   safe update path for repositories that already have Harness: existing files
@@ -195,6 +196,14 @@ if [ -f "$target" ] &&
 write_source_file() {
   local relative="$1"
   local target="$2"
+
+  if [ "$relative" = "AGENTS.md" ]; then
+    {
+      printf '# Agent Instructions\n\n'
+      agent_shim_block
+    } > "$target"
+    return
+  fi
 
   if [ "$SOURCE_MODE" = "local" ]; then
     local source="$SOURCE_ROOT/$relative"
@@ -623,6 +632,114 @@ default_cli_base_url() {
   fi
 }
 
+read_harness_release_tag() {
+  local tag_file="scripts/harness-release-tag"
+  local tag=""
+  if [ -n "${HARNESS_CORE_RELEASE_TAG:-}" ]; then
+    printf '%s\n' "$HARNESS_CORE_RELEASE_TAG"
+    return
+  fi
+  if [ "$SOURCE_MODE" = "local" ]; then
+    [ -f "$SOURCE_ROOT/$tag_file" ] &&
+      tag="$(awk 'NF && $1 !~ /^#/ { print $1; exit }' "$SOURCE_ROOT/$tag_file")"
+  else
+    local tag_tmp
+    tag_tmp="$(mktemp)"
+    if curl -fsSL "$CORE_SOURCE_BASE_URL/$tag_file" -o "$tag_tmp" 2>/dev/null; then
+      tag="$(awk 'NF && $1 !~ /^#/ { print $1; exit }' "$tag_tmp")"
+    fi
+    rm -f "$tag_tmp"
+  fi
+  [ -n "$tag" ] || fail "Harness core release tag is missing"
+  printf '%s\n' "$tag"
+}
+
+merge_core_gitignore() {
+  local target="$1"
+  local marker="# Harness core maintenance binary"
+  local unix_rule="scripts/bin/harness"
+  local windows_rule="scripts/bin/harness.exe"
+  if [ -f "$target" ] && grep -Fxq "$unix_rule" "$target" && grep -Fxq "$windows_rule" "$target"; then
+    log "skip     .gitignore (Harness core binary rules already present)"
+    return
+  fi
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "update   .gitignore (append Harness core binary rules)"
+    return
+  fi
+  local missing_rules=()
+  [ -f "$target" ] && grep -Fxq "$unix_rule" "$target" || missing_rules+=("$unix_rule")
+  [ -f "$target" ] && grep -Fxq "$windows_rule" "$target" || missing_rules+=("$windows_rule")
+  {
+    [ -s "$target" ] && printf '\n'
+    printf '%s\n' "$marker"
+    printf '%s\n' "${missing_rules[@]}"
+  } >> "$target"
+  log "updated  .gitignore (appended Harness core binary rules)"
+}
+
+stage_harness_core_cli() {
+  CORE_STAGE_ROOT="$(mktemp -d)"
+  CORE_STAGED_BINARY="$CORE_STAGE_ROOT/harness"
+  CORE_PLATFORM="${HARNESS_CORE_CLI_PLATFORM:-$(detect_cli_platform)}"
+  CORE_BINARY_NAME="harness-$CORE_PLATFORM"
+  if [ -n "${HARNESS_CORE_BINARY:-}" ]; then
+    [ -x "$HARNESS_CORE_BINARY" ] || fail "HARNESS_CORE_BINARY is not executable: $HARNESS_CORE_BINARY"
+    cp "$HARNESS_CORE_BINARY" "$CORE_STAGED_BINARY"
+  elif [ "$SOURCE_MODE" = "local" ]; then
+    command -v cargo >/dev/null 2>&1 || fail "cargo is required for a local Harness source install"
+    cargo build --quiet --manifest-path "$SOURCE_ROOT/Cargo.toml" -p harness --locked
+    cp "$SOURCE_ROOT/target/debug/harness" "$CORE_STAGED_BINARY"
+  else
+    local release_tag base_url binary_url checksum_url checksum_tmp expected actual
+    release_tag="$(read_harness_release_tag)"
+    [[ "$release_tag" =~ ^harness-v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9]+)*$ ]] ||
+      fail "invalid Harness core release tag: $release_tag"
+    base_url="${HARNESS_CORE_CLI_BASE_URL:-https://github.com/hoangnb24/repository-harness/releases/download/$release_tag}"
+    binary_url="${base_url%/}/$CORE_BINARY_NAME"
+    checksum_url="$binary_url.sha256"
+    checksum_tmp="$CORE_STAGE_ROOT/$CORE_BINARY_NAME.sha256"
+    download_file "$binary_url" "$CORE_STAGED_BINARY"
+    download_file "$checksum_url" "$checksum_tmp"
+    expected="$(awk '{ print $1; exit }' "$checksum_tmp")"
+    actual="$(sha256_file "$CORE_STAGED_BINARY")"
+    [ -n "$expected" ] && [ "$expected" = "$actual" ] ||
+      fail "Checksum mismatch for $CORE_BINARY_NAME: expected $expected, got $actual"
+  fi
+  chmod 755 "$CORE_STAGED_BINARY"
+}
+
+install_harness_core() {
+  stage_harness_core_cli
+  local command="install"
+  [ -f "$TARGET_DIR/.harness-core/manifest.json" ] && command="update"
+  local args=("$command" --directory "$TARGET_DIR")
+  [ "$DRY_RUN" -eq 1 ] && args+=(--dry-run)
+  local runner="$CORE_STAGED_BINARY"
+  if [ "$DRY_RUN" -eq 0 ]; then
+    local binary_target="$TARGET_DIR/scripts/bin/harness"
+    local binary_temp="$TARGET_DIR/scripts/bin/.harness.$$.tmp"
+    mkdir -p "$(dirname "$binary_target")"
+    cp "$CORE_STAGED_BINARY" "$binary_temp"
+    chmod 755 "$binary_temp"
+    if [ -e "$binary_target" ]; then
+      mkdir -p "$BACKUP_DIR/scripts/bin"
+      cp -p "$binary_target" "$BACKUP_DIR/scripts/bin/harness"
+    fi
+    mv -f "$binary_temp" "$binary_target"
+    runner="$binary_target"
+    merge_core_gitignore "$TARGET_DIR/.gitignore"
+    log "installed scripts/bin/harness ($CORE_PLATFORM)"
+  fi
+  set +e
+  "$runner" "${args[@]}"
+  local command_status=$?
+  set -e
+  rm -rf "$CORE_STAGE_ROOT"
+  CORE_STAGE_ROOT=""
+  [ "$command_status" -eq 0 ] || fail "harness $command failed with exit code $command_status"
+}
+
 prepare_cli_identity() {
   CLI_PLATFORM="${HARNESS_CLI_PLATFORM:-$(detect_cli_platform)}"
   CLI_BINARY_NAME="harness-cli-$CLI_PLATFORM"
@@ -1038,6 +1155,8 @@ SOURCE_ROOT=""
 SOURCE_MODE="remote"
 SOURCE_BASE_URL="${HARNESS_SOURCE_BASE_URL:-https://raw.githubusercontent.com/hoangnb24/repository-harness/main}"
 SOURCE_BASE_URL="${SOURCE_BASE_URL%/}"
+CORE_SOURCE_BASE_URL="${HARNESS_CORE_SOURCE_BASE_URL:-https://raw.githubusercontent.com/hoangnb24/repository-harness/main}"
+CORE_SOURCE_BASE_URL="${CORE_SOURCE_BASE_URL%/}"
 PAYLOAD_MANIFEST="scripts/harness-install-files.txt"
 CLI_PAYLOAD_MANIFEST="scripts/harness-cli-install-files.txt"
 SCHEMA_DIR="scripts/schema"
@@ -1125,7 +1244,7 @@ else
 fi
 log "Target project: $TARGET_DIR"
 
-copy_manifest_files "$PAYLOAD_MANIFEST"
+install_harness_core
 
 refresh_agent_shim
 write_claude_shim

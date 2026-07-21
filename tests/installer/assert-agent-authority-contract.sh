@@ -19,12 +19,13 @@ cmp -s <(extract_block "$root/CLAUDE.md") "$claude_block"
 
 grep -Fq 'Start with the requested outcome' "$agent_block"
 grep -Fq 'Answers, explanations, reviews, diagnoses, plans, and status reports are' "$agent_block"
-grep -Fq 'No Harness CLI operation is required.' "$agent_block"
+grep -Fq 'No control-plane operation is required.' "$agent_block"
 grep -Fq 'docs/plans/active/' "$agent_block"
 grep -Fq 'identify repository authority for each new externally' "$agent_block"
 grep -Fq 'configurable defaults are not authority' "$agent_block"
 grep -Fq 'product intent remains ambiguous' "$agent_block"
 grep -Fq 'SQLite intake, story, trace, scoring, audit, and proposal commands are optional' "$agent_block"
+! grep -Fq '## Current Upstream Goal' "$root/AGENTS.md"
 ! grep -Fq 'scripts/bootstrap-harness.sh' "$agent_block"
 ! grep -Fq 'query matrix --active --summary' "$agent_block"
 ! grep -Fq 'lane- and task-specific context' "$agent_block"
@@ -32,7 +33,7 @@ grep -Fq 'SQLite intake, story, trace, scoring, audit, and proposal commands are
 
 # The only mandatory initial Harness context stays near the approximately
 # 1,000-word target. Everything else is retrieved because the task needs it.
-entry_words=$(awk '{ words += NF } END { print words }' "$root/AGENTS.md" "$workflow")
+entry_words=$(awk '{ words += NF } END { print words }' "$agent_block" "$workflow")
 [[ "$entry_words" -le 1000 ]]
 
 grep -Fq 'Does The Work Need Durable Memory?' "$workflow"

@@ -144,7 +144,7 @@ assert_no_control_plane_state
 # new mandatory map plus workflow is bounded to 1,000 words and uses zero
 # Harness commands for every bounded scenario above.
 entry_words=$(awk '{ words += NF } END { print words }' \
-  "$root/AGENTS.md" "$root/docs/WORKFLOW.md")
+  "$root/scripts/agent-harness-block.md" "$root/docs/WORKFLOW.md")
 [[ "$entry_words" -le 1000 ]]
 [[ "$entry_words" -lt 2413 ]]
 

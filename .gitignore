@@ -10,7 +10,9 @@ harness.db-shm
 target/
 dist/
 
-# Downloaded Harness CLI binary for installed project instances.
+# Downloaded Harness binaries for installed project instances.
+scripts/bin/harness
+scripts/bin/harness.exe
 scripts/bin/harness-cli
 scripts/bin/harness-cli.exe
 

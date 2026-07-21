@@ -10,7 +10,7 @@ code, and validation material relevant to the task.
   state.
 - For a bounded change, use an ephemeral plan: inspect the affected behavior and
   existing proof, implement the change, and run behavior-appropriate validation.
-  No Harness CLI operation is required.
+  No control-plane operation is required.
 - Create or update one file under `docs/plans/active/` when work spans sessions,
   needs coordination or an ordered sequence, has meaningful dependencies, or
   requires explicit recovery steps. Move it to `docs/plans/completed/` only
