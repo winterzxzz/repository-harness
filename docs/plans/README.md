@@ -33,11 +33,9 @@ or validation requirements. Keep local implementation choices in the plan.
 
 ## Active Plans
 
-- `active/phase-2-knowledge-boundary-and-payload-reduction.md`: separate the
-  small repository-centered core from the optional CLI compatibility bundle,
-  upstream-only material, and historical evidence without destructive removal.
+No active execution plans are currently indexed.
 
 ## Completed Plans
 
-See `completed/README.md`. Phase 1 workflow decoupling is retained there because
-it records a consequential source-of-truth and compatibility transition.
+See `completed/README.md`. Phase 1 and Phase 2 are retained there because they
+record consequential source-of-truth, payload, and compatibility transitions.

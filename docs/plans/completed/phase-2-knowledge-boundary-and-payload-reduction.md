@@ -4,9 +4,9 @@ Date: 2026-07-21
 
 ## Status
 
-Active — P2-01 through P2-06 are implemented and focused profile, rollback,
-documentation, and compatibility checks pass. Full clean-checkout validation
-and closure remain.
+Completed on 2026-07-21. The default is the ten-file repository-centered core;
+CLI compatibility is explicit, atomic, cross-platform validated, and preserved
+during ordinary core refreshes.
 
 ## Outcome
 
@@ -441,18 +441,24 @@ explicit CLI opt-in.
 
 ## Validation
 
-Focused proof to define during implementation:
+Focused proof passed:
 
-- Installer manifest classification and profile membership assertions.
-- Fresh core-only Bash and PowerShell fixtures.
-- Consumer README/architecture preservation fixtures.
-- Core dry-run no-download assertions.
-- Explicit CLI-bundle completeness and failed-download rollback fixtures.
-- Existing CLI refresh and immutable upgrade fixtures.
-- Documentation index, link, and stale-default-guidance checks.
-- Existing orchestration protocol and source-state compatibility checks.
+- `tests/installer/assert-install-manifest-links.sh` proves the exact ten-file
+  core, exact core-plus-CLI file set, safe/disjoint manifests, no default CLI
+  lookup, and valid installed links.
+- `tests/installer/test-install-harness-modes.sh` proves fresh, merge, override,
+  shim, dry-run, explicit CLI, checksum rollback, immutable upgrade, and
+  existing CLI/database preservation behavior on Bash.
+- `tests/installer/test-install-harness-modes.ps1` proves the equivalent Windows
+  profile, rollback, preservation, and upgrade behavior in CI.
+- `tests/installer/assert-agent-authority-contract.sh` and
+  `tests/docs/test-doc-contracts.sh` prove the compact authority and separated
+  current, compatibility, and historical discovery boundaries.
+- `scripts/test-install-harness-cli-upgrade.sh` and
+  `tests/installer/assert-consumer-changeset-trackable.sh` preserve the previous
+  immutable upgrade and consumer changeset contracts.
 
-Repository-required proof before completion:
+The repository-required command set passed:
 
 ```text
 tests/installer/assert-agent-authority-contract.sh
@@ -467,8 +473,19 @@ scripts/validate-premerge.sh
 git diff --check
 ```
 
-The final command set may change as the installer profiles are designed. Any
-replacement must prove the same behaviors rather than merely rename a check.
+`scripts/validate-premerge.sh` passed from a disposable checkout of commit
+`1fce67c` after reconstructing its ignored CLI and database from current source
+and tracked core state. The final committed state `c6d5705` then passed both
+jobs in [GitHub Actions run 29798147153](https://github.com/hoangnb24/repository-harness/actions/runs/29798147153):
+
+- Linux full pre-merge contract and initial-to-candidate CLI upgrade.
+- Windows PowerShell installer profiles, checksum rollback, state preservation,
+  bootstrap, and initial-to-candidate upgrade.
+
+The original working directory's full gate was not used as completion evidence
+because its ignored `harness.db` contains local intake rows beyond tracked core
+state. That file and the user's `harness.db.bk`/`scripts/bin/` paths were left
+untouched.
 
 ## Progress
 
@@ -488,7 +505,8 @@ replacement must prove the same behaviors rather than merely rename a check.
       and core refresh leaves an existing scripts tree and database untouched.
 - [x] P2-06: the installed current map and source-only compatibility,
       provenance, and decision indexes have separate authority.
-- [ ] P2-07: validate, record the result, and move this plan to completed.
+- [x] P2-07: focused, clean-checkout, Linux CI, and Windows CI evidence passes;
+      the result is recorded and this plan is archived.
 
 ## Decisions
 
@@ -514,5 +532,27 @@ replacement must prove the same behaviors rather than merely rename a check.
 
 ## Result
 
-Pending. This epic currently records the agreed Phase 2 direction and execution
-boundary only. Implementation has not started.
+Phase 2 is complete.
+
+Cause and effect:
+
+1. The default installer reads only `scripts/harness-install-files.txt`, so a
+   fresh consumer receives exactly ten core files and no CLI, schema, bootstrap,
+   database ignore rule, upstream README, or upstream architecture.
+2. `--with-cli` / `-WithCli` selects
+   `scripts/harness-cli-install-files.txt`, fourteen discovered migrations,
+   generated ignore rules, and a checksum-verified binary, so compatibility is
+   complete without competing with the default workflow.
+3. The compatibility inputs and binary are staged before target mutation and
+   prior files are snapshotted, so download, checksum, or apply failure restores
+   the old bundle while leaving the newly installed core usable.
+4. Core conflict detection excludes the scripts tree, so an ordinary core merge
+   or override leaves an existing CLI and database untouched.
+5. The installed map contains only current generic structure, while source-only
+   compatibility and provenance indexes retain deliberate access to older
+   behavior and evidence.
+
+No CLI commands, SQLite schemas, historical evidence, existing databases, or
+existing binaries were deleted. External automation that needs the CLI must now
+select the compatibility profile explicitly. Application legibility and agent
+behavior remain unmeasured and are deliberately not claimed as Phase 2 results.

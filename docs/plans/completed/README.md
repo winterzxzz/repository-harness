@@ -13,3 +13,6 @@ instead of creating permanent plan documents.
 - `phase-1-workflow-decoupling.md`: replaced the mandatory database-centered
   lifecycle with the repository-centered default workflow while preserving the
   prior control plane as a compatibility surface.
+- `phase-2-knowledge-boundary-and-payload-reduction.md`: made the default
+  installation a ten-file repository-centered core and moved the complete CLI,
+  SQLite, and orchestration surface behind explicit compatibility selection.
