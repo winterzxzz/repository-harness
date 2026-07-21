@@ -44,6 +44,7 @@ tests/docs/test-doc-contracts.sh
 tests/workflow/test-repository-workflow.sh
 tests/workflow/test-task-authority.sh
 tests/release/test-harness-release-workflow-contract.sh
+tests/release/test-harness-release-asset-inventory.sh
 tests/release/test-harness-release-identity-guard.sh
 tests/release/test-post-merge-release-recovery.sh
 
