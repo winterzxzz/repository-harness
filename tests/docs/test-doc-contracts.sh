@@ -39,17 +39,27 @@ for file in AGENTS.md docs/WORKFLOW.md docs/HARNESS.md docs/CONTEXT_RULES.md; do
   reject "$file" 'first run `scripts/bootstrap-harness.sh`'
 done
 
-# Durable plans and the governing decision are part of both source and the
-# fresh-install payload.
+# Durable planning and decision structure are part of both source and the
+# fresh core. Upstream decisions remain source-only.
 for file in \
+  docs/README.md \
+  docs/product/README.md \
   docs/plans/README.md \
   docs/plans/active/README.md \
   docs/plans/completed/README.md \
-  docs/templates/exec-plan.md \
-  docs/decisions/0019-repository-centered-default-workflow.md; do
+  docs/decisions/README.md \
+  docs/templates/decision.md \
+  docs/templates/exec-plan.md; do
   [[ -f "$root/$file" ]] || fail "missing repository artifact: $file"
   grep -Fxq "$file" "$root/scripts/harness-install-files.txt" ||
     fail "installer payload omits: $file"
+done
+for file in \
+  docs/decisions/0019-repository-centered-default-workflow.md \
+  docs/decisions/0020-installation-profiles-and-knowledge-boundaries.md \
+  docs/compatibility/README.md \
+  docs/provenance/README.md; do
+  [[ -f "$root/$file" ]] || fail "missing source-only artifact: $file"
 done
 
 for heading in Outcome Context Scope Approach 'Risks And Recovery' Progress Decisions Validation Result; do
@@ -70,6 +80,8 @@ for file in \
   docs/stories/README.md; do
   head -n 12 "$root/$file" | rg -Fq 'Compatibility' ||
     fail "$file lacks an early compatibility boundary"
+  grep -Fxq "$file" "$root/scripts/harness-cli-install-files.txt" ||
+    fail "CLI compatibility payload omits: $file"
 done
 
 require scripts/README.md 'Normal'
@@ -77,6 +89,11 @@ require scripts/README.md 'story row, matrix query, trace, score, audit, or prop
 require docs/ARCHITECTURE.md 'The upstream Harness product is implemented as a Rust workspace'
 require docs/ARCHITECTURE.md 'The reusable template does not select an application stack'
 require scripts/README.md 'Installed consumer projects keep their own stack-specific validation commands'
+require scripts/README.md 'By default the installer copies only the repository-centered core.'
+require docs/README.md '## Installed Core'
+require docs/README.md '## Optional Source Indexes'
+require docs/compatibility/README.md '## Install Boundary'
+require docs/provenance/README.md 'source evidence, not default task'
 
 for executable in \
   scripts/validate-premerge.sh \

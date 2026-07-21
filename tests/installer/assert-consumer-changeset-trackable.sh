@@ -9,9 +9,11 @@ source="$temp/source"
 assets="$temp/assets/$ref"
 consumer="$temp/consumer"
 platform=fixture-platform
-mkdir -p "$source/scripts" "$assets" "$consumer"
-printf '%s\n' '.gitignore' >"$source/scripts/harness-install-files.txt"
-cp "$root/.gitignore" "$source/.gitignore"
+mkdir -p "$source/scripts/schema" "$assets" "$consumer"
+printf '%s\n' 'AGENTS.md' >"$source/scripts/harness-install-files.txt"
+printf '%s\n' '# fixture compatibility files' >"$source/scripts/harness-cli-install-files.txt"
+printf '%s\n' '# fixture agents' >"$source/AGENTS.md"
+printf '%s\n' 'SELECT 1;' >"$source/scripts/schema/001-fixture.sql"
 printf '%s\n' '#!/usr/bin/env sh' 'exit 0' >"$assets/harness-cli-$platform"
 chmod 755 "$assets/harness-cli-$platform"
 (cd "$assets" && shasum -a 256 "harness-cli-$platform" >"harness-cli-$platform.sha256")
@@ -20,7 +22,7 @@ HARNESS_SOURCE_BASE_URL="file://$source" \
 HARNESS_CLI_BASE_URL="file://$assets" \
 HARNESS_CLI_PLATFORM="$platform" \
 HARNESS_CLI_RELEASE_TAG="$ref" \
-  "$root/scripts/install-harness.sh" --directory "$consumer" --yes >/dev/null
+  "$root/scripts/install-harness.sh" --directory "$consumer" --with-cli --yes >/dev/null
 
 git -C "$consumer" init -q
 git -C "$consumer" config user.name fixture

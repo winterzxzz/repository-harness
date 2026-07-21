@@ -28,14 +28,23 @@ function Invoke-Install([string]$Directory, [string[]]$Mode = @()) {
 try {
     $Fresh = Join-Path $Temp "fresh"
     Invoke-Install $Fresh
-    if (!(Test-Path (Join-Path $Fresh "scripts/bin/harness-cli.exe"))) { throw "fresh CLI missing" }
+    if (Test-Path (Join-Path $Fresh "scripts/bin/harness-cli.exe")) { throw "default core installed CLI" }
+    if (Test-Path (Join-Path $Fresh "scripts/schema")) { throw "default core installed schemas" }
+    if (Test-Path (Join-Path $Fresh ".gitignore")) { throw "default core wrote CLI ignore rules" }
     if (Test-Path (Join-Path $Fresh "harness.db")) { throw "fresh install initialized local DB" }
     if (!(Test-Path (Join-Path $Fresh "docs/WORKFLOW.md"))) { throw "fresh workflow missing" }
     if (!(Test-Path (Join-Path $Fresh "docs/plans/active/README.md"))) { throw "fresh active-plan path missing" }
     if (!(Test-Path (Join-Path $Fresh "docs/templates/exec-plan.md"))) { throw "fresh execution-plan template missing" }
     if (!(Get-Content -Raw (Join-Path $Fresh "AGENTS.md")).Contains("No Harness CLI operation is required.")) { throw "fresh default still requires control-plane commands" }
-    if ((Get-ChildItem (Join-Path $Fresh "scripts/schema") -Filter "*.sql").Count -ne
+
+    $Full = Join-Path $Temp "full"
+    Invoke-Install $Full @("WithCli")
+    if (!(Test-Path (Join-Path $Full "scripts/bin/harness-cli.exe"))) { throw "explicit CLI missing" }
+    if (!(Test-Path (Join-Path $Full "scripts/bootstrap-harness.ps1"))) { throw "CLI bootstrap missing" }
+    if (!(Test-Path (Join-Path $Full "docs/contracts/harness-orchestration-v1.md"))) { throw "CLI protocol contract missing" }
+    if ((Get-ChildItem (Join-Path $Full "scripts/schema") -Filter "*.sql").Count -ne
         (Get-ChildItem (Join-Path $Root "scripts/schema") -Filter "*.sql").Count) { throw "schema count differs" }
+    if (!(Get-Content -Raw (Join-Path $Full ".gitignore")).Contains("harness.db")) { throw "CLI ignore rules missing" }
 
     $Merge = Join-Path $Temp "merge"
     New-Item -ItemType Directory -Force (Join-Path $Merge "docs"), (Join-Path $Merge "scripts/custom") | Out-Null
@@ -45,7 +54,9 @@ try {
     Invoke-Install $Merge @("Merge")
     if ((Get-Content -Raw (Join-Path $Merge "AGENTS.md")).Trim() -ne "project agents") { throw "merge replaced AGENTS" }
     if ((Get-Content -Raw (Join-Path $Merge "docs/HARNESS.md")).Trim() -ne "project harness") { throw "merge replaced docs" }
-    if (!(Test-Path (Join-Path $Merge "docs/ARCHITECTURE.md"))) { throw "merge did not fill missing payload" }
+    if (!(Test-Path (Join-Path $Merge "docs/WORKFLOW.md"))) { throw "merge did not fill core payload" }
+    if (Test-Path (Join-Path $Merge "docs/ARCHITECTURE.md")) { throw "core merge installed upstream architecture" }
+    if (Test-Path (Join-Path $Merge "scripts/bin/harness-cli.exe")) { throw "core merge installed CLI" }
 
     $Override = Join-Path $Temp "override"
     New-Item -ItemType Directory -Force (Join-Path $Override "docs"), (Join-Path $Override "scripts") | Out-Null
@@ -56,6 +67,7 @@ try {
     $Backup = Get-ChildItem (Join-Path $Override ".harness-backup") -Directory | Select-Object -First 1
     if (!(Test-Path (Join-Path $Backup.FullName "docs/private.md"))) { throw "override docs backup missing" }
     if (Test-Path (Join-Path $Override "docs/private.md")) { throw "override leaked old docs" }
+    if ((Get-Content -Raw (Join-Path $Override "scripts/private.ps1")).Trim() -ne "old scripts") { throw "core override changed scripts" }
 
     $Shim = Join-Path $Temp "shim"
     New-Item -ItemType Directory -Force (Join-Path $Shim "docs"), (Join-Path $Shim "scripts") | Out-Null
@@ -67,6 +79,30 @@ try {
     $Dry = Join-Path $Temp "dry"
     & $Installer -Directory $Dry -Yes -DryRun | Out-Null
     if (Test-Path $Dry) { throw "dry-run wrote target" }
+
+    $CliDry = Join-Path $Temp "cli-dry"
+    & $Installer -Directory $CliDry -Yes -WithCli -DryRun | Out-Null
+    if (Test-Path $CliDry) { throw "CLI dry-run wrote target" }
+
+    $BadAssets = Join-Path $Temp "bad-assets"
+    New-Item -ItemType Directory -Force $BadAssets | Out-Null
+    Copy-Item $CandidateArtifact (Join-Path $BadAssets $AssetName)
+    "bad-checksum" | Set-Content -Encoding ascii (Join-Path $BadAssets "$AssetName.sha256")
+    $GoodBaseUrl = $env:HARNESS_CLI_BASE_URL
+    $env:HARNESS_CLI_BASE_URL = ([uri](Resolve-Path $BadAssets).Path).AbsoluteUri.TrimEnd("/")
+    $Failed = Join-Path $Temp "failed-cli"
+    try {
+        & $Installer -Directory $Failed -Yes -WithCli | Out-Null
+        throw "installer unexpectedly accepted bad CLI checksum"
+    } catch {
+        if ($_.Exception.Message -eq "installer unexpectedly accepted bad CLI checksum") { throw }
+    } finally {
+        $env:HARNESS_CLI_BASE_URL = $GoodBaseUrl
+    }
+    if (!(Test-Path (Join-Path $Failed "AGENTS.md"))) { throw "failed CLI removed usable core" }
+    if (Test-Path (Join-Path $Failed "docs/FEATURE_INTAKE.md")) { throw "failed CLI left compatibility docs" }
+    if (Test-Path (Join-Path $Failed "scripts/bootstrap-harness.ps1")) { throw "failed CLI left bootstrap" }
+    if (Test-Path (Join-Path $Failed ".gitignore")) { throw "failed CLI left ignore rules" }
 
     if ($InitialArtifact) {
         $InitialArtifact = (Resolve-Path $InitialArtifact).Path
@@ -95,7 +131,7 @@ try {
         Write-Host "candidate tuple: template_ref=$CandidateRef binary_version=$BinaryVersion binary_sha256=$CandidateHash"
     }
 
-    Write-Host "PowerShell installer fresh, merge, override, shim-refresh, dry-run, and candidate upgrade modes passed"
+    Write-Host "PowerShell core/CLI profiles, merge, override, shim, rollback, dry-run, and upgrade modes passed"
 }
 finally {
     Remove-Item Env:HARNESS_CLI_BASE_URL -ErrorAction SilentlyContinue

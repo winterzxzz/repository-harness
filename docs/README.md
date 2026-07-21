@@ -1,57 +1,37 @@
 # Documentation Map
 
-The repository is the system of record. Start with a small map and follow only
-the sources relevant to the task.
+Start with the smallest current map. Retrieve compatibility, historical, or
+upstream-maintenance material only when the task explicitly needs it.
 
-## Current Workflow
+## Installed Core
 
-- `WORKFLOW.md`: canonical read-only, bounded-change, durable-plan, judgment,
-  validation, and completion behavior.
-- `HARNESS.md`: Harness goals, responsibilities, source hierarchy, and consumer
-  boundary.
-- `CONTEXT_RULES.md`: progressive retrieval and task-triggered context.
+- `WORKFLOW.md`: canonical request, planning, judgment, validation, and
+  completion behavior.
+- `product/`: consumer-owned product behavior derived from accepted intent.
+- `plans/`: one evolving Git-native plan for work that needs durable memory.
+- `decisions/`: lasting product and architecture choices.
+- `templates/decision.md`: lasting-decision template.
+- `templates/exec-plan.md`: durable execution-plan template.
 
-## Product And Design Truth
+These files are generic Harness structure. They do not select an application
+stack, replace a consumer README or architecture, fabricate validation
+commands, or require a CLI/database lifecycle.
 
-- Root `README.md`: upstream Harness product and distribution contract.
-- `product/`: consumer product behavior derived from real accepted intent.
-- `ARCHITECTURE.md`: architecture discovery, boundaries, and structural rules.
-- `decisions/`: indexed lasting product and architecture decisions.
-- `GLOSSARY.md`: current and compatibility terminology.
+## Consumer-Owned Truth
 
-## Work And Operations
+The consumer repository's own README, architecture, code, tests, CI, runtime
+signals, and application behavior remain authoritative. Harness adds navigation
+and working-memory structure around that truth; it does not install upstream
+`repository-harness` product documents over it.
 
-- `plans/active/`: complex work currently in progress.
-- `plans/completed/`: retained execution history.
-- `templates/exec-plan.md`: the single default durable-plan template.
-- `WORKTREE_CONFLICTS.md`: source-state conflict diagnosis and recovery.
-- `scripts/README.md`: upstream development, validation, installer, release,
-  snapshot, and compatibility commands.
-- `contracts/`: versioned contracts for optional external orchestrators.
+## Optional Source Indexes
 
-## Compatibility References
+The following material is deliberately outside the default installation:
 
-The implemented Rust CLI and SQLite control plane remain supported, but their
-lifecycle is not the default repository workflow:
+- [CLI compatibility index](https://github.com/hoangnb24/repository-harness/blob/main/docs/compatibility/README.md): SQLite lifecycle, orchestration protocol, bootstrap, schemas, and CLI maintenance.
+- [Historical index](https://github.com/hoangnb24/repository-harness/blob/main/docs/provenance/README.md): superseded decisions, story-era evidence, reviews, and migration provenance.
+- [Upstream repository](https://github.com/hoangnb24/repository-harness): Rust implementation, installer, release, and maintenance truth.
 
-- `FEATURE_INTAKE.md`
-- `TEST_MATRIX.md`
-- `TRACE_SPEC.md`
-- `HARNESS_AUDIT.md`
-- `HARNESS_BACKLOG.md`
-- `HARNESS_COMPONENTS.md`
-- `HARNESS_MATURITY.md`
-- `IMPROVEMENT_PROTOCOL.md`
-- `TOOL_REGISTRY.md`
-- `stories/` and the legacy story templates
-
-These documents may be needed for historical state, CLI maintenance, or
-external orchestration. They cannot make control-plane writes mandatory for an
-ordinary task.
-
-## Consumer Boundary
-
-The upstream repository implements the Harness CLI, installers, tests, and
-release automation. Installed consumers receive the generic workflow and
-knowledge structure but do not receive a fabricated application stack, product
-contract, or validation suite.
+Selecting the optional CLI profile installs the compatibility material required
+to operate that surface. Historical and upstream-only material remains in the
+source repository and Git history.

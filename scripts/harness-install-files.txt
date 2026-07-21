@@ -1,60 +1,12 @@
-# Harness installer payload.
-# Add new files here once; Bash and PowerShell installers both read this list.
-# Schema migrations are discovered automatically from scripts/schema/*.sql.
+# Default Harness core payload.
+# Keep this profile generic, repository-centered, and free of CLI/SQLite files.
 AGENTS.md
-README.md
-docs/ARCHITECTURE.md
-docs/CONTEXT_RULES.md
-docs/FEATURE_INTAKE.md
-docs/GLOSSARY.md
-docs/HARNESS.md
-docs/HARNESS_AUDIT.md
-docs/HARNESS_BACKLOG.md
-docs/HARNESS_COMPONENTS.md
-docs/HARNESS_MATURITY.md
-docs/IMPROVEMENT_PROTOCOL.md
-docs/README.md
-docs/TEST_MATRIX.md
-docs/TOOL_REGISTRY.md
-docs/TRACE_SPEC.md
 docs/WORKFLOW.md
-docs/WORKTREE_CONFLICTS.md
-docs/decisions/0001-harness-first-development.md
-docs/decisions/0002-post-spec-product-lifecycle.md
-docs/decisions/0003-generic-spec-intake-harness.md
-docs/decisions/0004-sqlite-durable-layer.md
-docs/decisions/0005-prebuilt-rust-harness-cli.md
-docs/decisions/0006-phase-4-benchmark-triage.md
-docs/decisions/0007-improvement-proposal-rules.md
-docs/decisions/0011-reproducible-core-state.md
-docs/decisions/0019-repository-centered-default-workflow.md
-docs/decisions/README.md
-docs/demo/README.md
-docs/contracts/harness-orchestration-v1.md
+docs/README.md
 docs/product/README.md
 docs/plans/README.md
 docs/plans/active/README.md
 docs/plans/completed/README.md
-docs/stories/README.md
-docs/stories/backlog.md
+docs/decisions/README.md
 docs/templates/decision.md
 docs/templates/exec-plan.md
-docs/templates/spec-intake.md
-docs/templates/story.md
-docs/templates/validation-report.md
-docs/templates/high-risk-story/design.md
-docs/templates/high-risk-story/execplan.md
-docs/templates/high-risk-story/overview.md
-docs/templates/high-risk-story/validation.md
-scripts/README.md
-scripts/agent-harness-block.md
-scripts/bootstrap-harness.sh
-scripts/bootstrap-harness.ps1
-scripts/materialize-core-state.sh
-scripts/materialize-core-state.ps1
-scripts/verify-core-snapshot.sh
-scripts/publish-core-snapshot.sh
-scripts/verify-materialized-core-parity.sh
-scripts/claude-harness-block.md
-scripts/harness-cli-release-tag
-.gitignore

@@ -246,16 +246,20 @@ application source folders, package scripts, CI, tests, platform shells, or fake
 validation commands. The installer script is not part of the installed project
 payload.
 
-The file payload is declared once in `scripts/harness-install-files.txt` and is
-read by both the Bash and PowerShell installers. Add new Harness docs,
-templates, or decisions there instead of duplicating file lists in each
-installer. Schema migrations are different: both installers discover
-`scripts/schema/*.sql` automatically from the source repository, so adding a
-new migration only requires committing the SQL file.
+The default core payload is declared in
+`scripts/harness-install-files.txt`. The optional static CLI payload is declared
+in `scripts/harness-cli-install-files.txt`. Both platform installers read both
+manifests; do not duplicate file lists in installer code. Schema migrations are
+members of the CLI profile and are discovered from `scripts/schema/*.sql`, so a
+new migration requires only the SQL file.
 
-By default the installer also downloads the prebuilt Rust Harness CLI for the
-current platform into `scripts/bin/harness-cli` on macOS/Linux or
-`scripts/bin/harness-cli.exe` on Windows, then verifies its `.sha256` checksum.
+By default the installer copies only the repository-centered core. It performs
+no CLI download, schema discovery, bootstrap installation, or database ignore
+write. Select `--with-cli` (PowerShell: `-WithCli`) to stage the complete CLI
+compatibility bundle and download the prebuilt Rust executable into
+`scripts/bin/harness-cli` on macOS/Linux or `scripts/bin/harness-cli.exe` on
+Windows after verifying its `.sha256` checksum.
+
 A source branch can pin the release used by the installer through
 `scripts/harness-cli-release-tag`; Phase 3 pins `harness-cli-v0.1.4` so branch
 installs receive a Phase 3-built CLI. Set `HARNESS_CLI_RELEASE_TAG` to override
@@ -264,6 +268,7 @@ directory, such as a local `file:///.../dist` directory created by
 `scripts/build-harness-cli-release.sh`.
 
 `--merge` (PowerShell: `-Merge`) deliberately does not replace an existing CLI.
+An ordinary core merge or override does not touch the scripts tree at all.
 To upgrade a CLI explicitly, pin one immutable tag for both the template files
 and release artifact:
 

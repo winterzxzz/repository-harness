@@ -99,6 +99,11 @@ Use `--merge` / `-Merge` to add missing Harness files without replacing
 existing project files. Use `--override` / `-Override` only when replacement is
 intentional. Use `--dry-run` / `-DryRun` to preview writes.
 
+The default installation is the small repository-centered core. It does not
+download a CLI, discover schemas, install bootstrap scripts, or add database
+ignore rules. It also does not copy this upstream repository's README or
+architecture over consumer-owned product truth.
+
 For an older installation with a generated, long `AGENTS.md`, refresh it to the
 small marked block:
 
@@ -109,10 +114,6 @@ curl -fsSL "https://raw.githubusercontent.com/hoangnb24/repository-harness/main/
 For Claude Code, add `--claude` (PowerShell: `-Claude`). This creates or updates
 a marked block in `CLAUDE.md` that imports `AGENTS.md`; existing local
 instructions are preserved and backed up before changes.
-
-The installer also places the checksum-verified Harness CLI under
-`scripts/bin/`. That CLI supports the legacy SQLite orchestration contract, but
-the repository-centered workflow does not require bootstrapping or using it.
 
 ## Try The Flow
 
@@ -134,7 +135,17 @@ improvement proposals, and orchestration contract remain supported for an
 external runner or team that explicitly selects them. They are not
 prerequisites for ordinary repository work.
 
-To use that compatibility layer, bootstrap its ignored local database:
+Install that complete compatibility bundle explicitly:
+
+```bash
+scripts/install-harness.sh --with-cli --yes /path/to/project
+```
+
+```powershell
+./scripts/Install-Harness.ps1 -WithCli -Yes -Directory C:\path\to\project
+```
+
+Then bootstrap its ignored local database:
 
 ```bash
 scripts/bootstrap-harness.sh
@@ -146,7 +157,7 @@ scripts/bootstrap-harness.sh
 
 Then use `scripts/bin/harness-cli` (or the Windows `.exe`). See
 [`scripts/README.md`](scripts/README.md) and
-[`docs/contracts/harness-orchestration-v1.md`](docs/contracts/harness-orchestration-v1.md).
+the [`compatibility index`](docs/compatibility/README.md).
 One independent consumer is
 [Symphony](https://github.com/hoangnb24/symphony); it is not installed as part
 of this repository.

@@ -45,24 +45,32 @@ grep -Fq 'ordinary repository task' "$root/docs/HARNESS.md"
 
 for payload in \
   docs/WORKFLOW.md \
+  docs/README.md \
+  docs/product/README.md \
   docs/plans/README.md \
   docs/plans/active/README.md \
   docs/plans/completed/README.md \
-  docs/templates/exec-plan.md \
-  scripts/agent-harness-block.md \
-  scripts/claude-harness-block.md; do
+  docs/decisions/README.md \
+  docs/templates/decision.md \
+  docs/templates/exec-plan.md; do
   grep -Fxq "$payload" "$root/scripts/harness-install-files.txt"
+done
+
+for source_only in scripts/agent-harness-block.md scripts/claude-harness-block.md; do
+  ! grep -Fxq "$source_only" "$root/scripts/harness-install-files.txt"
 done
 
 grep -Fq 'read_source_text "scripts/agent-harness-block.md"' "$root/scripts/install-harness.sh"
 grep -Fq 'read_source_text "scripts/claude-harness-block.md"' "$root/scripts/install-harness.sh"
 grep -Fq 'REFRESH_AGENT_SHIM=1' "$root/scripts/install-harness.sh"
+grep -Fq 'CLI_PAYLOAD_MANIFEST="scripts/harness-cli-install-files.txt"' "$root/scripts/install-harness.sh"
 ! grep -Fq "cat <<'EOF'" <(sed -n '/agent_shim_block()/,/^}/p' "$root/scripts/install-harness.sh")
 
 # PowerShell is asserted statically on hosts without pwsh. Runtime coverage is
 # provided by test-install-harness-modes.ps1 in the Windows release job.
 grep -Fq 'Read-SourceText "scripts/agent-harness-block.md"' "$root/scripts/install-harness.ps1"
 grep -Fq '$RefreshAgentShim = $true' "$root/scripts/install-harness.ps1"
+grep -Fq '$script:CliPayloadManifest = "scripts/harness-cli-install-files.txt"' "$root/scripts/install-harness.ps1"
 grep -Fq 'Assert-HarnessMarkers $content "AGENTS.md"' "$root/scripts/install-harness.ps1"
 ! grep -Fq '<!-- HARNESS:BEGIN -->' <(sed -n '/function Get-AgentShimBlock/,/^}/p' "$root/scripts/install-harness.ps1")
 

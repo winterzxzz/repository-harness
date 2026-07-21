@@ -1,0 +1,25 @@
+# Optional Harness CLI compatibility payload.
+# Schemas and the platform binary are discovered/staged separately.
+docs/FEATURE_INTAKE.md
+docs/GLOSSARY.md
+docs/HARNESS_AUDIT.md
+docs/HARNESS_BACKLOG.md
+docs/HARNESS_COMPONENTS.md
+docs/HARNESS_MATURITY.md
+docs/IMPROVEMENT_PROTOCOL.md
+docs/TEST_MATRIX.md
+docs/TOOL_REGISTRY.md
+docs/TRACE_SPEC.md
+docs/contracts/harness-orchestration-v1.md
+docs/stories/README.md
+docs/stories/backlog.md
+docs/templates/spec-intake.md
+docs/templates/story.md
+docs/templates/validation-report.md
+docs/templates/high-risk-story/design.md
+docs/templates/high-risk-story/execplan.md
+docs/templates/high-risk-story/overview.md
+docs/templates/high-risk-story/validation.md
+scripts/bootstrap-harness.sh
+scripts/bootstrap-harness.ps1
+scripts/harness-cli-release-tag

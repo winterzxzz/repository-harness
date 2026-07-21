@@ -27,19 +27,17 @@ extract_block() {
   ' "$1"
 }
 
-# Fresh mode produces the full declared payload, all migrations, ignored local
-# DB state, and the platform CLI without initializing an opaque database.
+# Fresh default mode produces exactly the small core. It performs no CLI,
+# schema, bootstrap, or database-ignore work.
 fresh="$temp/fresh"
 install --directory "$fresh" --yes >"$temp/fresh.out"
-[[ -x "$fresh/scripts/bin/harness-cli" ]]
-[[ -x "$fresh/scripts/bootstrap-harness.sh" ]]
-[[ -f "$fresh/scripts/bootstrap-harness.ps1" ]]
-[[ -f "$fresh/scripts/harness-cli-release-tag" ]]
+! grep -Fq 'download harness-cli-' "$temp/fresh.out"
+grep -Fq 'Harness profile: core' "$temp/fresh.out"
+[[ ! -e "$fresh/scripts/bin/harness-cli" ]]
+[[ ! -e "$fresh/scripts/bootstrap-harness.sh" ]]
+[[ ! -e "$fresh/scripts/schema" ]]
+[[ ! -e "$fresh/.gitignore" ]]
 [[ ! -e "$fresh/harness.db" ]]
-[[ "$(find "$fresh/scripts/schema" -type f -name '*.sql' | wc -l | tr -d ' ')" == \
-    "$(find "$root/scripts/schema" -type f -name '*.sql' | wc -l | tr -d ' ')" ]]
-git -C "$fresh" init -q
-git -C "$fresh" check-ignore -q harness.db
 cmp -s <(extract_block "$fresh/AGENTS.md") "$root/scripts/agent-harness-block.md"
 [[ -f "$fresh/docs/WORKFLOW.md" ]]
 [[ -f "$fresh/docs/plans/active/README.md" ]]
@@ -47,6 +45,25 @@ cmp -s <(extract_block "$fresh/AGENTS.md") "$root/scripts/agent-harness-block.md
 [[ -f "$fresh/docs/templates/exec-plan.md" ]]
 grep -Fq 'No Harness CLI operation is required.' "$fresh/AGENTS.md"
 ! grep -Fq 'query matrix --active --summary' "$fresh/AGENTS.md"
+find "$fresh" -type f | sed "s#^$fresh/##" | sort >"$temp/fresh-files"
+sed -e '/^\s*#/d' -e '/^\s*$/d' "$root/scripts/harness-install-files.txt" | sort >"$temp/core-files"
+cmp -s "$temp/fresh-files" "$temp/core-files"
+
+# Explicit CLI selection adds the complete compatibility bundle, migrations,
+# ignore rules, and verified binary without initializing a database.
+full="$temp/full"
+install --directory "$full" --with-cli --yes >"$temp/full.out"
+grep -Fq 'Harness profile: core+cli' "$temp/full.out"
+[[ -x "$full/scripts/bin/harness-cli" ]]
+[[ -x "$full/scripts/bootstrap-harness.sh" ]]
+[[ -f "$full/scripts/bootstrap-harness.ps1" ]]
+[[ -f "$full/scripts/harness-cli-release-tag" ]]
+[[ -f "$full/docs/contracts/harness-orchestration-v1.md" ]]
+[[ "$(find "$full/scripts/schema" -type f -name '*.sql' | wc -l | tr -d ' ')" == \
+    "$(find "$root/scripts/schema" -type f -name '*.sql' | wc -l | tr -d ' ')" ]]
+git -C "$full" init -q
+git -C "$full" check-ignore -q harness.db
+[[ ! -e "$full/harness.db" ]]
 
 # Claude generation keeps custom instructions and imports only the canonical
 # AGENTS authority instead of restating workflow or compatibility policy.
@@ -72,9 +89,11 @@ install --directory "$merge" --merge --yes >"$temp/merge.out"
 [[ "$(shasum -a 256 "$merge/AGENTS.md" | awk '{print $1}')" == "$before_agents" ]]
 [[ "$(shasum -a 256 "$merge/docs/HARNESS.md" | awk '{print $1}')" == "$before_doc" ]]
 grep -Fxq 'custom script' "$merge/scripts/custom/keep.txt"
-[[ -f "$merge/docs/ARCHITECTURE.md" && -x "$merge/scripts/bin/harness-cli" ]]
+[[ -f "$merge/docs/WORKFLOW.md" ]]
+[[ ! -e "$merge/docs/ARCHITECTURE.md" && ! -e "$merge/scripts/bin/harness-cli" ]]
 
-# Override moves every protected tree to one backup before installing cleanly.
+# Core override moves only the paths it owns; an existing scripts tree remains
+# untouched when CLI compatibility was not selected.
 override="$temp/override"
 mkdir -p "$override/docs" "$override/scripts"
 printf 'old agents\n' >"$override/AGENTS.md"
@@ -84,9 +103,9 @@ install --directory "$override" --override --yes >"$temp/override.out"
 backup=$(find "$override/.harness-backup" -mindepth 1 -maxdepth 1 -type d | head -n 1)
 grep -Fxq 'old agents' "$backup/AGENTS.md"
 grep -Fxq 'old docs' "$backup/docs/private.md"
-grep -Fxq 'old scripts' "$backup/scripts/private.sh"
-[[ ! -e "$override/docs/private.md" && ! -e "$override/scripts/private.sh" ]]
-[[ -f "$override/docs/HARNESS.md" && -x "$override/scripts/bin/harness-cli" ]]
+[[ ! -e "$override/docs/private.md" ]]
+[[ -f "$override/docs/WORKFLOW.md" && ! -e "$override/docs/HARNESS.md" ]]
+grep -Fxq 'old scripts' "$override/scripts/private.sh"
 
 # Shim refresh keeps custom instructions, replaces the legacy guide, and backs
 # up the exact prior AGENTS.md.
@@ -151,9 +170,37 @@ grep -Fq 'exactly one complete Harness marker pair' "$temp/malformed.out"
 
 # Dry-run reports the complete intent but creates neither target nor binary.
 dry="$temp/dry-run-target"
-install --directory "$dry" --dry-run --yes >"$temp/dry.out"
+HARNESS_CLI_BASE_URL="file://$temp/does-not-exist" \
+  install --directory "$dry" --dry-run --yes >"$temp/dry.out"
 [[ ! -e "$dry" ]]
 grep -Fq 'Dry run: no files will be written.' "$temp/dry.out"
-grep -Fq 'download harness-cli-fixture-platform -> scripts/bin/harness-cli' "$temp/dry.out"
+grep -Fq 'Harness profile: core' "$temp/dry.out"
+! grep -Fq 'download harness-cli-fixture-platform -> scripts/bin/harness-cli' "$temp/dry.out"
+! grep -Fq '.gitignore (append harness rules)' "$temp/dry.out"
 
-echo "Bash installer fresh, merge, override, canonical shims, upgrade refresh, and dry-run modes passed"
+cli_dry="$temp/cli-dry-run-target"
+install --directory "$cli_dry" --with-cli --dry-run --yes >"$temp/cli-dry.out"
+[[ ! -e "$cli_dry" ]]
+grep -Fq 'Harness profile: core+cli' "$temp/cli-dry.out"
+grep -Fq 'download harness-cli-fixture-platform -> scripts/bin/harness-cli' "$temp/cli-dry.out"
+grep -Fq '.gitignore (append harness rules)' "$temp/cli-dry.out"
+
+# A bad candidate is rejected before any compatibility member reaches the
+# target. The already-installed core remains usable.
+bad_assets="$temp/bad-assets"
+mkdir -p "$bad_assets"
+cp "$assets/harness-cli-$platform" "$bad_assets/harness-cli-$platform"
+printf 'bad-checksum\n' >"$bad_assets/harness-cli-$platform.sha256"
+failed="$temp/failed-cli"
+if HARNESS_CLI_BASE_URL="file://$bad_assets" HARNESS_CLI_PLATFORM="$platform" \
+  "$installer" --directory "$failed" --with-cli --yes >"$temp/failed-cli.out" 2>&1; then
+  echo "installer unexpectedly accepted a bad CLI checksum" >&2
+  exit 1
+fi
+[[ -f "$failed/AGENTS.md" && -f "$failed/docs/WORKFLOW.md" ]]
+[[ ! -e "$failed/docs/FEATURE_INTAKE.md" ]]
+[[ ! -e "$failed/scripts/bootstrap-harness.sh" ]]
+[[ ! -e "$failed/scripts/bin/harness-cli" ]]
+[[ ! -e "$failed/.gitignore" ]]
+
+echo "Bash core/CLI profiles, merge, override, shims, upgrade, rollback, and dry-run modes passed"

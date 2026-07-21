@@ -4,8 +4,9 @@ Date: 2026-07-21
 
 ## Status
 
-Active — planning only. No installer default, payload, CLI, compatibility, or
-historical path has changed.
+Active — P2-01 through P2-06 are implemented and focused profile, rollback,
+documentation, and compatibility checks pass. Full clean-checkout validation
+and closure remain.
 
 ## Outcome
 
@@ -273,6 +274,12 @@ Exit evidence:
 - A fresh core-only fixture contains exactly the reviewed core payload.
 - Existing full-install and upgrade behavior remains unchanged.
 
+Implementation note: the core-only preview was exercised as an isolated branch
+fixture before the default assertion was changed. No redundant `--without-cli`
+flag remains in the final interface: omitting `--with-cli` is the core profile.
+Phase 1 supplied the compatibility window by retaining the full installed CLI
+after removing it from the documented default workflow.
+
 ### P2-04 — Make The CLI An Atomic Optional Bundle
 
 Depends on: P2-01 and P2-03.
@@ -473,10 +480,14 @@ replacement must prove the same behaviors rather than merely rename a check.
       installed path has a primary classification.
 - [x] P2-02: the reviewed ten-file minimal core and complete CLI transitive
       boundary are defined above.
-- [ ] P2-03: add the reversible core-only preview.
-- [ ] P2-04: make the CLI an atomic optional bundle.
-- [ ] P2-05: make core-only the default after the compatibility window.
-- [ ] P2-06: separate current, compatibility, and historical discovery.
+- [x] P2-03: isolated Bash and PowerShell fixtures define and exercise the exact
+      core-only payload and dry-run behavior.
+- [x] P2-04: `--with-cli` / `-WithCli` selects a staged, checksum-verified,
+      rollback-protected compatibility bundle; explicit upgrade implies it.
+- [x] P2-05: core-only is the fresh default, CLI/database writes require opt-in,
+      and core refresh leaves an existing scripts tree and database untouched.
+- [x] P2-06: the installed current map and source-only compatibility,
+      provenance, and decision indexes have separate authority.
 - [ ] P2-07: validate, record the result, and move this plan to completed.
 
 ## Decisions
@@ -497,6 +508,9 @@ replacement must prove the same behaviors rather than merely rename a check.
 - 2026-07-21: The core includes `docs/templates/decision.md` in addition to the
   initial candidate list because the installed decision index directly requires
   that template.
+- 2026-07-21: Do not retain a redundant `--without-cli` / `-WithoutCli` alias
+  after the default flip. The absence of CLI selection is the core profile, and
+  the isolated installer fixtures preserve preview evidence.
 
 ## Result
 
