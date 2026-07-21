@@ -124,7 +124,7 @@ jobs:
           dist/${{ matrix.binary }} doctor --directory $root
       - uses: actions/upload-artifact@v4
         with:
-          name: harness-${{ matrix.platform }}
+          name: harness-core-${{ matrix.platform }}
           path: |
             dist/${{ matrix.binary }}
             dist/${{ matrix.binary }}.sha256
@@ -148,9 +148,12 @@ jobs:
           fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
-          pattern: harness-*
+          pattern: harness-core-*
           merge-multiple: true
           path: dist
+      - name: Verify exact core artifact inventory before tag promotion
+        shell: bash
+        run: scripts/verify-harness-release-assets.sh dist
       - name: Reverify every checksum
         shell: bash
         run: |

@@ -18,7 +18,13 @@ grep -Fq 'scripts/build-harness-release.sh' "$release"
 grep -Fq 'scripts/verify-harness-release-identity.sh' "$release"
 grep -Fq 'scripts/promote-harness-release-tag.sh' "$release"
 grep -Fq -- '--verify-tag' "$release"
-grep -Fq 'pattern: harness-*' "$release"
+grep -Fq 'name: harness-core-${{ matrix.platform }}' "$release"
+grep -Fq 'pattern: harness-core-*' "$release"
+! grep -Fq 'pattern: harness-*' "$release"
+inventory_line=$(grep -n 'Verify exact core artifact inventory before tag promotion' "$release" | cut -d: -f1)
+promotion_line=$(grep -n 'Promote proven source to immutable tag' "$release" | cut -d: -f1)
+[[ -n "$inventory_line" && "$inventory_line" -lt "$promotion_line" ]]
+grep -Fq 'scripts/verify-harness-release-assets.sh dist' "$release"
 grep -Fq 'test "$(gh release view "$RELEASE_TAG"' "$release"
 ! grep -Fq -- '--clobber' "$release"
 ! grep -Eq '^  push:' "$release"

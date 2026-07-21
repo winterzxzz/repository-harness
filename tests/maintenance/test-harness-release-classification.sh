@@ -15,6 +15,7 @@ printf '%s\n' \
   scripts/build-harness-release.sh \
   scripts/harness-release-changed.sh \
   scripts/promote-harness-release-tag.sh \
+  scripts/verify-harness-release-assets.sh \
   scripts/verify-harness-release-identity.sh \
   .github/workflows/harness-release.yml \
   .github/workflows/post-merge-maintenance.yml \
